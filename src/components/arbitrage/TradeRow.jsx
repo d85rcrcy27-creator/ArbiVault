@@ -16,3 +16,31 @@ export default function TradeRow({ trade }) {
     <div className="border-b border-[#1a1d2b] px-3 py-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${win ? 'bg-[#00FF87]' : 'bg-[#FF4D4D]'}`} />
+          <span className="truncate font-mono text-xs font-semibold text-[#e0e4f0]">{trade.pair}</span>
+          <span className="shrink-0 rounded bg-[#12141D] px-1.5 py-0.5 font-mono text-[0.5625rem] text-[#5a6080]">
+            {trade.buyExchange}→{trade.sellExchange}
+          </span>
+        </div>
+        <span className={`shrink-0 font-mono text-xs font-semibold ${win ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}`}>
+          {win ? '+' : '-'}${Math.abs(trade.pnl).toFixed(2)}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between gap-2 pl-3.5">
+        <div className="flex items-center gap-2 font-mono text-[0.625rem] text-[#5a6080]">
+          <span>{time}</span>
+          <span className="text-[#FFB800]">{trade.spreadPct.toFixed(3)}%</span>
+          <span className="truncate">{trade.strategy}</span>
+        </div>
+        <button
+          onClick={copy}
+          className="flex shrink-0 items-center gap-1 font-mono text-[0.625rem] text-[#3a4060] transition-colors hover:text-[#00F0FF]"
+          title={trade.txid}
+        >
+          {copied ? <Check className="h-2.5 w-2.5" /> : <Copy className="h-2.5 w-2.5" />}
+          {trade.txid.slice(0, 6)}…{trade.txid.slice(-4)}
+        </button>
+      </div>
+    </div>
+  );
+}

@@ -16,3 +16,16 @@ export default function SpreadDepthChart({ history, spread }) {
 
   return (
     <div className="relative h-full w-full">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
+        <polyline points={`0,100 ${line} 100,100`} fill={fillColor} stroke="none" />
+        <polyline
+          points={line}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+    </div>
+  );
+}
