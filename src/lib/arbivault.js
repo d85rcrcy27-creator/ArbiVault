@@ -10,9 +10,9 @@ export async function currentUserId() {
 // Wallet records contain identity/custody metadata only. Balances are never
 // treated as authoritative database state; the UI must use live chain reads.
 export async function listWallets() {
-  const { data, error } = await supabase.from('wallets').select('id,chain,address,label,status,is_hot,custody_type,last_verified_at,verification_source,data_quality_status,created_at').order('created_at', { ascending: false })
+  const { data, error } = await supabase.from('wallets').select('id,chain,address,label,status,is_hot,custody_type,secret_ref,last_verified_at,verification_source,data_quality_status,created_at').order('created_at', { ascending: false })
   if (error) throw error
-  return data || []
+  return (data || []).map(({ secret_ref: _secretRef, ...wallet }) => wallet)
 }
 export async function listApprovedWallets() {
   const { data, error } = await supabase.from('approved_wallets').select('id,chain,address,label,status,approved_at,activation_at,is_primary,created_at').order('created_at', { ascending: false })
@@ -64,6 +64,8 @@ export async function listBotSkills() {
   if (error) throw error
   return data || []
 }
+
+// Simulations are explicitly labeled and can never supply a blockchain tx hash.
 export async function recordSimulatedTrade(trade) {
   const ownerId = await currentUserId()
   const { data, error } = await supabase.from('trades').insert({ owner_id: ownerId, bot_config_id: trade.botConfigId || null, bot_skill_id: trade.botSkillId || null, chain: trade.chain || 'bnb', strategy: trade.strategy || 'liquidity_fragmentation', pair: trade.pair, notional_amount: trade.notionalAmount ?? null, borrowed_amount: trade.borrowedAmount ?? null, gross_profit: trade.grossProfit ?? null, fees_paid: trade.feesPaid ?? null, net_profit: trade.pnl ?? 0, execution_time_ms: trade.executionTimeMs ?? null, status: 'simulated', execution_mode: 'simulated', tx_hash: null, metadata: { buyExchange: trade.buyExchange, sellExchange: trade.sellExchange, spreadPct: trade.spreadPct } }).select().single()
