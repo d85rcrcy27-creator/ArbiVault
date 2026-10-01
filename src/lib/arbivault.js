@@ -7,28 +7,6 @@ export async function currentUserId() {
   return data.user.id
 }
 
-// Wallet records contain identity/custody metadata only. Balances are never
-// treated as authoritative database state; the UI must use live chain reads.
-export async function listWallets() {
-  const { data, error } = await supabase.from('wallets').select('id,chain,address,label,status,is_hot,custody_type,secret_ref,last_verified_at,verification_source,data_quality_status,created_at').order('created_at', { ascending: false })
-  if (error) throw error
-  return (data || []).map(({ secret_ref: _secretRef, ...wallet }) => wallet)
-}
-export async function listApprovedWallets() {
-  const { data, error } = await supabase.from('approved_wallets').select('id,chain,address,label,status,approved_at,activation_at,is_primary,created_at').order('created_at', { ascending: false })
-  if (error) throw error
-  return data || []
-}
-export async function addApprovedWallet({ chain, address, label }) {
-  const { data, error } = await supabase.rpc('add_approved_destination', { p_chain: chain, p_address: address, p_label: label || null })
-  if (error) throw error
-  return data
-}
-export async function activateApprovedWallet(id, makePrimary = true) {
-  const { data, error } = await supabase.rpc('approve_approved_destination', { p_approved_wallet_id: id, p_make_primary: makePrimary })
-  if (error) throw error
-  return data
-}
 export async function ensureBotFleet() {
   const { data, error } = await supabase.rpc('ensure_arbivault_bots')
   if (error) throw error
