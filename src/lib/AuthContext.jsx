@@ -1,8 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './supabase'
-import { isUnlocked as readUnlocked, setUnlocked as persistUnlocked } from './security'
-
 const AuthContext = createContext()
 
 export const AuthProvider = ({ children }) => {
@@ -10,8 +8,6 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  // Local vault lock (biometric / PIN) — independent of the Supabase session.
-  const [isUnlocked, setIsUnlocked] = useState(() => readUnlocked())
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -109,23 +105,10 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  const unlock = () => {
-    persistUnlocked(true)
-    setIsUnlocked(true)
-  }
-
-  const lock = () => {
-    persistUnlocked(false)
-    setIsUnlocked(false)
-  }
-
   const value = {
     user,
     isAuthenticated,
     isLoading,
-    isUnlocked,
-    unlock,
-    lock,
     error,
     login,
     register,
