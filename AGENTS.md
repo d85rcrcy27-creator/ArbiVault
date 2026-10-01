@@ -2,42 +2,52 @@
 
 ## Project Context
 
-ArbiVault — a Vite + React 18 frontend deployed to Vercel. Authentication is Supabase Auth and payments are Stripe. There is no server component: everything is client-side (`src/`), built by Vite into `dist/`.
+ArbiVault is a Vite + React 18 frontend deployed to Vercel. Authentication is Supabase Auth, persistence is Supabase PostgreSQL, payments use the configured payment providers, and server-side automation runs through Supabase Edge Functions/database jobs. Browser code must never contain wallet private keys, signing secrets, service-role credentials, or other custody secrets.
 
-## Local Development (Base44 sandbox)
+## Local Development
 
-- `docker compose -f docker-compose.base44.yml up -d` starts the dev server on host port 3000.
-- The container runs `pnpm install --frozen-lockfile` then `pnpm dev`. Source is bind-mounted; edits hot-reload.
-- `vite.config.js` sets `server.host: true` (required so Docker's published port can reach the dev server). The preview host is allowed via the platform-provided `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`.
+- Run `pnpm install` and `pnpm dev` for local development.
+- Vercel builds with `pnpm install --frozen-lockfile` followed by `pnpm build` according to `vercel.json`.
+- `vite.config.js` provides the Vite development server configuration.
 
 ## Environment
 
-- `.env.base44-defaults` holds non-secret development placeholders so the app boots without credentials.
-- Real values (Supabase URL/anon key, Stripe public key) are delivered to `/run/base44/app.env`, which is listed last in compose `env_file` so it overrides the defaults.
-- Vite only exposes variables prefixed with `VITE_` to client code.
+- Client-visible configuration uses only `VITE_*` values that are safe to expose to the browser, such as the Supabase project URL and anon/public key.
+- Private credentials, service-role credentials, blockchain RPC secrets, payment secrets, wallet private keys, signing material, and internal bot credentials must never be committed to Git or exposed through `VITE_*` variables.
+- Wallet private keys are custody secrets. Store them in Supabase Vault or an equivalent server-side secret manager and access them only from trusted server-side signing code.
+- The browser may request a signing operation, but must never receive the private key. Server-side signing must validate authenticated ownership, wallet status, approved destination rules, transaction limits, and audit logging before signing.
+
+## Wallet Security
+
+- Store public wallet addresses and non-sensitive metadata in PostgreSQL.
+- Store hot-wallet private keys only in protected server-side secret storage.
+- Never place private keys in React state, localStorage, sessionStorage, IndexedDB, URL parameters, logs, source maps, build artifacts, Git history, or client-side environment variables.
+- Do not return private keys from Supabase RPCs or Edge Functions to the browser.
+- Use narrowly scoped service-role access for secret retrieval/signing and audit every custody operation.
+- Approved withdrawal destinations use the activation-delay and primary-destination controls in the database.
+
+## Bot Architecture
+
+ArbiVault has three distinct bot roles:
+
+1. Execution Bot — evaluates opportunities, applies bot skills/risk limits, and records real or simulated trades. A real on-chain trade must have a transaction hash supplied by the signing/broadcast layer; hashes must never be fabricated.
+2. Sync Bot — reconciles wallet balances, transaction confirmations, market/reference data, and reconciliation state.
+3. Payment Processing Bot — processes payment requests, confirmations, expirations, and payment-to-wallet reconciliation separately from trading.
+
+Bot workers run server-side. The UI is a control and monitoring surface, not the trusted execution environment.
 
 ## Build
 
-- `pnpm build` (Vite). Vercel runs `pnpm install --frozen-lockfile` + `pnpm build` per `vercel.json`.
-- The lockfile must stay in sync with `package.json` or both the Vercel build and the frozen install fail — after changing dependencies run `pnpm install --no-frozen-lockfile` to regenerate `pnpm-lock.yaml`.
-- `build.minify` is `terser`, so `terser` must remain a devDependency.
-- `build.rollupOptions.output.manualChunks` must be a **function** (Vite 8 / rolldown rejects the object form).
-
-## Vault lock (login)
-
-- `/login` is the biometric + PIN unlock screen (`src/pages/LockScreen.jsx`), not an email/password form. It gates the app through `AuthContext.isUnlocked` (see `src/components/ProtectedRoute.jsx`).
-- First run has no stored config, so the screen shows PIN creation. `src/lib/security.js` keeps the SHA-256 PIN hash in `localStorage` under `arbivault.security`.
-- Biometric uses the platform authenticator (WebAuthn). It is unavailable inside a cross-origin iframe, so the sandbox preview falls back to PIN only — test biometric on the deployed site.
-- Three wrong PINs lock the vault for 30 minutes (`arbivault.lockout`); a successful unlock lasts for the tab session (`sessionStorage.arbivault.unlocked`).
-- Supabase auth (`src/lib/AuthContext.jsx`, `/register`, `/forgot-password`, `/reset-password`) still exists but no longer gates the app.
-
-## Quirks
-
-- `src/lib/supabase.js` and `src/lib/stripe.js` throw at import time when their `VITE_*` variables are missing — the app will not render without the placeholders or real values.
-- Several source files in this repo were generated truncated mid-expression by an earlier tool and had to be completed by hand (`src/pages/{Home,Login,Register}.jsx`, `src/hooks/useLiveMarketData.js`, `src/components/arbitrage/{PulseMatrix,TradeLog,TradeRow,SpreadDepthChart}.jsx`, `src/lib/utils.js`, `src/lib/app-params.js`). If a file ends mid-JSX or exports the wrong symbol, it is one of these.
-- `src/lib/utils.js` must export `cn` (clsx + tailwind-merge) — every `src/components/ui/*` primitive imports it.
+- `pnpm build` must succeed for Vercel deployment.
+- The lockfile must stay synchronized with `package.json`; after dependency changes regenerate `pnpm-lock.yaml` before using frozen installs.
+- Keep Vercel-compatible Vite/Rollup configuration; do not reintroduce platform-specific development tooling into production builds.
 
 ## Verification
 
-- `curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/` → `200`.
-- `docker compose -f docker-compose.base44.yml exec -T web sh -c "cd /app && pnpm build"` → succeeds.
+Before merging changes:
+
+- Search the repository for obsolete migration/runtime references and remove them.
+- Confirm no secrets or private keys are present in source, environment templates, logs, generated bundles, or documentation.
+- Verify Supabase RLS policies and server-side functions before changing wallet or payment behavior.
+- Run the Vercel-compatible build and lint/type checks available in the repository.
+- Verify bot jobs, wallet custody boundaries, payment processing, and transaction-hash handling in a non-production environment before enabling real execution.

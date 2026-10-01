@@ -1,0 +1,3 @@
+-- This migration is intentionally additive. Existing wallet, approved_wallet,
+-- bot_config, wallet_transaction and bot_execution_run records are preserved.
+-- Spendable private keys are not stored in public tables.
