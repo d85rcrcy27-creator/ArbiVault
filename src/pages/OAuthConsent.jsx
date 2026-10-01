@@ -1,4 +1,4 @@
-const db = globalThis.__B44_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
+const db = globalThis.__APP_DB__ || { auth:{ isAuthenticated: async()=>false, me: async()=>null }, entities:new Proxy({}, { get:()=>({ filter:async()=>[], get:async()=>null, create:async()=>({}), update:async()=>({}), delete:async()=>({}) }) }), integrations:{ Core:{ UploadFile:async()=>({ file_url:'' }) } } };
 
 import React, { useEffect, useState } from "react";
 import { appParams } from "@/lib/app-params";
@@ -7,7 +7,7 @@ import { ShieldCheck, Loader2 } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
 
 // App-side OAuth consent page for the app's MCP server. The platform redirects
-// AI clients here (see base44/mcp/config.json `consent_path`) with an opaque
+// AI clients here with an opaque
 // `ctx` handle — the authorization request itself lives on the server. This page
 // gates on the app-user session, fetches the display info for that handle, shows
 // the categories of access being granted, and posts the approve/deny decision.
