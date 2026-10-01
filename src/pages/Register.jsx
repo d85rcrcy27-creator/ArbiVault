@@ -5,7 +5,7 @@ import { ShieldCheck, Loader2 } from "lucide-react";
 import AuthLayout from "@/components/AuthLayout";
 
 // App-side OAuth consent page for the app's MCP server. The platform redirects
-// AI clients here (see base44/mcp/config.json `consent_path`) with an opaque
+// AI clients here with an opaque
 // `ctx` handle — the authorization request itself lives on the server. This page
 // gates on the app-user session, fetches the display info for that handle, shows
 // the categories of access being granted, and posts the approve/deny decision.
