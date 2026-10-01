@@ -3,11 +3,11 @@ import { useAuth } from '@/lib/AuthContext'
 import LoadingSpinner from './LoadingSpinner'
 
 export default function ProtectedRoute() {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isUnlocked, isLoading } = useAuth()
 
   if (isLoading) {
     return <LoadingSpinner />
   }
 
-  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />
+  return isUnlocked ? <Outlet /> : <Navigate to="/login" replace />
 }
