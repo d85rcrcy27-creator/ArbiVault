@@ -20,16 +20,26 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'radix-ui': ['@radix-ui/react-accordion', '@radix-ui/react-alert-dialog', '@radix-ui/react-dialog'],
-          'ui-utils': ['framer-motion', 'clsx', 'class-variance-authority'],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('react-router') || id.includes('react-dom') || id.includes('/react/')) {
+            return 'react-vendor';
+          }
+          if (id.includes('@radix-ui')) return 'radix-ui';
+          if (
+            id.includes('framer-motion') ||
+            id.includes('clsx') ||
+            id.includes('class-variance-authority')
+          ) {
+            return 'ui-utils';
+          }
         },
       },
     },
     chunkSizeWarningLimit: 1000,
   },
   server: {
+    host: true,
     port: 3000,
     strictPort: false,
   },
