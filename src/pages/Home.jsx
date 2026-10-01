@@ -4,14 +4,13 @@ import PulseMatrix from '@/components/arbitrage/PulseMatrix'
 import SkillsCreator from '@/components/arbitrage/SkillsCreator'
 import TradeLog from '@/components/arbitrage/TradeLog'
 import SpreadDepthChart from '@/components/arbitrage/SpreadDepthChart'
-import WalletCenter from '@/components/arbitrage/WalletCenter'
 import BotFleet from '@/components/arbitrage/BotFleet'
 import { useLiveMarketData } from '@/hooks/useLiveMarketData'
 import { useIsMobile } from '@/hooks/use-mobile'
 
 const TABS = [
   { id: 'matrix', label: 'Matrix' }, { id: 'trades', label: 'Trades' },
-  { id: 'skills', label: 'Skills' }, { id: 'bots', label: 'Bots' }, { id: 'wallets', label: 'Wallets' },
+  { id: 'skills', label: 'Skills' }, { id: 'bots', label: 'Bots' },
 ]
 
 export default function Home() {
@@ -29,7 +28,6 @@ export default function Home() {
       {mobileTab === 'trades' && <div className="h-[26rem]"><TradeLog trades={trades} /></div>}
       {mobileTab === 'skills' && <div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} /></div>}
       {mobileTab === 'bots' && <BotFleet />}
-      {mobileTab === 'wallets' && <WalletCenter />}
-    </div> : <div className="space-y-4 p-4"><BotFleet /><div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} /></div></div><WalletCenter /></div>}
+    </div> : <div className="space-y-4 p-4"><BotFleet /><div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} /></div></div></div>}
   </div>
 }
