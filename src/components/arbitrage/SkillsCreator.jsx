@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Plus, Trash2, Zap, ArrowRight, FlaskConical, GripVertical } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, FlaskConical, GripVertical } from 'lucide-react';
 
 const CONDITION_BLOCKS = [
   { id: 'spread', label: 'IF Spread >', type: 'condition', unit: '%', placeholder: '0.50' },

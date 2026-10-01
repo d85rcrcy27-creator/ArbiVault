@@ -6,6 +6,19 @@ import pluginUnusedImports from "eslint-plugin-unused-imports";
 
 export default [
   {
+    files: ["**/*.{js,mjs,cjs,jsx}"],
+    languageOptions: {
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: "module",
+        ecmaFeatures: {
+          jsx: true,
+        },
+      },
+    },
+  },
+  {
     files: [
       "src/components/**/*.{js,mjs,cjs,jsx}",
       "src/pages/**/*.{js,mjs,cjs,jsx}",
