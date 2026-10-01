@@ -7,8 +7,10 @@ export async function currentUserId() {
   return data.user.id
 }
 
+// Wallet records contain identity/custody metadata only. Balances are never
+// treated as authoritative database state; the UI must use live chain reads.
 export async function listWallets() {
-  const { data, error } = await supabase.from('wallets').select('id,chain,address,label,status,is_hot,custody_type,last_balance,balance_usd,last_verified_at,created_at').order('created_at', { ascending: false })
+  const { data, error } = await supabase.from('wallets').select('id,chain,address,label,status,is_hot,custody_type,last_verified_at,verification_source,data_quality_status,created_at').order('created_at', { ascending: false })
   if (error) throw error
   return data || []
 }
