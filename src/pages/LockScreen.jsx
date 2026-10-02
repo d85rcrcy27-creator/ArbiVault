@@ -9,6 +9,7 @@ import PinPad from '@/components/lock/PinPad';
 import { useAuth } from '@/lib/AuthContext';
 import {
   hashPin,
+  verifyPin,
   getSecurityConfig,
   saveSecurityConfig,
   isBiometricAvailable,
@@ -104,8 +105,7 @@ export default function LockScreen() {
       setStage('create');
       return;
     }
-    const hash = await hashPin(candidate);
-    if (hash === current.pinHash) {
+    if (await verifyPin(candidate, current.pinHash)) {
       setPin('');
       enter();
       return;

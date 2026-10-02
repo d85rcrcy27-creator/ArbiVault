@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import UtilityBar from '@/components/arbitrage/UtilityBar';
+import WalletActions from '@/components/wallet/WalletActions';
 import PulseMatrix from '@/components/arbitrage/PulseMatrix';
 import SkillsCreator from '@/components/arbitrage/SkillsCreator';
 import TradeLog from '@/components/arbitrage/TradeLog';
@@ -56,6 +57,8 @@ export default function Home() {
         status={status}
         connected={connected}
       />
+
+      <WalletActions />
 
       {isMobile ? (
         <div className="flex flex-col gap-3 p-3">

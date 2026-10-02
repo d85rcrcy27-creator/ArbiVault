@@ -26,7 +26,8 @@ ArbiVault — a Vite + React 18 frontend deployed to Vercel. Authentication is S
 ## Vault lock (login)
 
 - `/login` is the biometric + PIN unlock screen (`src/pages/LockScreen.jsx`), not an email/password form. It gates the app through `AuthContext.isUnlocked` (see `src/components/ProtectedRoute.jsx`).
-- First run has no stored config, so the screen shows PIN creation. `src/lib/security.js` keeps the SHA-256 PIN hash in `localStorage` under `arbivault.security`.
+- First run has no stored config, so the screen shows PIN creation. `src/lib/security.js` stores the PIN in `localStorage` under `arbivault.security` as PBKDF2-SHA256 (310k iterations, random salt, format `pbkdf2$<iter>$<saltB64>$<hashB64>`); `verifyPin` also accepts the legacy unsalted SHA-256 format and transparently re-stores it as PBKDF2 on first successful unlock.
+- `src/components/wallet/WalletActions.jsx` is the wallet action bar on Home (Send, Receive, Swap, Trade, Bridge, Buy, Withdraw, TX Hash). Actions are simulated like the rest of the live feed — no real keys or chain calls.
 - Biometric uses the platform authenticator (WebAuthn). It is unavailable inside a cross-origin iframe, so the sandbox preview falls back to PIN only — test biometric on the deployed site.
 - Three wrong PINs lock the vault for 30 minutes (`arbivault.lockout`); a successful unlock lasts for the tab session (`sessionStorage.arbivault.unlocked`).
 - Supabase auth (`src/lib/AuthContext.jsx`, `/register`, `/forgot-password`, `/reset-password`) still exists but no longer gates the app.
