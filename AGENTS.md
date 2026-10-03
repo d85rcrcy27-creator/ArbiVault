@@ -23,13 +23,10 @@ ArbiVault — a Vite + React 18 frontend deployed to Vercel. Authentication is S
 - `build.minify` is `terser`, so `terser` must remain a devDependency.
 - `build.rollupOptions.output.manualChunks` must be a **function** (Vite 8 / rolldown rejects the object form).
 
-## Vault lock (login)
+## Auth
 
-- `/login` is the biometric + PIN unlock screen (`src/pages/LockScreen.jsx`), not an email/password form. It gates the app through `AuthContext.isUnlocked` (see `src/components/ProtectedRoute.jsx`).
-- First run has no stored config, so the screen shows PIN creation. `src/lib/security.js` keeps the SHA-256 PIN hash in `localStorage` under `arbivault.security`.
-- Biometric uses the platform authenticator (WebAuthn). It is unavailable inside a cross-origin iframe, so the sandbox preview falls back to PIN only — test biometric on the deployed site.
-- Three wrong PINs lock the vault for 30 minutes (`arbivault.lockout`); a successful unlock lasts for the tab session (`sessionStorage.arbivault.unlocked`).
-- Supabase auth (`src/lib/AuthContext.jsx`, `/register`, `/forgot-password`, `/reset-password`) still exists but no longer gates the app.
+- `/login` (`src/pages/LockScreen.jsx`) is the Supabase email/password sign-in form; `/`, `/register`, `/forgot-password`, `/reset-password` round out the routes. `ProtectedRoute` gates the app behind a Supabase session.
+- The earlier biometric/PIN vault lock and `src/lib/security.js` were removed in the Oct 2026 main update — do not reintroduce them.
 
 ## Quirks
 

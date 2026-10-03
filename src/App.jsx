@@ -3,10 +3,9 @@ import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-d
 import { AuthProvider } from '@/lib/AuthContext'
 import { queryClient } from '@/lib/query-client'
 import ProtectedRoute from '@/components/ProtectedRoute'
-import LoadingSpinner from '@/components/LoadingSpinner'
 import PageNotFound from '@/pages/PageNotFound'
 import Home from '@/pages/Home'
-import LockScreen from '@/pages/LockScreen'
+import Login from '@/pages/LockScreen'
 import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
@@ -18,7 +17,7 @@ function App() {
         <AuthProvider>
           <Routes>
             {/* Public routes */}
-            <Route path="/login" element={<LockScreen />} />
+            <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
