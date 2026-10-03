@@ -59,6 +59,10 @@ export const AuthProvider = ({ children }) => {
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          // Return to the deployed app, not Supabase's default Site URL.
+          emailRedirectTo: `${window.location.origin}/login`,
+        },
       })
       if (error) throw error
       return data
