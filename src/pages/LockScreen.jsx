@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, Loader2, ShieldCheck, Mail, Lock } from 'lucide-react'
+import { AlertTriangle, Loader2, ShieldCheck, Mail, Lock, Fingerprint } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
 import PinPad from '@/components/lock/PinPad'
 import { useAuth } from '@/lib/AuthContext'
@@ -31,7 +31,7 @@ const formatRemaining = (ms) => {
 }
 
 export default function LockScreen() {
-  const { user, isLoading: authLoading, login } = useAuth()
+  const { user, isLoading: authLoading, login, loginWithPasskey } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [stage, setStage] = useState(() => (getSecurityConfig()?.pinHash ? 'enter' : 'create'))
@@ -71,6 +71,19 @@ export default function LockScreen() {
       setPassword('')
     } catch (err) {
       setError(err.message || 'Unable to sign in')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handlePasskeyLogin = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await loginWithPasskey()
+    } catch (err) {
+      setError(err.message || 'Passkey sign-in failed')
     } finally {
       setBusy(false)
     }
@@ -152,7 +165,7 @@ export default function LockScreen() {
       <AuthLayout
         icon={ShieldCheck}
         title="Sign in to ArbiVault"
-        subtitle="Your account session is required before the vault can access protected data."
+        subtitle="Use your passkey or your account password."
         footer={
           <>
             Need an account?{' '}
@@ -168,6 +181,22 @@ export default function LockScreen() {
             <span>{error}</span>
           </div>
         )}
+        <button
+          type="button"
+          onClick={handlePasskeyLogin}
+          disabled={busy}
+          className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2"
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+          {busy ? 'Authenticating…' : 'Continue with passkey'}
+        </button>
+
+        <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+          <div className="h-px flex-1 bg-border" />
+          <span>or use password</span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+
         <form onSubmit={handleAccountLogin} className="space-y-4">
           <div className="space-y-2">
             <label htmlFor="arbivault-email" className="text-sm font-medium">Email</label>
@@ -176,7 +205,7 @@ export default function LockScreen() {
               <input
                 id="arbivault-email"
                 type="email"
-                autoComplete="email"
+                autoComplete="username webauthn"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3"
@@ -199,8 +228,8 @@ export default function LockScreen() {
               />
             </div>
           </div>
-          <button type="submit" disabled={busy} className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50">
-            {busy ? 'Signing in…' : 'Sign in'}
+          <button type="submit" disabled={busy} className="h-12 w-full rounded-md border border-border bg-background font-medium text-foreground disabled:opacity-50">
+            {busy ? 'Signing in…' : 'Sign in with password'}
           </button>
         </form>
       </AuthLayout>
