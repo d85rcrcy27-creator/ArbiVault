@@ -1,6 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from './supabase'
+import { getAuthenticatedSession, supabase } from './supabase'
 import { isUnlocked as readUnlocked, setUnlocked as persistUnlocked } from './security'
 const AuthContext = createContext()
 
@@ -16,9 +16,8 @@ export const AuthProvider = ({ children }) => {
     let mounted = true
     const initAuth = async () => {
       try {
-        const { data, error } = await supabase.auth.getSession()
-        if (error) throw error
-        if (mounted) setUser(data.session?.user || null)
+        const session = await getAuthenticatedSession()
+        if (mounted) setUser(session.user || null)
       } catch (err) {
         console.error('Auth initialization error:', err)
         if (mounted) setError(err.message)
@@ -61,13 +60,9 @@ export const AuthProvider = ({ children }) => {
       // for the auth-state callback before protected panels mount.
       setUser(data.user || data.session?.user || null)
 
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-      if (sessionError) throw sessionError
-      if (!sessionData.session?.access_token) {
-        throw new Error('Supabase login succeeded but no access token was established')
-      }
-      setUser(sessionData.session.user)
-      return { ...data, session: sessionData.session }
+      const session = await getAuthenticatedSession()
+      setUser(session.user)
+      return { ...data, session }
     } catch (err) {
       setError(err.message)
       throw err
