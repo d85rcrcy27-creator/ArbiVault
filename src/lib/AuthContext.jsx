@@ -14,25 +14,38 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     let mounted = true
+
+    // Register the auth listener before reading the session so the initial
+    // session event cannot be missed during client hydration.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        if (!mounted) return
+        setUser(session?.user || null)
+        if (session?.user) setError(null)
+      }
+    )
+
     const initAuth = async () => {
       try {
         const session = await getAuthenticatedSession()
-        if (mounted) setUser(session.user || null)
+        if (mounted) {
+          setUser(session.user || null)
+          setError(null)
+        }
       } catch (err) {
         console.error('Auth initialization error:', err)
-        if (mounted) setError(err.message)
+        // No existing Supabase session is a valid logged-out state. The
+        // login screen is responsible for establishing one.
+        if (mounted) {
+          setUser(null)
+          setError(null)
+        }
       } finally {
         if (mounted) setIsLoading(false)
       }
     }
 
     initAuth()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        if (mounted) setUser(session?.user || null)
-      }
-    )
 
     return () => {
       mounted = false
@@ -55,11 +68,7 @@ export const AuthProvider = ({ children }) => {
       setError(null)
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) throw error
-
-      // Make the authenticated user available immediately instead of waiting
-      // for the auth-state callback before protected panels mount.
       setUser(data.user || data.session?.user || null)
-
       const session = await getAuthenticatedSession()
       setUser(session.user)
       return { ...data, session }
@@ -121,9 +130,8 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    // Keep the existing PIN-gate semantics for protected routing.
+    // Local PIN/biometric unlock is separate from Supabase authentication.
     isAuthenticated: isUnlocked,
-    // Explicit Supabase session state for data/API panels.
     hasSupabaseSession: !!user,
     isUnlocked,
     isLoading,
