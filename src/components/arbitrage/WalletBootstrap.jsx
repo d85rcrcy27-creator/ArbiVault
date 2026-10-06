@@ -10,11 +10,47 @@ export default function WalletBootstrap() {
   const [error,setError]=useState('')
   const { user, isLoading: authLoading } = useAuth()
 
+  // AuthContext can render the user a moment before supabase-js finishes
+  // restoring the session in its client. Wait briefly for that session instead
+  // of surfacing a false "Auth session missing" error.
+  const waitForSession = async () => {
+    const { data } = await supabase.auth.getSession()
+    if (data.session?.access_token) return data.session
+
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let subscription
+      let timer
+
+      const finish = (fn, value) => {
+        if (settled) return
+        settled = true
+        subscription?.unsubscribe()
+        clearTimeout(timer)
+        fn(value)
+      }
+
+      const authState = supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.access_token) finish(resolve, session)
+      })
+      subscription = authState.data.subscription
+
+      timer = setTimeout(async () => {
+        try {
+          const session = await getAuthenticatedSession()
+          finish(resolve, session)
+        } catch (error) {
+          finish(reject, error)
+        }
+      }, 1500)
+    })
+  }
+
   const load=async()=>{
     setLoading(true)
     let session
     try {
-      session = await getAuthenticatedSession()
+      session = await waitForSession()
     } catch(e) {
       setLoading(false)
       setError(e.message || 'Supabase auth session unavailable. Please sign in again.')
@@ -30,7 +66,7 @@ export default function WalletBootstrap() {
   const generate=async()=>{
     setBusy(true);setError('')
     try{
-      const session = await getAuthenticatedSession()
+      const session = await waitForSession()
       const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
         body:{chains:['bnb','solana','bitcoin']},
         headers:{Authorization:`Bearer ${session.access_token}`}
