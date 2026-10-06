@@ -20,7 +20,7 @@ export default function WalletBootstrap() {
       setError(e.message || 'Supabase auth session unavailable. Please sign in again.')
       return
     }
-    const {data,error}=await supabase.from('wallets').select('id,chain,address,status,is_hot,custody_type,wallet_role').eq('owner_id',user.id).eq('wallet_role','trading_hot').order('chain')
+    const {data,error}=await supabase.from('wallets').select('id,chain,address,status,is_hot,custody_type,wallet_role').eq('owner_id',session.user.id).eq('wallet_role','trading_hot').order('chain')
     if(error)setError(error.message);else{setWallets(data||[]);setError('')}
     setLoading(false)
   }
