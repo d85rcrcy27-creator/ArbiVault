@@ -24,9 +24,23 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'){
  return wallet
 }
 async function ensureBindings(userId:string,wallets:any[]){
- const {error}=await admin.rpc('ensure_arbivault_bots');if(error)throw error
- const {data:bots,error:be}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role','execution');if(be)throw be
- const bot=bots?.[0];if(!bot)throw new Error('execution_bot_not_initialized')
+ const botDefaults=[
+  {name:'ArbiVault Execution Bot',strategy:'liquidity_fragmentation',chains:['bnb','solana'],enabled:false,min_profit_threshold:0.50,max_gas_budget:0.01,max_trade_size:10000,slippage_tolerance:0.50,autonomy_enabled:true,autonomy_mode:'observe_only',requires_human_approval:false,max_autonomous_transaction:0,allowed_payment_methods:['crypto','stripe'],bot_role:'execution'},
+  {name:'ArbiVault Sync Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'sync',allowed_payment_methods:['crypto','stripe']},
+  {name:'ArbiVault Payment Processing Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'payment',allowed_payment_methods:['crypto','stripe']}
+ ]
+ for(const spec of botDefaults){
+  const {data:existing,error:findError}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role',spec.bot_role).maybeSingle()
+  if(findError)throw findError
+  if(!existing){
+   const {data:created,error:createError}=await admin.from('bot_configs').insert({...spec,owner_id:userId}).select('id,bot_role,chains').single()
+   if(createError)throw createError
+  }
+ }
+ const {data:bots,error:be}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role','execution').maybeSingle()
+ if(be)throw be
+ const bot=bots
+ if(!bot)throw new Error('execution_bot_not_initialized')
  for(const w of wallets){
   const {data:binding}=await admin.from('bot_wallet_bindings').select('id').eq('owner_id',userId).eq('bot_config_id',bot.id).eq('wallet_id',w.id).eq('role','execution').maybeSingle()
   if(!binding)await admin.from('bot_wallet_bindings').insert({owner_id:userId,bot_config_id:bot.id,wallet_id:w.id,role:'execution'})
