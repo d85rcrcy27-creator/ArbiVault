@@ -1,109 +1,144 @@
-import React, { useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { LogIn, Mail, Lock, Loader2 } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { AlertTriangle, Loader2, ShieldCheck } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import PinPad from '@/components/lock/PinPad'
 import { useAuth } from '@/lib/AuthContext'
 import { safeReturnTo } from '@/lib/authReturnTo'
+import {
+  getSecurityConfig,
+  saveSecurityConfig,
+  hashPin,
+  verifyPin,
+  getLockoutState,
+  saveLockoutState,
+  resetLockoutState,
+  PIN_LENGTH,
+  MAX_ATTEMPTS,
+  LOCKOUT_MS,
+} from '@/lib/security'
+
+const STAGE_COPY = {
+  create: { title: 'Create your PIN', subtitle: `Choose a ${PIN_LENGTH}-digit PIN to lock this device` },
+  confirm: { title: 'Confirm your PIN', subtitle: 'Enter the same PIN once more' },
+  enter: { title: 'Enter your PIN', subtitle: 'Unlock ArbiVault' },
+}
+
+const formatRemaining = (ms) => {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
 
 export default function LockScreen() {
-  const { login } = useAuth()
+  const { unlock } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
+  const [stage, setStage] = useState(() => (getSecurityConfig()?.pinHash ? 'enter' : 'create'))
+  const [pin, setPin] = useState('')
+  const [confirmPin, setConfirmPin] = useState('')
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [lockout, setLockout] = useState(() => getLockoutState())
 
   const returnTo = safeReturnTo(location.state?.from?.pathname || '/')
+  const lockedFor = lockout.lockedUntil - Date.now()
+  const isLockedOut = lockedFor > 0
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
-    setError('')
-    setLoading(true)
-    try {
-      await login(email.trim(), password)
-      navigate(returnTo, { replace: true })
-    } catch (err) {
-      setError(err?.message || 'Unable to sign in')
-    } finally {
-      setLoading(false)
-    }
+  useEffect(() => {
+    if (!isLockedOut) return
+    const id = setInterval(() => setLockout(getLockoutState()), 1000)
+    return () => clearInterval(id)
+  }, [isLockedOut])
+
+  const enter = () => {
+    resetLockoutState()
+    unlock()
+    navigate(returnTo, { replace: true })
   }
 
-  return (
-    <AuthLayout
-      icon={LogIn}
-      title="Welcome back"
-      subtitle="Sign in to ArbiVault"
-      footer={
-        <>
-          <span>Need an account?</span>{' '}
-          <Link to="/register" className="text-primary font-medium hover:underline">Create one</Link>
-        </>
+  const handleKey = async (key) => {
+    if (busy || isLockedOut) return
+    setError('')
+    if (key === 'del') {
+      setPin((prev) => prev.slice(0, -1))
+      return
+    }
+
+    const next = pin.length >= PIN_LENGTH ? pin : pin + key
+    setPin(next)
+    if (next.length < PIN_LENGTH) return
+
+    if (stage === 'create') {
+      setConfirmPin(next)
+      setPin('')
+      setStage('confirm')
+      return
+    }
+
+    if (stage === 'confirm') {
+      if (next !== confirmPin) {
+        setPin('')
+        setConfirmPin('')
+        setStage('create')
+        setError('PINs did not match — start again.')
+        return
       }
-    >
+      setBusy(true)
+      saveSecurityConfig({ pinHash: await hashPin(next), createdAt: new Date().toISOString() })
+      setBusy(false)
+      setPin('')
+      enter()
+      return
+    }
+
+    setBusy(true)
+    const ok = await verifyPin(next, getSecurityConfig()?.pinHash)
+    setBusy(false)
+    setPin('')
+    if (ok) {
+      enter()
+      return
+    }
+
+    const attempts = (lockout.attempts || 0) + 1
+    const nextLockout = attempts >= MAX_ATTEMPTS
+      ? { attempts: 0, lockedUntil: Date.now() + LOCKOUT_MS }
+      : { attempts, lockedUntil: 0 }
+    saveLockoutState(nextLockout)
+    setLockout(nextLockout)
+    setError(
+      attempts >= MAX_ATTEMPTS
+        ? `Too many attempts. Try again in ${Math.round(LOCKOUT_MS / 60000)} minutes.`
+        : `Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempt${MAX_ATTEMPTS - attempts === 1 ? '' : 's'} left.`
+    )
+  }
+
+  const copy = STAGE_COPY[stage]
+
+  return (
+    <AuthLayout icon={ShieldCheck} title={copy.title} subtitle={copy.subtitle}>
       {error && (
-        <div role="alert" className="mb-4 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-          {error}
+        <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              autoFocus
-              placeholder="you@example.com"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="h-12 pl-10"
-              required
-            />
-          </div>
+      {isLockedOut ? (
+        <div className="py-8 text-center">
+          <p className="font-mono text-3xl font-semibold text-foreground">{formatRemaining(lockedFor)}</p>
+          <p className="mt-2 text-sm text-muted-foreground">Locked — too many incorrect attempts.</p>
         </div>
+      ) : (
+        <PinPad value={pin} onKey={handleKey} disabled={busy} />
+      )}
 
-        <div className="space-y-2">
-          <Label htmlFor="password">Password</Label>
-          <div className="relative">
-            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="h-12 pl-10"
-              required
-            />
-          </div>
+      {busy && (
+        <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          Verifying…
         </div>
-
-        <Button type="submit" className="h-12 w-full font-medium" disabled={loading}>
-          {loading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Signing in...
-            </>
-          ) : (
-            'Sign in'
-          )}
-        </Button>
-
-        <div className="text-center text-sm">
-          <Link to="/forgot-password" className="text-primary font-medium hover:underline">
-            Forgot password?
-          </Link>
-        </div>
-      </form>
+      )}
     </AuthLayout>
   )
 }

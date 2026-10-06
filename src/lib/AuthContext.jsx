@@ -1,13 +1,16 @@
 import React, { createContext, useState, useContext, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from './supabase'
+import { isUnlocked as readUnlocked, setUnlocked as persistUnlocked } from './security'
 const AuthContext = createContext()
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  // Local vault lock — the PIN gate that guards the UI. It is independent of the
+  // Supabase session, which still decides which rows the panels can load.
+  const [isUnlocked, setIsUnlocked] = useState(() => readUnlocked())
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -16,7 +19,6 @@ export const AuthProvider = ({ children }) => {
         // Check current session
         const { data: { session } } = await supabase.auth.getSession()
         setUser(session?.user || null)
-        setIsAuthenticated(!!session)
       } catch (err) {
         console.error('Auth initialization error:', err)
         setError(err.message)
@@ -31,12 +33,22 @@ export const AuthProvider = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         setUser(session?.user || null)
-        setIsAuthenticated(!!session)
       }
     )
 
     return () => subscription?.unsubscribe()
   }, [])
+
+  // PIN vault gate: the unlock lasts for the browser tab session.
+  const unlock = () => {
+    persistUnlocked(true)
+    setIsUnlocked(true)
+  }
+
+  const lock = () => {
+    persistUnlocked(false)
+    setIsUnlocked(false)
+  }
 
   const login = async (email, password) => {
     try {
@@ -73,7 +85,7 @@ export const AuthProvider = ({ children }) => {
       setError(null)
       await supabase.auth.signOut()
       setUser(null)
-      setIsAuthenticated(false)
+      lock()
       navigate('/login')
     } catch (err) {
       setError(err.message)
@@ -107,9 +119,12 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    isAuthenticated,
+    isAuthenticated: isUnlocked,
+    isUnlocked,
     isLoading,
     error,
+    unlock,
+    lock,
     login,
     register,
     logout,

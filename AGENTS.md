@@ -38,9 +38,23 @@ Bot workers run server-side. The UI is a control and monitoring surface, not the
 
 ## Build
 
-- `pnpm build` must succeed for Vercel deployment.
-- The lockfile must stay synchronized with `package.json`; after dependency changes regenerate `pnpm-lock.yaml` before using frozen installs.
+- `pnpm build` (Vite) must succeed for Vercel deployment; Vercel runs `pnpm install --frozen-lockfile` + `pnpm build` per `vercel.json`.
+- The lockfile must stay in sync with `package.json` or both the Vercel build and the frozen install fail — after changing dependencies run `pnpm install --no-frozen-lockfile` to regenerate `pnpm-lock.yaml`.
+- `build.minify` is `terser`, so `terser` must remain a devDependency.
+- `build.rollupOptions.output.manualChunks` must be a **function** (Vite 8 / rolldown rejects the object form).
 - Keep Vercel-compatible Vite/Rollup configuration; do not reintroduce platform-specific development tooling into production builds.
+
+## Auth
+
+- `/login` (`src/pages/LockScreen.jsx`) is the local PIN vault lock (`src/lib/security.js` + `src/components/lock/PinPad.jsx`): the first visit creates a 6-digit PIN, later visits require it, and three wrong attempts lock the device for 30 minutes. The unlock lasts for the browser tab session.
+- `ProtectedRoute` gates the app on that PIN unlock, not on a Supabase session. `AuthContext` still tracks the Supabase session separately, and the bot/trade/skill panels only load rows while that session exists — the PIN alone does not authenticate to Supabase.
+- `/register`, `/forgot-password` and `/reset-password` still exist as Supabase flows but are no longer linked from the PIN screen.
+
+## Quirks
+
+- `src/lib/supabase.js` and `src/lib/stripe.js` throw at import time when their `VITE_*` variables are missing — the app will not render without the placeholders or real values.
+- Several source files in this repo were generated truncated mid-expression by an earlier tool and had to be completed by hand (`src/pages/{Home,Login,Register}.jsx`, `src/hooks/useLiveMarketData.js`, `src/components/arbitrage/{PulseMatrix,TradeLog,TradeRow,SpreadDepthChart}.jsx`, `src/lib/utils.js`, `src/lib/app-params.js`). If a file ends mid-JSX or exports the wrong symbol, it is one of these.
+- `src/lib/utils.js` must export `cn` (clsx + tailwind-merge) — every `src/components/ui/*` primitive imports it.
 
 ## Verification
 
