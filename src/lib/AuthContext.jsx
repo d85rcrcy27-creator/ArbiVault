@@ -8,15 +8,12 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  // Local vault lock is independent of the Supabase session.
   const [isUnlocked, setIsUnlocked] = useState(() => readUnlocked())
   const navigate = useNavigate()
 
   useEffect(() => {
     let mounted = true
 
-    // Register the auth listener before reading the session so the initial
-    // session event cannot be missed during client hydration.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         if (!mounted) return
@@ -34,8 +31,6 @@ export const AuthProvider = ({ children }) => {
         }
       } catch (err) {
         console.error('Auth initialization error:', err)
-        // No existing Supabase session is a valid logged-out state. The
-        // login screen is responsible for establishing one.
         if (mounted) {
           setUser(null)
           setError(null)
@@ -78,12 +73,45 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
-  const register = async (email, password) => {
+  const loginWithPasskey = async () => {
     try {
       setError(null)
-      const { data, error } = await supabase.auth.signUp({ email, password })
+      if (!window.isSecureContext) {
+        throw new Error('Passkey sign-in requires a secure HTTPS connection.')
+      }
+      if (!window.PublicKeyCredential || !navigator.credentials) {
+        throw new Error('This browser does not support passkey sign-in.')
+      }
+
+      const { data, error } = await supabase.auth.signInWithPasskey()
       if (error) throw error
-      setUser(data.user || data.session?.user || null)
+
+      const session = data?.session || await getAuthenticatedSession()
+      if (!session?.access_token) {
+        throw new Error('Passkey sign-in succeeded without an authenticated session.')
+      }
+
+      setUser(data?.user || session.user || null)
+      return { ...data, session }
+    } catch (err) {
+      setError(err.message)
+      throw err
+    }
+  }
+
+  const registerPasskey = async () => {
+    try {
+      setError(null)
+      if (!user) throw new Error('Sign in before registering a passkey.')
+      if (!window.isSecureContext) {
+        throw new Error('Passkey setup requires a secure HTTPS connection.')
+      }
+      if (!window.PublicKeyCredential || !navigator.credentials) {
+        throw new Error('This browser does not support passkeys.')
+      }
+
+      const { data, error } = await supabase.auth.registerPasskey()
+      if (error) throw error
       return data
     } catch (err) {
       setError(err.message)
@@ -130,7 +158,6 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    // Local PIN/biometric unlock is separate from Supabase authentication.
     isAuthenticated: isUnlocked,
     hasSupabaseSession: !!user,
     isUnlocked,
@@ -139,6 +166,8 @@ export const AuthProvider = ({ children }) => {
     unlock,
     lock,
     login,
+    loginWithPasskey,
+    registerPasskey,
     register,
     logout,
     resetPassword,
