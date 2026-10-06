@@ -13,6 +13,7 @@ import {
   getLockoutState,
   saveLockoutState,
   resetLockoutState,
+  setUnlocked,
   PIN_LENGTH,
   MAX_ATTEMPTS,
   LOCKOUT_MS,
@@ -56,7 +57,6 @@ export default function LockScreen() {
     resetLockoutState()
     // This unlocks only the local vault gate. Supabase authentication is
     // already established separately by the account login below.
-    const { setUnlocked } = require('@/lib/security')
     setUnlocked(true)
     navigate(returnTo, { replace: true })
   }
