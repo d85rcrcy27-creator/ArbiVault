@@ -1,13 +1,7 @@
-import { supabase } from '@/lib/supabase'
+import { getAuthenticatedSession, supabase } from '@/lib/supabase'
 
 export async function currentUserId() {
-  // Resolve the persisted browser session before any RLS-protected RPC/table call.
-  let { data: { session } } = await supabase.auth.getSession()
-  if (!session) {
-    const { data, error } = await supabase.auth.refreshSession()
-    if (error) throw new Error(`Auth session missing: ${error.message}`)
-    session = data.session
-  }
+  const session = await getAuthenticatedSession()
   if (!session?.user) throw new Error('Auth session missing: please sign in again')
   const { data, error } = await supabase.auth.getUser(session.access_token)
   if (error || !data.user) throw new Error(`Auth session missing: ${error?.message || 'user not found'}`)
