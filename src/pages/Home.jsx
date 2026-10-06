@@ -5,6 +5,7 @@ import SkillsCreator from '@/components/arbitrage/SkillsCreator'
 import TradeLog from '@/components/arbitrage/TradeLog'
 import SpreadDepthChart from '@/components/arbitrage/SpreadDepthChart'
 import BotFleet from '@/components/arbitrage/BotFleet'
+import WalletBootstrap from '@/components/arbitrage/WalletBootstrap'
 import { useLiveMarketData } from '@/hooks/useLiveMarketData'
 import { useIsMobile } from '@/hooks/use-mobile'
 
@@ -23,6 +24,7 @@ export default function Home() {
   const depthPanel = activeRoute && <div className="rounded border border-[#232738] bg-[#0C0E16] p-4"><div className="mb-3 flex items-center justify-between"><span className="font-mono text-[0.6875rem] font-semibold uppercase tracking-wider text-[#8a90b0]">Spread Depth · {activeRoute.pair}</span><span className="font-mono text-[0.625rem] text-[#FFB800]">{activeRoute.spreadPct.toFixed(3)}%</span></div><div className="h-24 w-full"><SpreadDepthChart history={activeRoute.history} spread={activeRoute.spreadPct} /></div></div>
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
     <UtilityBar globalLatency={globalLatency} sessionPnL={sessionPnL} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} />
+    <div className="px-4 pt-4"><WalletBootstrap /></div>
     {isMobile ? <div className="flex flex-col gap-3 p-3"><div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
       {mobileTab === 'matrix' && <><div className="h-[22rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</>}
       {mobileTab === 'trades' && <div className="h-[26rem]"><TradeLog trades={trades} /></div>}
