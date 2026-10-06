@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { AlertTriangle, Loader2, ShieldCheck } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { AlertTriangle, Loader2, ShieldCheck, Mail, Lock } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
 import PinPad from '@/components/lock/PinPad'
 import { useAuth } from '@/lib/AuthContext'
@@ -30,12 +30,14 @@ const formatRemaining = (ms) => {
 }
 
 export default function LockScreen() {
-  const { unlock } = useAuth()
+  const { user, isLoading: authLoading, login } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [stage, setStage] = useState(() => (getSecurityConfig()?.pinHash ? 'enter' : 'create'))
   const [pin, setPin] = useState('')
   const [confirmPin, setConfirmPin] = useState('')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [lockout, setLockout] = useState(() => getLockoutState())
@@ -52,8 +54,26 @@ export default function LockScreen() {
 
   const enter = () => {
     resetLockoutState()
-    unlock()
+    // This unlocks only the local vault gate. Supabase authentication is
+    // already established separately by the account login below.
+    const { setUnlocked } = require('@/lib/security')
+    setUnlocked(true)
     navigate(returnTo, { replace: true })
+  }
+
+  const handleAccountLogin = async (e) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await login(email.trim(), password)
+      setPassword('')
+    } catch (err) {
+      setError(err.message || 'Unable to sign in')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const handleKey = async (key) => {
@@ -110,6 +130,80 @@ export default function LockScreen() {
       attempts >= MAX_ATTEMPTS
         ? `Too many attempts. Try again in ${Math.round(LOCKOUT_MS / 60000)} minutes.`
         : `Incorrect PIN. ${MAX_ATTEMPTS - attempts} attempt${MAX_ATTEMPTS - attempts === 1 ? '' : 's'} left.`
+    )
+  }
+
+  if (authLoading) {
+    return (
+      <AuthLayout icon={ShieldCheck} title="Secure sign in" subtitle="Restoring your Supabase session">
+        <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          Restoring session…
+        </div>
+      </AuthLayout>
+    )
+  }
+
+  // The old /login screen only unlocked the local PIN. That left the app
+  // without a Supabase user, which made wallet bootstrap correctly reject the
+  // request. Establish the real Supabase session first, then unlock the vault.
+  if (!user) {
+    return (
+      <AuthLayout
+        icon={ShieldCheck}
+        title="Sign in to ArbiVault"
+        subtitle="Your account session is required before the vault can access protected data."
+        footer={
+          <>
+            Need an account?{' '}
+            <Link to="/register" className="text-primary font-medium hover:underline">Create one</Link>
+            {' · '}
+            <Link to="/forgot-password" className="text-primary font-medium hover:underline">Forgot password?</Link>
+          </>
+        }
+      >
+        {error && (
+          <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+        <form onSubmit={handleAccountLogin} className="space-y-4">
+          <div className="space-y-2">
+            <label htmlFor="arbivault-email" className="text-sm font-medium">Email</label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <input
+                id="arbivault-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3"
+                required
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="arbivault-password" className="text-sm font-medium">Password</label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <input
+                id="arbivault-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3"
+                required
+              />
+            </div>
+          </div>
+          <button type="submit" disabled={busy} className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50">
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+        </form>
+      </AuthLayout>
     )
   }
 
