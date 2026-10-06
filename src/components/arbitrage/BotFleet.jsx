@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Activity, RefreshCw, ShieldCheck, CreditCard } from 'lucide-react'
 import { ensureBotFleet, listBotFleet, updateBotConfig } from '@/lib/arbivault'
 import { useAuth } from '@/lib/AuthContext'
+import { getAuthenticatedSession } from '@/lib/supabase'
 
 const META = {
   execution: { label: 'Execution Bot', icon: Activity, desc: 'Scans qualifying spreads and records bounded executions.' },
@@ -16,22 +17,20 @@ export default function BotFleet() {
   const { user, isLoading: authLoading } = useAuth()
 
   const load = async () => {
-    if (!user) {
-      setBots([])
-      setLoading(false)
-      setError('Supabase auth session unavailable. Please sign in again.')
-      return
-    }
     setLoading(true)
     try {
+      await getAuthenticatedSession()
       await ensureBotFleet()
       setBots(await listBotFleet())
       setError('')
     } catch (e) {
+      setBots([])
       setError(e.message || 'Unable to load bot fleet')
     } finally {
       setLoading(false)
     }
+    return
+    setLoading(true)
   }
 
   useEffect(() => {
