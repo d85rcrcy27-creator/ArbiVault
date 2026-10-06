@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { KeyRound, ShieldCheck, RefreshCw } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { getAuthenticatedSession, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/AuthContext'
 
 export default function WalletBootstrap() {
@@ -11,10 +11,15 @@ export default function WalletBootstrap() {
   const { user, isLoading: authLoading } = useAuth()
 
   const load=async()=>{
-    if(!user){setLoading(false);setError('Supabase auth session unavailable. Please sign in again.');return}
     setLoading(true)
-    const {data:{session}}=await supabase.auth.getSession()
-    if(!session?.access_token){setLoading(false);setError('Supabase auth session unavailable. Please sign in again.');return}
+    let session
+    try {
+      session = await getAuthenticatedSession()
+    } catch(e) {
+      setLoading(false)
+      setError(e.message || 'Supabase auth session unavailable. Please sign in again.')
+      return
+    }
     const {data,error}=await supabase.from('wallets').select('id,chain,address,status,is_hot,custody_type,wallet_role').eq('owner_id',user.id).eq('wallet_role','trading_hot').order('chain')
     if(error)setError(error.message);else{setWallets(data||[]);setError('')}
     setLoading(false)
@@ -25,13 +30,7 @@ export default function WalletBootstrap() {
   const generate=async()=>{
     setBusy(true);setError('')
     try{
-      let {data:{session}}=await supabase.auth.getSession()
-      if(!session?.access_token){
-        const {data:refreshData,error:refreshError}=await supabase.auth.refreshSession()
-        if(refreshError)throw new Error(`Supabase auth session unavailable: ${refreshError.message}`)
-        session=refreshData.session
-      }
-      if(!session?.access_token)throw new Error('Supabase auth session unavailable. Please sign in again.')
+      const session = await getAuthenticatedSession()
       const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
         body:{chains:['bnb','solana','bitcoin']},
         headers:{Authorization:`Bearer ${session.access_token}`}
