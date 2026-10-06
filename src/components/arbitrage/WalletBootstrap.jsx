@@ -27,9 +27,9 @@ export default function WalletBootstrap() {
     try{
       let {data:{session}}=await supabase.auth.getSession()
       if(!session?.access_token){
-        const {data,error:refreshError}=await supabase.auth.refreshSession()
+        const {data:refreshData,error:refreshError}=await supabase.auth.refreshSession()
         if(refreshError)throw new Error(`Supabase auth session unavailable: ${refreshError.message}`)
-        session=refreshError?null:refreshError
+        session=refreshData.session
       }
       if(!session?.access_token)throw new Error('Supabase auth session unavailable. Please sign in again.')
       const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
