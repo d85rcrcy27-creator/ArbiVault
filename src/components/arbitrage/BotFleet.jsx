@@ -28,10 +28,7 @@ export default function BotFleet() {
       setError(e.message || 'Unable to load bot fleet')
     } finally {
       setLoading(false)
-    }
-    return
-    setLoading(true)
-  }
+    }  }
 
   useEffect(() => {
     if (!authLoading) load()
