@@ -17,6 +17,18 @@ const ACTION_BLOCKS = [
 
 // Deployable strategy presets. Picking one drops its condition/action blocks
 // into the draft so the strategy can be deployed in a single click.
+
+// Legacy ArbiVault strategy catalog recovered from the pre-migration BotConfig export.
+// These are listed separately from the newer skill presets so the migration does not
+// silently discard the strategies that existed in the original app.
+const LEGACY_STRATEGY_PRESETS = [
+  { id: 'legacy_cross_chain_latency', name: 'Cross-Chain Latency', description: 'Exploit measurable cross-chain price/latency dislocations with bounded inventory and timing checks.' },
+  { id: 'legacy_liquidity_fragmentation', name: 'Liquidity Fragmentation', description: 'Compare fragmented liquidity across venues and route qualifying spreads.' },
+  { id: 'legacy_mempool_sandwich', name: 'Mempool Sandwich', description: 'Detect mempool ordering opportunities subject to strict MEV and risk controls.' },
+  { id: 'legacy_flash_swap', name: 'Flash Swap', description: 'Atomic flash-swap route with repayment and profitability checks.' },
+  { id: 'legacy_flash_loan', name: 'Flash Loan', description: 'Atomic borrow → arbitrage → repay strategy with profitability and gas checks.' },
+]
+
 const STRATEGY_PRESETS = [
   {
     id: 'snipe',
@@ -175,7 +187,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         <div className="border-b border-[#232738] p-4">
           <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Strategy name…" className="mb-3 w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-1.5 font-mono text-xs text-[#e0e4f0]" />
-          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Strategy Presets</span><div className="flex flex-wrap gap-1.5">{STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div></div>
+          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Current Strategy Presets</span><div className="flex flex-wrap gap-1.5">{STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Conditions</span><div className="flex flex-wrap gap-1.5">{CONDITION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#FFB800]/30 bg-[#FFB800]/5 px-2 py-1 font-mono text-[0.625rem] text-[#FFB800]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Actions</span><div className="flex flex-wrap gap-1.5">{ACTION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 px-2 py-1 font-mono text-[0.625rem] text-[#00F0FF]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           {draftBlocks.length > 0 && <div className="mb-3 space-y-1.5 rounded border border-[#232738] bg-[#090A0F] p-2.5">{draftBlocks.map((b, i) => <div key={i}><LogicBlock block={b} onRemove={removeBlock} index={i} />{i < draftBlocks.length - 1 && <div className="flex justify-center py-0.5"><ArrowRight className="h-2.5 w-2.5 rotate-90 text-[#3a4060]" /></div>}</div>)}</div>}
