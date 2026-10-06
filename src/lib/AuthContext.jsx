@@ -8,38 +8,39 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
-  // Local vault lock — the PIN gate that guards the UI. It is independent of the
-  // Supabase session, which still decides which rows the panels can load.
+  // Local vault lock is independent of the Supabase session.
   const [isUnlocked, setIsUnlocked] = useState(() => readUnlocked())
   const navigate = useNavigate()
 
   useEffect(() => {
+    let mounted = true
     const initAuth = async () => {
       try {
-        // Check current session
-        const { data: { session } } = await supabase.auth.getSession()
-        setUser(session?.user || null)
+        const { data, error } = await supabase.auth.getSession()
+        if (error) throw error
+        if (mounted) setUser(data.session?.user || null)
       } catch (err) {
         console.error('Auth initialization error:', err)
-        setError(err.message)
+        if (mounted) setError(err.message)
       } finally {
-        setIsLoading(false)
+        if (mounted) setIsLoading(false)
       }
     }
 
     initAuth()
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setUser(session?.user || null)
+        if (mounted) setUser(session?.user || null)
       }
     )
 
-    return () => subscription?.unsubscribe()
+    return () => {
+      mounted = false
+      subscription?.unsubscribe()
+    }
   }, [])
 
-  // PIN vault gate: the unlock lasts for the browser tab session.
   const unlock = () => {
     persistUnlocked(true)
     setIsUnlocked(true)
@@ -53,12 +54,20 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       setError(null)
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) throw error
-      return data
+
+      // Make the authenticated user available immediately instead of waiting
+      // for the auth-state callback before protected panels mount.
+      setUser(data.user || data.session?.user || null)
+
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+      if (sessionError) throw sessionError
+      if (!sessionData.session?.access_token) {
+        throw new Error('Supabase login succeeded but no access token was established')
+      }
+      setUser(sessionData.session.user)
+      return { ...data, session: sessionData.session }
     } catch (err) {
       setError(err.message)
       throw err
@@ -68,11 +77,9 @@ export const AuthProvider = ({ children }) => {
   const register = async (email, password) => {
     try {
       setError(null)
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      })
+      const { data, error } = await supabase.auth.signUp({ email, password })
       if (error) throw error
+      setUser(data.user || data.session?.user || null)
       return data
     } catch (err) {
       setError(err.message)
@@ -119,7 +126,10 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
+    // Keep the existing PIN-gate semantics for protected routing.
     isAuthenticated: isUnlocked,
+    // Explicit Supabase session state for data/API panels.
+    hasSupabaseSession: !!user,
     isUnlocked,
     isLoading,
     error,
@@ -137,8 +147,6 @@ export const AuthProvider = ({ children }) => {
 
 export const useAuth = () => {
   const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider')
-  }
+  if (!context) throw new Error('useAuth must be used within AuthProvider')
   return context
 }
