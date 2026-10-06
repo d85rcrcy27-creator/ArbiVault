@@ -4,6 +4,17 @@ import { ensureBotFleet, listBotFleet, updateBotConfig } from '@/lib/arbivault'
 import { useAuth } from '@/lib/AuthContext'
 import { getAuthenticatedSession } from '@/lib/supabase'
 
+
+const AVAILABLE_STRATEGIES = [
+  ['liquidity_fragmentation', 'Liquidity Fragmentation'],
+  ['cross_chain_latency', 'Cross-Chain Latency'],
+  ['mempool_sandwich', 'Mempool Sandwich'],
+  ['flash_swap', 'Flash Swap'],
+  ['flash_loan', 'Flash Loan'],
+  ['snipe', 'Snipe'],
+  ['latency_automation', 'Latency Automation'],
+]
+
 const META = {
   execution: { label: 'Execution Bot', icon: Activity, desc: 'Scans qualifying spreads and records bounded executions.' },
   sync: { label: 'Sync Bot', icon: RefreshCw, desc: 'Reconciles wallet balances and verification state.' },
@@ -53,6 +64,12 @@ export default function BotFleet() {
         <button onClick={load} disabled={authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>
       {error && <div className="mb-3 rounded border border-[#FF4D4D]/30 bg-[#FF4D4D]/5 p-2 font-mono text-[0.6rem] text-[#FF4D4D]">{error}</div>}
+      <div className="mb-3 rounded border border-[#232738] bg-[#090A0F] p-3">
+        <div className="mb-2 font-mono text-[0.6rem] font-semibold uppercase tracking-wider text-[#8a90b0]">Available Bot Strategies</div>
+        <div className="flex flex-wrap gap-1.5">
+          {AVAILABLE_STRATEGIES.map(([id, label]) => <span key={id} title={id} className="rounded border border-[#232738] px-2 py-1 font-mono text-[0.57rem] text-[#8a90b0]">{label}</span>)}
+        </div>
+      </div>
       <div className="grid gap-2 md:grid-cols-3">
         {bots.map((bot) => {
           const meta = META[bot.bot_role] || META.execution
