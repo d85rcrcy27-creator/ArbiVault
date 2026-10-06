@@ -46,8 +46,9 @@ Bot workers run server-side. The UI is a control and monitoring surface, not the
 
 ## Auth
 
-- `/login` (`src/pages/LockScreen.jsx`) is the Supabase email/password sign-in form; `/`, `/register`, `/forgot-password`, `/reset-password` round out the routes. `ProtectedRoute` gates the app behind a Supabase session.
-- The earlier biometric/PIN vault lock and `src/lib/security.js` were removed in the Oct 2026 main update — do not reintroduce them.
+- `/login` (`src/pages/LockScreen.jsx`) is the local PIN vault lock (`src/lib/security.js` + `src/components/lock/PinPad.jsx`): the first visit creates a 6-digit PIN, later visits require it, and three wrong attempts lock the device for 30 minutes. The unlock lasts for the browser tab session.
+- `ProtectedRoute` gates the app on that PIN unlock, not on a Supabase session. `AuthContext` still tracks the Supabase session separately, and the bot/trade/skill panels only load rows while that session exists — the PIN alone does not authenticate to Supabase.
+- `/register`, `/forgot-password` and `/reset-password` still exist as Supabase flows but are no longer linked from the PIN screen.
 
 ## Quirks
 

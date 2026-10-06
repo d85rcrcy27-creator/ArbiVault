@@ -15,6 +15,43 @@ const ACTION_BLOCKS = [
   { id: 'hedge', label: 'THEN Open Hedge', type: 'action' },
 ]
 
+// Deployable strategy presets. Picking one drops its condition/action blocks
+// into the draft so the strategy can be deployed in a single click.
+const STRATEGY_PRESETS = [
+  {
+    id: 'snipe',
+    name: 'Snipe',
+    description: 'Front-runs new pool listings and thin-book dislocations.',
+    blocks: [
+      { type: 'condition', label: 'IF Spread >', value: '0.80', unit: '%' },
+      { type: 'condition', label: 'IF Latency <', value: '40', unit: 'ms' },
+      { type: 'action', label: 'THEN Execute Order' },
+    ],
+  },
+  {
+    id: 'flash_loan',
+    name: 'Flash Loan',
+    description: 'Atomic borrow → arbitrage → repay inside one transaction.',
+    blocks: [
+      { type: 'condition', label: 'IF Spread >', value: '0.25', unit: '%' },
+      { type: 'condition', label: 'IF Profit >', value: '5.00', unit: 'USD' },
+      { type: 'action', label: 'THEN Execute Order' },
+      { type: 'action', label: 'THEN Send Alert' },
+    ],
+  },
+  {
+    id: 'latency_automation',
+    name: 'Latency Automation',
+    description: 'Cross-venue latency arbitrage between exchange feeds.',
+    blocks: [
+      { type: 'condition', label: 'IF Latency <', value: '60', unit: 'ms' },
+      { type: 'condition', label: 'IF Volume >', value: '10000', unit: 'USD' },
+      { type: 'action', label: 'THEN Execute Order' },
+      { type: 'action', label: 'THEN Open Hedge' },
+    ],
+  },
+]
+
 const NOTIONAL = 10000
 const FEE_PCT = 0.1
 
@@ -44,6 +81,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
   const [strategies, setStrategies] = useState([])
   const [draftBlocks, setDraftBlocks] = useState([])
   const [draftName, setDraftName] = useState('')
+  const [draftPreset, setDraftPreset] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const cooldownRef = useRef({})
@@ -63,16 +101,22 @@ export default function SkillsCreator({ routes = [], onExecute }) {
   }, [])
 
   const addBlock = (block) => setDraftBlocks((prev) => [...prev, { type: block.type, label: block.label, value: block.placeholder || '', unit: block.unit || '' }])
+  const applyPreset = (preset) => {
+    setDraftPreset(preset)
+    setDraftName(preset.name)
+    setDraftBlocks(preset.blocks.map((b) => ({ ...b })))
+  }
   const removeBlock = (index) => setDraftBlocks((prev) => prev.filter((_, i) => i !== index))
 
   const saveStrategy = async () => {
     if (!draftName.trim() || draftBlocks.length === 0) return
     try {
       setError('')
-      const saved = await createBotSkill({ name: draftName.trim(), conditions: draftBlocks.filter((b) => b.type === 'condition'), actions: draftBlocks.filter((b) => b.type === 'action'), riskLimits: { maxNotional: NOTIONAL }, cooldownSeconds: 30 })
+      const saved = await createBotSkill({ name: draftName.trim(), description: draftPreset?.description || '', conditions: draftBlocks.filter((b) => b.type === 'condition'), actions: draftBlocks.filter((b) => b.type === 'action'), riskLimits: { maxNotional: NOTIONAL }, cooldownSeconds: 30 })
       setStrategies((prev) => [...prev, saved])
       setDraftBlocks([])
       setDraftName('')
+      setDraftPreset(null)
     } catch (e) { setError(e.message || 'Unable to save skill') }
   }
 
@@ -131,6 +175,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         <div className="border-b border-[#232738] p-4">
           <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Strategy name…" className="mb-3 w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-1.5 font-mono text-xs text-[#e0e4f0]" />
+          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Strategy Presets</span><div className="flex flex-wrap gap-1.5">{STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Conditions</span><div className="flex flex-wrap gap-1.5">{CONDITION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#FFB800]/30 bg-[#FFB800]/5 px-2 py-1 font-mono text-[0.625rem] text-[#FFB800]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Actions</span><div className="flex flex-wrap gap-1.5">{ACTION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 px-2 py-1 font-mono text-[0.625rem] text-[#00F0FF]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           {draftBlocks.length > 0 && <div className="mb-3 space-y-1.5 rounded border border-[#232738] bg-[#090A0F] p-2.5">{draftBlocks.map((b, i) => <div key={i}><LogicBlock block={b} onRemove={removeBlock} index={i} />{i < draftBlocks.length - 1 && <div className="flex justify-center py-0.5"><ArrowRight className="h-2.5 w-2.5 rotate-90 text-[#3a4060]" /></div>}</div>)}</div>}
