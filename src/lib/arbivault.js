@@ -8,6 +8,11 @@ export async function currentUserId() {
 }
 
 export async function ensureBotFleet() {
+  // Force the authenticated Supabase session to be resolved before invoking the RPC.
+  // Calling the RPC while the client is still anonymous produces a misleading
+  // "permission denied for function" error because EXECUTE is intentionally
+  // restricted to authenticated users.
+  await currentUserId()
   const { data, error } = await supabase.rpc('ensure_arbivault_bots')
   if (error) throw error
   return data || []
