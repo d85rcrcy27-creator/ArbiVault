@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, RefreshCw, ShieldCheck, CreditCard } from 'lucide-react'
 import { ensureBotFleet, listBotFleet, updateBotConfig } from '@/lib/arbivault'
+import { useAuth } from '@/lib/AuthContext'
 
 const META = {
   execution: { label: 'Execution Bot', icon: Activity, desc: 'Scans qualifying spreads and records bounded executions.' },
@@ -12,8 +13,15 @@ export default function BotFleet() {
   const [bots, setBots] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const { user, isLoading: authLoading } = useAuth()
 
   const load = async () => {
+    if (!user) {
+      setBots([])
+      setLoading(false)
+      setError('Supabase auth session unavailable. Please sign in again.')
+      return
+    }
     setLoading(true)
     try {
       await ensureBotFleet()
@@ -21,16 +29,22 @@ export default function BotFleet() {
       setError('')
     } catch (e) {
       setError(e.message || 'Unable to load bot fleet')
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+    }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!authLoading) load()
+  }, [authLoading, user?.id])
 
   const toggle = async (bot) => {
     try {
       const saved = await updateBotConfig(bot.id, { enabled: !bot.enabled })
       setBots((prev) => prev.map((b) => b.id === saved.id ? saved : b))
-    } catch (e) { setError(e.message || 'Unable to update bot') }
+    } catch (e) {
+      setError(e.message || 'Unable to update bot')
+    }
   }
 
   return (
@@ -40,7 +54,7 @@ export default function BotFleet() {
           <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]"><ShieldCheck className="h-3.5 w-3.5" /> Bot Fleet</div>
           <p className="mt-1 text-[0.65rem] text-[#5a6080]">Three dedicated workers share the same audited wallet, trade and payment state.</p>
         </div>
-        <button onClick={load} className="text-[#5a6080] hover:text-[#00F0FF]"><RefreshCw className="h-3.5 w-3.5" /></button>
+        <button onClick={load} disabled={authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>
       {error && <div className="mb-3 rounded border border-[#FF4D4D]/30 bg-[#FF4D4D]/5 p-2 font-mono text-[0.6rem] text-[#FF4D4D]">{error}</div>}
       <div className="grid gap-2 md:grid-cols-3">
@@ -58,7 +72,7 @@ export default function BotFleet() {
           </div>
         })}
       </div>
-      {loading && <div className="mt-3 font-mono text-[0.6rem] text-[#5a6080]">Loading bot fleet…</div>}
+      {loading && <div className="mt-3 font-mono text-[0.6rem] text-[#5a6080]">{authLoading ? 'Waiting for Supabase session…' : 'Loading bot fleet…'}</div>}
     </div>
   )
 }
