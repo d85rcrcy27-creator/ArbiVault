@@ -5,6 +5,7 @@ import AuthLayout from '@/components/AuthLayout'
 import PinPad from '@/components/lock/PinPad'
 import { useAuth } from '@/lib/AuthContext'
 import { safeReturnTo } from '@/lib/authReturnTo'
+import { supabase } from '@/lib/supabase'
 import {
   getSecurityConfig,
   saveSecurityConfig,
@@ -32,7 +33,7 @@ const formatRemaining = (ms) => {
 }
 
 export default function LockScreen() {
-  const { user, isLoading: authLoading, login, loginWithPasskey, unlock } = useAuth()
+  const { user, isLoading: authLoading, login, loginWithPasskey, registerPasskey, unlock } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [stage, setStage] = useState(() => (getSecurityConfig()?.pinHash ? 'enter' : 'create'))
@@ -44,6 +45,7 @@ export default function LockScreen() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [lockout, setLockout] = useState(() => getLockoutState())
+  const [passkeySetup, setPasskeySetup] = useState(false)
 
   const returnTo = safeReturnTo(location.state?.from?.pathname || '/')
   const lockedFor = lockout.lockedUntil - Date.now()
@@ -80,6 +82,19 @@ export default function LockScreen() {
     try {
       await login(email.trim(), password)
       setPassword('')
+
+      // A passkey must first be registered with Supabase. Without an enrolled
+      // credential, a later discoverable passkey login cannot find this account.
+      try {
+        const { data: passkeys } = await supabase.auth.passkey.list()
+        if (!passkeys?.length) {
+          setPasskeySetup(true)
+          return
+        }
+      } catch (passkeyError) {
+        console.warn('Passkey inventory unavailable; continuing with password login.', passkeyError)
+      }
+
       unlock()
       navigate(returnTo, { replace: true })
     } catch (err) {
@@ -101,6 +116,24 @@ export default function LockScreen() {
       }
     } catch (err) {
       setError(err.message || 'Passkey sign-in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRegisterPasskey = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await registerPasskey()
+      if (!result?.redirected) {
+        setPasskeySetup(false)
+        unlock()
+        navigate(returnTo, { replace: true })
+      }
+    } catch (err) {
+      setError(err.message || 'Passkey registration failed')
     } finally {
       setBusy(false)
     }
@@ -249,6 +282,25 @@ export default function LockScreen() {
             {busy ? 'Signing in…' : 'Sign in with password'}
           </button>
         </form>
+      </AuthLayout>
+    )
+  }
+
+  if (passkeySetup && user) {
+    return (
+      <AuthLayout icon={Fingerprint} title="Set up your ArbiVault passkey" subtitle="Your account is signed in. Register a passkey so future logins can use Face ID, Touch ID, or your device credential.">
+        {error && (
+          <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+        <button type="button" onClick={handleRegisterPasskey} disabled={busy} className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+          {busy ? 'Registering passkey…' : 'Register passkey'}
+        </button>
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">On the Chromebook, the browser may offer “Use a phone or tablet” or “Save on another device.” Choose that option to save the ArbiVault passkey to your iPhone Passwords/iCloud Keychain, then authenticate on the iPhone.</p>
+        <button type="button" onClick={() => { setPasskeySetup(false); unlock(); navigate(returnTo, { replace: true }) }} className="mt-4 w-full text-sm text-muted-foreground hover:underline">Continue without passkey</button>
       </AuthLayout>
     )
   }
