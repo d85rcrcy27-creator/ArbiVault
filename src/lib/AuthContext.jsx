@@ -174,7 +174,7 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    isAuthenticated: isUnlocked,
+    isAuthenticated: !!user && isUnlocked,
     hasSupabaseSession: !!user,
     isUnlocked,
     isLoading,
