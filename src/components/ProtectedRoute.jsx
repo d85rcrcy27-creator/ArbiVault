@@ -3,7 +3,7 @@ import { useAuth } from '@/lib/AuthContext'
 import LoadingSpinner from './LoadingSpinner'
 
 export default function ProtectedRoute() {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, hasSupabaseSession, isLoading } = useAuth()
   const location = useLocation()
 
   if (isLoading) {
