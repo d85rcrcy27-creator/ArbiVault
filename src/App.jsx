@@ -17,7 +17,8 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <Router>
         <AuthProvider>
-          <Routes>
+          <AppErrorBoundary>
+            <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
             <Route element={<ProtectedRoute requireSessionOnly />}>
@@ -35,7 +36,8 @@ function App() {
             {/* Catch-all */}
             <Route path="/404" element={<PageNotFound />} />
             <Route path="*" element={<Navigate to="/404" replace />} />
-          </Routes>
+            </Routes>
+          </AppErrorBoundary>
         </AuthProvider>
       </Router>
     </QueryClientProvider>
