@@ -119,6 +119,19 @@ export const AuthProvider = ({ children }) => {
     }
   }
 
+  const register = async (email, password) => {
+    try {
+      setError(null)
+      const { data, error } = await supabase.auth.signUp({ email, password })
+      if (error) throw error
+      setUser(data.user || data.session?.user || null)
+      return data
+    } catch (err) {
+      setError(err.message)
+      throw err
+    }
+  }
+
   const logout = async () => {
     try {
       setError(null)
