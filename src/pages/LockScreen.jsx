@@ -365,3 +365,4 @@ export default function LockScreen() {
       )}
     </AuthLayout>
   )
+}
