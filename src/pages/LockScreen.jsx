@@ -31,7 +31,7 @@ const formatRemaining = (ms) => {
 }
 
 export default function LockScreen() {
-  const { user, isLoading: authLoading, login, loginWithPasskey } = useAuth()
+  const { user, isLoading: authLoading, login, loginWithPasskey, unlock } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [stage, setStage] = useState(() => (getSecurityConfig()?.pinHash ? 'enter' : 'create'))
@@ -69,6 +69,8 @@ export default function LockScreen() {
     try {
       await login(email.trim(), password)
       setPassword('')
+      unlock()
+      navigate(returnTo, { replace: true })
     } catch (err) {
       setError(err.message || 'Unable to sign in')
     } finally {
@@ -81,7 +83,11 @@ export default function LockScreen() {
     setBusy(true)
     setError('')
     try {
-      await loginWithPasskey()
+      const result = await loginWithPasskey()
+      if (!result?.redirected) {
+        unlock()
+        navigate(returnTo, { replace: true })
+      }
     } catch (err) {
       setError(err.message || 'Passkey sign-in failed')
     } finally {
