@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-d
 import { AuthProvider } from '@/lib/AuthContext'
 import { queryClient } from '@/lib/query-client'
 import ProtectedRoute from '@/components/ProtectedRoute'
+import AppErrorBoundary from '@/components/AppErrorBoundary'
 import PageNotFound from '@/pages/PageNotFound'
 import Home from '@/pages/Home'
 import Login from '@/pages/LockScreen'
@@ -24,7 +25,7 @@ function App() {
 
             {/* Protected routes */}
             <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<Home />} />
+              <Route path="/" element={<AppErrorBoundary><Home /></AppErrorBoundary>} />
             </Route>
 
             {/* Catch-all */}
