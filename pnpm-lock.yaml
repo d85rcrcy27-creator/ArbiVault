@@ -102,7 +102,7 @@ importers:
         specifier: ^5.2.0
         version: 5.10.0
       '@supabase/supabase-js':
-        specifier: ^2.43.1
+        specifier: ^2.117.2
         version: 2.117.2
       '@tanstack/react-query':
         specifier: ^5.28.0
