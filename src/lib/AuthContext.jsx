@@ -2,6 +2,7 @@ import React, { createContext, useState, useContext, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getAuthenticatedSession, supabase } from './supabase'
 import { isUnlocked as readUnlocked, setUnlocked as persistUnlocked } from './security'
+import { ensureCanonicalPasskeyOrigin } from './passkey'
 const AuthContext = createContext()
 
 export const AuthProvider = ({ children }) => {
@@ -76,6 +77,7 @@ export const AuthProvider = ({ children }) => {
   const loginWithPasskey = async () => {
     try {
       setError(null)
+      if (!ensureCanonicalPasskeyOrigin()) return { redirected: true }
       if (!window.isSecureContext) {
         throw new Error('Passkey sign-in requires a secure HTTPS connection.')
       }
@@ -103,6 +105,7 @@ export const AuthProvider = ({ children }) => {
     try {
       setError(null)
       if (!user) throw new Error('Sign in before registering a passkey.')
+      if (!ensureCanonicalPasskeyOrigin()) return { redirected: true }
       if (!window.isSecureContext) {
         throw new Error('Passkey setup requires a secure HTTPS connection.')
       }
