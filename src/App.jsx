@@ -6,7 +6,8 @@ import ProtectedRoute from '@/components/ProtectedRoute'
 import AppErrorBoundary from '@/components/AppErrorBoundary'
 import PageNotFound from '@/pages/PageNotFound'
 import Home from '@/pages/Home'
-import Login from '@/pages/LockScreen'
+import Login from '@/pages/AccountLogin'
+import LockScreen from '@/pages/LockScreen'
 import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
@@ -19,6 +20,9 @@ function App() {
           <Routes>
             {/* Public routes */}
             <Route path="/login" element={<Login />} />
+            <Route element={<ProtectedRoute requireSessionOnly />}>
+              <Route path="/unlock" element={<LockScreen />} />
+            </Route>
             <Route path="/register" element={<Register />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
