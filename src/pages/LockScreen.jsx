@@ -39,6 +39,7 @@ export default function LockScreen() {
   const [confirmPin, setConfirmPin] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [accountUnlockMode, setAccountUnlockMode] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [lockout, setLockout] = useState(() => getLockoutState())
@@ -244,6 +245,25 @@ export default function LockScreen() {
 
   const copy = STAGE_COPY[stage]
 
+  const handleAccountUnlock = async (e) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const accountEmail = (user?.email || email).trim()
+      if (!accountEmail || !password) throw new Error('Enter your account password to unlock this device.')
+      await login(accountEmail, password)
+      setPassword('')
+      unlock()
+      navigate(returnTo, { replace: true })
+    } catch (err) {
+      setError(err.message || 'Unable to verify account password')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <AuthLayout icon={ShieldCheck} title={copy.title} subtitle={copy.subtitle}>
       {error && (
@@ -268,6 +288,50 @@ export default function LockScreen() {
           Verifying…
         </div>
       )}
+
+      <div className="mt-6 border-t border-border pt-5">
+        {!accountUnlockMode ? (
+          <button
+            type="button"
+            onClick={() => { setAccountUnlockMode(true); setError(''); setPin('') }}
+            className="w-full text-sm text-primary hover:underline"
+          >
+            Forgot your PIN? Unlock with account password
+          </button>
+        ) : (
+          <form onSubmit={handleAccountUnlock} className="space-y-3">
+            <p className="text-sm text-muted-foreground">Verify your ArbiVault account password to unlock this device without the local PIN.</p>
+            <input
+              type="email"
+              value={user?.email || email}
+              readOnly={!!user?.email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="username"
+              className="h-11 w-full rounded-md border border-border bg-background px-3"
+              required
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              placeholder="Account password"
+              className="h-11 w-full rounded-md border border-border bg-background px-3"
+              required
+            />
+            <button type="submit" disabled={busy} className="h-11 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50">
+              {busy ? 'Verifying…' : 'Unlock with account password'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAccountUnlockMode(false); setPassword(''); setError('') }}
+              className="w-full text-sm text-muted-foreground hover:underline"
+            >
+              Back to PIN
+            </button>
+          </form>
+        )}
+      </div>
     </AuthLayout>
   )
 }
