@@ -275,7 +275,7 @@ export default function LockScreen() {
   }
 
   return (
-    <AuthLayout icon={ShieldCheck} title={copy.title} subtitle={copy.subtitle}>
+    <AuthLayout icon={ShieldCheck} title="Secure sign in" subtitle="Use your passkey to unlock ArbiVault on this device.">
       {error && (
         <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
@@ -283,78 +283,85 @@ export default function LockScreen() {
         </div>
       )}
 
-      {isLockedOut ? (
-        <div className="py-8 text-center">
-          <p className="font-mono text-3xl font-semibold text-foreground">{formatRemaining(lockedFor)}</p>
-          <p className="mt-2 text-sm text-muted-foreground">Locked — too many incorrect attempts.</p>
-        </div>
-      ) : (
-        <PinPad value={pin} onKey={handleKey} disabled={busy} />
-      )}
+      <button
+        type="button"
+        onClick={handlePasskeyLogin}
+        disabled={busy}
+        className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2"
+      >
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+        {busy ? 'Authenticating…' : 'Continue with passkey'}
+      </button>
 
-      {busy && (
-        <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-          Verifying…
-        </div>
-      )}
+      <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground">
+        <div className="h-px flex-1 bg-border" />
+        <span>or use device PIN</span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
 
-      <div className="mt-6 border-t border-border pt-5">
-        {!accountUnlockMode && (
-          <button
-            type="button"
-            onClick={handlePasskeyLogin}
-            disabled={busy}
-            className="mb-3 h-11 w-full rounded-md border border-border bg-background font-medium text-foreground disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
-            {busy ? 'Authenticating…' : 'Unlock with passkey'}
-          </button>
-        )}
-
-
-        {!accountUnlockMode ? (
+      {!accountUnlockMode ? (
+        <>
+          {!isLockedOut && (
+            <>
+              <div className="rounded-lg border border-border bg-background p-4">
+                <div className="mb-2 text-sm font-medium">{copy.title}</div>
+                <div className="mb-4 text-xs text-muted-foreground">{copy.subtitle}</div>
+                <PinPad value={pin} onKey={handleKey} disabled={busy} />
+              </div>
+              {busy && (
+                <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  Verifying…
+                </div>
+              )}
+            </>
+          )}
+          {isLockedOut && (
+            <div className="py-4 text-center">
+              <p className="font-mono text-2xl font-semibold text-foreground">{formatRemaining(lockedFor)}</p>
+              <p className="mt-2 text-sm text-muted-foreground">PIN locked — use your passkey instead.</p>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => { setAccountUnlockMode(true); setError(''); setPin('') }}
-            className="w-full text-sm text-primary hover:underline"
+            className="mt-4 w-full text-sm text-primary hover:underline"
           >
             Forgot your PIN? Unlock with account password
           </button>
-        ) : (
-          <form onSubmit={handleAccountUnlock} className="space-y-3">
-            <p className="text-sm text-muted-foreground">Verify your ArbiVault account password to unlock this device without the local PIN.</p>
-            <input
-              type="email"
-              value={user?.email || email}
-              readOnly={!!user?.email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="username"
-              className="h-11 w-full rounded-md border border-border bg-background px-3"
-              required
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              placeholder="Account password"
-              className="h-11 w-full rounded-md border border-border bg-background px-3"
-              required
-            />
-            <button type="submit" disabled={busy} className="h-11 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50">
-              {busy ? 'Verifying…' : 'Unlock with account password'}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setAccountUnlockMode(false); setPassword(''); setError('') }}
-              className="w-full text-sm text-muted-foreground hover:underline"
-            >
-              Back to PIN
-            </button>
-          </form>
-        )}
-      </div>
+        </>
+      ) : (
+        <form onSubmit={handleAccountUnlock} className="space-y-3">
+          <p className="text-sm text-muted-foreground">Verify your ArbiVault account password to unlock this device without the local PIN.</p>
+          <input
+            type="email"
+            value={user?.email || email}
+            readOnly={!!user?.email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+            className="h-11 w-full rounded-md border border-border bg-background px-3"
+            required
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            placeholder="Account password"
+            className="h-11 w-full rounded-md border border-border bg-background px-3"
+            required
+          />
+          <button type="submit" disabled={busy} className="h-11 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50">
+            {busy ? 'Verifying…' : 'Unlock with account password'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setAccountUnlockMode(false); setPassword(''); setError('') }}
+            className="w-full text-sm text-muted-foreground hover:underline"
+          >
+            Back to PIN
+          </button>
+        </form>
+      )}
     </AuthLayout>
   )
-}
