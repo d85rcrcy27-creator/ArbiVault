@@ -65,9 +65,12 @@ export const AuthProvider = ({ children }) => {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) throw error
       setUser(data.user || data.session?.user || null)
-      const session = await getAuthenticatedSession()
-      setUser(session.user)
-      return { ...data, session }
+      const session = data.session || await getAuthenticatedSession()
+      const authenticatedUser = data.user || session.user || null
+      setUser(authenticatedUser)
+      persistUnlocked(true)
+      setIsUnlocked(true)
+      return { ...data, session, user: authenticatedUser }
     } catch (err) {
       setError(err.message)
       throw err
@@ -93,8 +96,11 @@ export const AuthProvider = ({ children }) => {
         throw new Error('Passkey sign-in succeeded without an authenticated session.')
       }
 
-      setUser(data?.user || session.user || null)
-      return { ...data, session }
+      const authenticatedUser = data?.user || session.user || null
+      setUser(authenticatedUser)
+      persistUnlocked(true)
+      setIsUnlocked(true)
+      return { ...data, session, user: authenticatedUser }
     } catch (err) {
       setError(err.message)
       throw err
