@@ -17,6 +17,7 @@ import {
   PIN_LENGTH,
   MAX_ATTEMPTS,
   LOCKOUT_MS,
+  isUnlocked as readUnlockedState,
 } from '@/lib/security'
 
 const STAGE_COPY = {
@@ -53,6 +54,15 @@ export default function LockScreen() {
     const id = setInterval(() => setLockout(getLockoutState()), 1000)
     return () => clearInterval(id)
   }, [isLockedOut])
+
+  // Complete the transition if auth state and router state update on
+  // different render cycles. A successful account/passkey auth must never
+  // fall back to the PIN screen.
+  useEffect(() => {
+    if (!authLoading && user && readUnlockedState()) {
+      navigate(returnTo, { replace: true })
+    }
+  }, [authLoading, user?.id, navigate, returnTo])
 
   const enter = () => {
     resetLockoutState()
