@@ -290,6 +290,19 @@ export default function LockScreen() {
       )}
 
       <div className="mt-6 border-t border-border pt-5">
+        {!accountUnlockMode && (
+          <button
+            type="button"
+            onClick={handlePasskeyLogin}
+            disabled={busy}
+            className="mb-3 h-11 w-full rounded-md border border-border bg-background font-medium text-foreground disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+            {busy ? 'Authenticating…' : 'Unlock with passkey'}
+          </button>
+        )}
+
+
         {!accountUnlockMode ? (
           <button
             type="button"
