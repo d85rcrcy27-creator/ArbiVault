@@ -34,11 +34,24 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const skillId = String(body.skill_id || "");
-    const threshold = Number(body.threshold ?? 0);
+    const requestedThreshold = Number(body.threshold);
     const days = Math.min(90, Math.max(1, Number(body.days ?? 30)));
 
-    if (!Number.isFinite(threshold) || threshold < 0) {
+    if (Number.isFinite(requestedThreshold) && requestedThreshold < 0) {
       return json({ error: "invalid_threshold" }, 400);
+    }
+
+    let skill: any = null;
+    if (skillId) {
+      const { data, error } = await admin
+        .from("bot_skills")
+        .select("id,name,conditions,risk_limits")
+        .eq("id", skillId)
+        .eq("owner_id", userData.user.id)
+        .maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "skill_not_found" }, 404);
+      skill = data;
     }
 
     const since = new Date(Date.now() - days * 86400000).toISOString();
@@ -96,8 +109,7 @@ Deno.serve(async (req) => {
       }))
       .filter((row: any) => Number.isFinite(row.spread));
 
-    const conditions = Array.isArray(skill.conditions) ? skill.conditions : [];
-    const conditionText = JSON.stringify(skill.conditions || {}).toLowerCase();
+    const conditions = Array.isArray(skill?.conditions) ? skill.conditions : [];
 
     const spreadCondition = conditions.find((item: any) =>
       String(item?.label || "").toLowerCase().includes("spread")
@@ -106,12 +118,14 @@ Deno.serve(async (req) => {
       ? Number(spreadCondition.value)
       : null;
 
-    const riskThreshold = Number(skill.risk_limits?.min_profit_threshold);
-    const threshold = Number.isFinite(spreadThreshold)
-      ? spreadThreshold
-      : Number.isFinite(riskThreshold)
-        ? riskThreshold
-        : null;
+    const riskThreshold = Number(skill?.risk_limits?.min_profit_threshold);
+    const threshold = Number.isFinite(requestedThreshold)
+      ? requestedThreshold
+      : Number.isFinite(spreadThreshold)
+        ? spreadThreshold
+        : Number.isFinite(riskThreshold)
+          ? riskThreshold
+          : null;
 
     const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
     const FEE_PCT = 0.10;
@@ -164,11 +178,12 @@ Deno.serve(async (req) => {
       fallback_used: fallbackUsed,
       source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
       skill_id: skillId || null,
+      strategy: skill?.name || null,
       days,
       threshold_pct: threshold,
       samples: samples.length,
       trades: qualifying.length,
-      wins: wins.length,
+      wins: profitable.length,
       losses: Math.max(0, qualifying.length - profitable.length),
       winRate: qualifying.length ? Math.round((profitable.length / qualifying.length) * 100) : 0,
       pnl: Number(netPnl.toFixed(2)),
