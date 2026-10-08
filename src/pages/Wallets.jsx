@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 
 const CHAINS = [
   { id: 'bnb', label: 'BNB Smart Chain', asset: 'BNB' },
+  { id: 'ethereum', label: 'Ethereum', asset: 'ETH' },
   { id: 'solana', label: 'Solana', asset: 'SOL' },
   { id: 'bitcoin', label: 'Bitcoin', asset: 'BTC' },
 ]
