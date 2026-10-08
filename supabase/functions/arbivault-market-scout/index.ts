@@ -207,6 +207,36 @@ Deno.serve(async (req) => {
       ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
       : 0
     const feeds = [...new Set(successfulQuotes.map((quote) => quote.exchange))]
+    const { data: signerAdapters } = await admin
+      .from('execution_adapters')
+      .select('id,signer_provider,health_status,configured,can_broadcast,can_withdraw,automatic_signing,read_only,allowed_wallet_id')
+      .eq('signer_provider', 'internal_vault')
+
+    const { data: signerWallets } = await admin
+      .from('wallets')
+      .select('id,chain,status,is_hot,wallet_role')
+      .eq('status', 'active')
+      .eq('is_hot', true)
+      .eq('wallet_role', 'trading_hot')
+
+    const signer_health = ['bitcoin', 'ethereum', 'bnb', 'solana'].map((chain) => {
+      const walletIds = new Set((signerWallets || []).filter((wallet: any) => wallet.chain === chain).map((wallet: any) => wallet.id))
+      const matches = (signerAdapters || []).filter((adapter: any) =>
+        walletIds.has(adapter.allowed_wallet_id) &&
+        adapter.configured === true &&
+        adapter.health_status === 'healthy' &&
+        adapter.read_only === false &&
+        adapter.can_broadcast === true
+      )
+      return {
+        chain,
+        configured: matches.length > 0,
+        healthy: matches.length > 0,
+        broadcast_capable: matches.length > 0,
+        automatic_signing: matches.some((adapter: any) => adapter.automatic_signing === true),
+      }
+    })
+
     const rpc = await rpcHealth()
     return json({
       ok: true,
@@ -223,6 +253,7 @@ Deno.serve(async (req) => {
         live_pairs: snapshots.filter((snapshot: any) => (snapshot.quotes || []).some((quote: any) => quote.exchange === exchange)).length,
       })),
       chain_rpc_health: rpc,
+      signer_health,
       source: 'public_exchange_order_books',
     })
   } catch (error) {
