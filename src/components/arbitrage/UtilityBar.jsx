@@ -4,6 +4,9 @@ const FEEDS = [
   { id: 'binance', name: 'BIN' },
   { id: 'bybit', name: 'BYB' },
   { id: 'okx', name: 'OKX' },
+  { id: 'kraken', name: 'KRK' },
+  { id: 'kucoin', name: 'KUC' },
+  { id: 'gateio', name: 'GAT' },
 ];
 
 export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, onToggleEngine, status, connected }) {
