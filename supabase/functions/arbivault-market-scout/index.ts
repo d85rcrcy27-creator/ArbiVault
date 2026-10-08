@@ -61,28 +61,50 @@ async function buildRoute(pair: typeof PAIRS[number]) {
     .filter((item): item is { exchange: string; bid: number; ask: number; latencyMs: number } =>
       !!item && Number.isFinite(item.bid) && Number.isFinite(item.ask) && item.ask > 0
     )
-  if (quotes.length < 2) return null
+
+  const snapshot = {
+    chain: pair.chain,
+    pair: pair.pair,
+    quotes,
+    quote_count: quotes.length,
+    timestamp_ms: Date.now(),
+    best_buy: null as { exchange: string; price: number } | null,
+    best_sell: null as { exchange: string; price: number } | null,
+    spread_pct: null as number | null,
+    latency: quotes.length ? Math.max(...quotes.map((quote) => quote.latencyMs)) : 0,
+  }
+
+  if (quotes.length < 1) return { route: null, snapshot }
 
   const bestBuy = quotes.reduce((best, item) => item.ask < best.ask ? item : best)
   const bestSell = quotes.reduce((best, item) => item.bid > best.bid ? item : best)
-  if (bestBuy.exchange === bestSell.exchange) return null
+  snapshot.best_buy = { exchange: bestBuy.exchange, price: bestBuy.ask }
+  snapshot.best_sell = { exchange: bestSell.exchange, price: bestSell.bid }
+
+  if (quotes.length < 2 || bestBuy.exchange === bestSell.exchange) {
+    return { route: null, snapshot }
+  }
 
   const spreadPct = ((bestSell.bid - bestBuy.ask) / bestBuy.ask) * 100
-  if (!Number.isFinite(spreadPct)) return null
+  if (!Number.isFinite(spreadPct)) return { route: null, snapshot }
+  snapshot.spread_pct = spreadPct
 
   return {
-    id: `${pair.chain}-${bestBuy.exchange}-${bestSell.exchange}`,
-    chain: pair.chain,
-    pair: pair.pair,
-    buyExchange: bestBuy.exchange,
-    sellExchange: bestSell.exchange,
-    buyPrice: bestBuy.ask,
-    sellPrice: bestSell.bid,
-    spreadPct,
-    qualifying: spreadPct >= QUALIFYING_SPREAD_PCT,
-    latency: Math.max(...quotes.map((quote) => quote.latencyMs)),
-    history: [{ t: Date.now(), v: spreadPct }],
-    quotes,
+    route: {
+      id: `${pair.chain}-${bestBuy.exchange}-${bestSell.exchange}`,
+      chain: pair.chain,
+      pair: pair.pair,
+      buyExchange: bestBuy.exchange,
+      sellExchange: bestSell.exchange,
+      buyPrice: bestBuy.ask,
+      sellPrice: bestSell.bid,
+      spreadPct,
+      qualifying: spreadPct >= QUALIFYING_SPREAD_PCT,
+      latency: snapshot.latency,
+      history: [{ t: Date.now(), v: spreadPct }],
+      quotes,
+    },
+    snapshot,
   }
 }
 
@@ -103,11 +125,15 @@ Deno.serve(async (req) => {
       : QUALIFYING_SPREAD_PCT
 
     const routeResults = await Promise.all(PAIRS.map(buildRoute))
-    const routes = routeResults.filter(Boolean).map((route) => ({
-      ...route,
-      qualifying: route.spreadPct >= qualifyingThreshold,
-    }))
-    const successfulQuotes = routes.flatMap((route) => route.quotes || [])
+    const snapshots = routeResults.map((item) => item.snapshot)
+    const routes = routeResults
+      .map((item) => item.route)
+      .filter(Boolean)
+      .map((route) => ({
+        ...route,
+        qualifying: route.spreadPct >= qualifyingThreshold,
+      }))
+    const successfulQuotes = snapshots.flatMap((snapshot) => snapshot.quotes || [])
     const averageLatency = successfulQuotes.length
       ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
       : 0
@@ -118,6 +144,9 @@ Deno.serve(async (req) => {
       qualifying_spread_pct: qualifyingThreshold,
       latency_ms: averageLatency,
       routes,
+      market_snapshot: snapshots,
+      live_quote_count: successfulQuotes.length,
+      live_pair_count: snapshots.filter((snapshot) => snapshot.quote_count > 0).length,
       feeds,
       source: 'public_exchange_order_books',
     })
