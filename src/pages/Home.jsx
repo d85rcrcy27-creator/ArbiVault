@@ -19,7 +19,7 @@ const TABS = [
 export default function Home() {
   const navigate = useNavigate()
   const isMobile = useIsMobile()
-  const { routes, marketSnapshot, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
+  const { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [mobileTab, setMobileTab] = useState('matrix')
   const toggleEngine = () => setEngineStatus((s) => s === 'ACTIVE' ? 'PAUSED' : 'ACTIVE')
@@ -59,6 +59,30 @@ export default function Home() {
             Waiting for live quote feeds…
           </div>
         )}
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="rounded border border-[#232738] bg-[#090A0F] p-3">
+          <div className="mb-2 font-mono text-[0.55rem] font-semibold uppercase tracking-wider text-[#5a6080]">Chain RPC Health</div>
+          <div className="grid grid-cols-2 gap-2">
+            {chainRpcHealth.length ? chainRpcHealth.map((r) => (
+              <div key={r.chain} className="flex items-center justify-between font-mono text-[0.58rem]">
+                <span className="text-[#8a90b0]">{r.chain.toUpperCase()}</span>
+                <span className={r.ok ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>{r.ok ? 'LIVE' : 'DOWN'} · {Number(r.latencyMs || 0)}ms</span>
+              </div>
+            )) : <span className="font-mono text-[0.58rem] text-[#5a6080]">Waiting for RPC checks…</span>}
+          </div>
+        </div>
+        <div className="rounded border border-[#232738] bg-[#090A0F] p-3">
+          <div className="mb-2 font-mono text-[0.55rem] font-semibold uppercase tracking-wider text-[#5a6080]">Signer Health</div>
+          <div className="grid grid-cols-2 gap-2">
+            {signerHealth.length ? signerHealth.map((s) => (
+              <div key={s.chain} className="flex items-center justify-between font-mono text-[0.58rem]">
+                <span className="text-[#8a90b0]">{s.chain.toUpperCase()}</span>
+                <span className={s.healthy ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>{s.healthy ? 'READY' : 'NOT READY'}</span>
+              </div>
+            )) : <span className="font-mono text-[0.58rem] text-[#5a6080]">Waiting for signer checks…</span>}
+          </div>
+        </div>
       </div>
     </div>
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
