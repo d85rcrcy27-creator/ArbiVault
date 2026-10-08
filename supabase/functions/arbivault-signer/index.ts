@@ -28,6 +28,7 @@ async function hash(v: string) {
 }
 
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
+const ETH_RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://cloudflare-eth.com";
 const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
 
 async function rpc(url: string, method: string, params: unknown[]) {
@@ -44,9 +45,11 @@ async function rpc(url: string, method: string, params: unknown[]) {
 
 async function broadcastSigned(chain: string, signed: string) {
   // Broadcast only serialized, signed transactions. Never accept unsigned payloads here.
-  if (chain === "bnb") {
-    const txHash = await rpc(BSC_RPC, "eth_sendRawTransaction", [signed]);
-    if (!txHash) throw new Error("bsc_broadcast_missing_tx_hash");
+  if (chain === "bnb" || chain === "ethereum") {
+    const endpoint = chain === "ethereum" ? ETH_RPC : BSC_RPC;
+    const label = chain === "ethereum" ? "ethereum" : "bsc";
+    const txHash = await rpc(endpoint, "eth_sendRawTransaction", [signed]);
+    if (!txHash) throw new Error(`${label}_broadcast_missing_tx_hash`);
     return String(txHash);
   }
   if (chain === "solana") {
@@ -100,7 +103,7 @@ Deno.serve(async (req) => {
       !walletId ||
       !signingRequestId ||
       !unsigned ||
-      !["bnb", "solana", "bitcoin"].includes(chain)
+      !["ethereum", "bnb", "solana", "bitcoin"].includes(chain)
     ) {
       return json({ error: "invalid_request" }, 400);
     }
@@ -185,8 +188,9 @@ Deno.serve(async (req) => {
     const sv = await getSecret(walletId);
     let signed = "";
 
-    if (chain === "bnb") {
+    if (chain === "bnb" || chain === "ethereum") {
       const account = privateKeyToAccount(sv as `0x${string}`);
+      const expectedChainId = chain === "ethereum" ? 1 : 56;
       let tx: any;
       try {
         const parsedCandidate = JSON.parse(unsigned);
@@ -203,7 +207,7 @@ Deno.serve(async (req) => {
         ) {
           return json({ error: "destination_contract_not_allowlisted" }, 403);
         }
-        if (parsedCandidate.chainId !== undefined && Number(parsedCandidate.chainId) !== 56) {
+        if (parsedCandidate.chainId !== undefined && Number(parsedCandidate.chainId) !== expectedChainId) {
           throw new Error("transaction_chain_id_mismatch");
         }
         const toBigInt = (name: string, value: unknown) => {
@@ -214,7 +218,7 @@ Deno.serve(async (req) => {
           throw new Error(`evm_${name}_invalid`);
         };
         tx = {
-          chainId: 56,
+          chainId: expectedChainId,
           nonce: toBigInt("nonce", parsedCandidate.nonce),
           to,
           value: toBigInt("value", parsedCandidate.value) ?? 0n,
@@ -233,6 +237,9 @@ Deno.serve(async (req) => {
           if (!parsed.to) return json({ error: "contract_creation_not_allowed" }, 403);
           if (parsed.from && parsed.from.toLowerCase() !== wallet.address.toLowerCase()) {
             return json({ error: "transaction_sender_mismatch" }, 403);
+          }
+          if (parsed.chainId !== undefined && Number(parsed.chainId) !== expectedChainId) {
+            return json({ error: "transaction_chain_id_mismatch" }, 400);
           }
           tx = parsed;
         } catch {
