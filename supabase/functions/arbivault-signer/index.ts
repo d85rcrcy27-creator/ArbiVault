@@ -27,6 +27,35 @@ async function hash(v: string) {
   return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
+const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
+const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+
+async function rpc(url: string, method: string, params: unknown[]) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+  });
+  if (!response.ok) throw new Error("broadcast_rpc_http_" + response.status);
+  const body = await response.json();
+  if (body.error) throw new Error("broadcast_rpc_" + (body.error.code || "error"));
+  return body.result;
+}
+
+async function broadcastSigned(chain: string, signed: string) {
+  if (chain === "bnb") {
+    const txHash = await rpc(BSC_RPC, "eth_sendRawTransaction", [signed]);
+    if (!txHash) throw new Error("bsc_broadcast_missing_tx_hash");
+    return String(txHash);
+  }
+  if (chain === "solana") {
+    const txHash = await rpc(SOLANA_RPC, "sendTransaction", [signed, { encoding: "base64", skipPreflight: false, maxRetries: 3 }]);
+    if (!txHash) throw new Error("solana_broadcast_missing_signature");
+    return String(txHash);
+  }
+  throw new Error("broadcast_chain_not_configured");
+}
+
 async function getSecret(id: string) {
   const { data, error } = await supabase.rpc("get_wallet_secret", { p_wallet_id: id });
   if (error || !data) throw new Error("wallet_secret_unavailable");
@@ -181,21 +210,25 @@ Deno.serve(async (req) => {
     }
 
     const now = new Date().toISOString();
+    const txHash = await broadcastSigned(chain, signed);
+    const broadcastAt = new Date().toISOString();
+
     const { error: markError } = await supabase
       .from("signing_requests")
-      .update({ status: "signed", signed_at: now })
+      .update({ status: "broadcast", signed_at: now, broadcast_at: broadcastAt, tx_hash: txHash })
       .eq("id", requestRow.id)
       .eq("status", "authorized");
 
-    if (markError) return json({ error: "signing_state_update_failed" }, 500);
+    if (markError) return json({ error: "broadcast_state_update_failed", tx_hash: txHash }, 500);
 
     await supabase
       .from("execution_adapters")
       .update({
         last_signed_at: now,
+        last_broadcast_at: broadcastAt,
         health_status: "healthy",
         last_error: null,
-        updated_at: now,
+        updated_at: broadcastAt,
       })
       .eq("id", adapter.id);
 
@@ -205,8 +238,9 @@ Deno.serve(async (req) => {
       provider: "internal_vault",
       chain,
       mode,
-      signed_transaction: signed,
-      broadcast: "caller_must_broadcast_after_policy_validation",
+      tx_hash: txHash,
+      signed: true,
+      broadcast: true,
     });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "internal_signer_error" }, 500);
