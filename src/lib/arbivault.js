@@ -81,3 +81,37 @@ export async function scoutPublicData({ sources = [], skillId = null, persist = 
   if (error) throw error
   return data
 }
+
+
+export async function addApprovedDestination({ chain, address, label, makePrimary = false }) {
+  const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
+    body: { action: 'add_destination', chain, address, label, make_primary: makePrimary },
+  })
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Unable to add destination')
+  return data
+}
+
+export async function activateApprovedDestination(destinationId, makePrimary = false) {
+  const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
+    body: { action: 'activate_destination', destination_id: destinationId, make_primary: makePrimary },
+  })
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Unable to activate destination')
+  return data
+}
+
+export async function createWithdrawal({ sourceWalletId, destinationId, amount, asset }) {
+  const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
+    body: {
+      action: 'create_withdrawal',
+      source_wallet_id: sourceWalletId,
+      destination_id: destinationId,
+      amount: Number(amount),
+      asset,
+    },
+  })
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Unable to create withdrawal')
+  return data
+}
