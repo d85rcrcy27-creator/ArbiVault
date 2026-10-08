@@ -32,6 +32,6 @@ where route_type in ('dex_cex','cyclic','multi_venue');
 
 update public.execution_adapters
 set allowed_contracts = '[\"0x10ED43C718714eb63d5aA57B78B54704E256024E\"]'::jsonb
-where id = '4a5aacd6-82e7-4e36-9ada-5dd7e02efe47'
+where id = '4a5aacd6-82e7-4e61-bcf2-ed6f0c033a25'
   and signer_provider = 'internal_vault'
   and signing_boundary = 'internal_vault';
