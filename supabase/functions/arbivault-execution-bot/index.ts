@@ -338,7 +338,14 @@ export default {
               executionContext.dex_preflight_error = builderError
             }
           }
-          const cexExecutionAdapterConfigured = false
+          const executionAdapter = wallet
+            ? signerAdapters.find((adapter: any) =>
+                adapter.allowed_wallet_id === wallet.id &&
+                adapter.chain === executionRoute.chain &&
+                adapter.automatic_signing === true
+              ) || null
+            : null
+          const executionAdapterConfigured = !!executionAdapter
           const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash && !!dexPreflight?.buy?.transaction_payload_hash
           const executionGate = !zeroCapitalWindow ? 'zero_capital_policy_not_active'
             : !strategyBot ? 'strategy_bot_not_linked'
@@ -347,7 +354,7 @@ export default {
             : builderError ? 'transaction_builder_preflight_failed'
             : !['dex_cex', 'cyclic', 'multi_venue'].includes(executionRoute.route_type) ? 'route_requires_atomic_multileg_builder'
             : !transactionBuilt ? 'transaction_builder_incomplete'
-            : !cexExecutionAdapterConfigured ? 'cex_execution_adapter_missing'
+: !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
           const payloadHash = await sha256(JSON.stringify(executionContext))
           const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash || dexPreflight?.buy?.transaction_payload_hash || null
@@ -371,7 +378,7 @@ export default {
             real_trade_claims_disabled_until_tx_hash: true,
             transaction_builder_present: true,
             transaction_builder_preflighted: opportunities.some((item) => item.dex_preflight),
-            cex_execution_adapter_present: false,
+            execution_signer_adapter_present: opportunities.some((item) => item.execution_gate === 'eligible'),
             atomic_multileg_builder_present: false,
             internal_signers_present: signerAdapters.length > 0,
           },
