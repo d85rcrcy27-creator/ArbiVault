@@ -13,7 +13,7 @@ import { useIsMobile } from '@/hooks/use-mobile'
 
 const TABS = [
   { id: 'matrix', label: 'Matrix' }, { id: 'trades', label: 'Trades' },
-  { id: 'skills', label: 'Skills' }, { id: 'bots', label: 'Bots' },
+  { id: 'skills', label: 'Skills' }, { id: 'bots', label: 'Bots' }, { id: 'wallets', label: 'Wallets' },
 ]
 
 export default function Home() {
@@ -29,7 +29,7 @@ export default function Home() {
     <UtilityBar globalLatency={globalLatency} sessionPnL={sessionPnL} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
     <div className="px-4 pt-4"><WalletBootstrap /></div>
     <div className="px-4 pt-4"><RuntimeControls controls={marketControls} latency={globalLatency} status={status} onChange={setMarketControls} onRefresh={refreshMarket} /></div>
-    {isMobile ? <div className="flex flex-col gap-3 p-3"><div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
+    {isMobile ? <div className="flex flex-col gap-3 p-3"><div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => tab.id === 'wallets' ? navigate('/wallets') : setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
       {mobileTab === 'matrix' && <><div className="h-[22rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</>}
       {mobileTab === 'trades' && <div className="h-[26rem]"><TradeLog trades={trades} /></div>}
       {mobileTab === 'skills' && <div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} /></div>}
