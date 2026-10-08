@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { AlertTriangle, Fingerprint, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
@@ -16,13 +16,14 @@ export default function AccountLogin() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [needsPasskey, setNeedsPasskey] = useState(false)
+  const authAttemptedRef = useRef(false)
 
   useEffect(() => {
-    if (!authLoading && user) {
+    if (!authLoading && user && !authAttemptedRef.current && !needsPasskey) {
       if (isUnlocked) navigate(returnTo, { replace: true })
       else navigate('/unlock', { replace: true, state: { from: location.state?.from } })
     }
-  }, [authLoading, user?.id, isUnlocked, navigate, returnTo, location.state?.from])
+  }, [authLoading, user?.id, isUnlocked, needsPasskey, navigate, returnTo, location.state?.from])
 
   const handlePasskeyLogin = async () => {
     if (busy) return
@@ -47,13 +48,17 @@ export default function AccountLogin() {
     setBusy(true)
     setError('')
     setNeedsPasskey(false)
+    authAttemptedRef.current = true
     try {
       await login(email.trim(), password)
       setPassword('')
 
       try {
         const { data: passkeys, error: passkeyError } = await supabase.auth.passkey.list()
-        if (!passkeyError && !passkeys?.length) setNeedsPasskey(true)
+        if (!passkeyError && !passkeys?.length) {
+          setNeedsPasskey(true)
+          return
+        }
       } catch (passkeyError) {
         console.warn('Could not inspect passkey inventory', passkeyError)
       }
@@ -90,6 +95,25 @@ export default function AccountLogin() {
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
           Restoring session…
         </div>
+      </AuthLayout>
+    )
+  }
+
+  if (user && needsPasskey) {
+    return (
+      <AuthLayout icon={Fingerprint} title="Set up your passkey" subtitle="Your account is signed in. Register a passkey now so the next Chromebook login can use your iPhone.">
+        {error && (
+          <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <span>{error}</span>
+          </div>
+        )}
+        <button type="button" onClick={handleRegisterPasskey} disabled={busy} className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2">
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+          {busy ? 'Registering passkey…' : 'Register passkey'}
+        </button>
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">On Chromebook, choose “Use a phone or tablet” / “Save on another device” when Chrome offers it, then scan the QR code with your iPhone and approve with Face ID. This creates the ArbiVault passkey in iCloud Keychain/Passwords.</p>
+        <button type="button" onClick={() => { setNeedsPasskey(false); unlock(); navigate(returnTo, { replace: true }) }} className="mt-4 w-full text-sm text-muted-foreground hover:underline">Continue with password for now</button>
       </AuthLayout>
     )
   }
