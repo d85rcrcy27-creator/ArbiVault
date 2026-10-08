@@ -14,18 +14,18 @@ const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, 'cache-control': 'no-store' } })
 
 const PAIRS = [
-  { chain: 'bitcoin', pair: 'BTC/USDT', symbol: 'BTCUSDT', okx: 'BTC-USDT', kraken: 'XBTUSDT', kucoin: 'BTC-USDT', gateio: 'BTC_USDT' },
-  { chain: 'ethereum', pair: 'ETH/USDT', symbol: 'ETHUSDT', okx: 'ETH-USDT', kraken: 'ETHUSDT', kucoin: 'ETH-USDT', gateio: 'ETH_USDT' },
-  { chain: 'solana', pair: 'SOL/USDT', symbol: 'SOLUSDT', okx: 'SOL-USDT', kraken: 'SOLUSDT', kucoin: 'SOL-USDT', gateio: 'SOL_USDT' },
-  { chain: 'bnb', pair: 'BNB/USDT', symbol: 'BNBUSDT', okx: 'BNB-USDT', kraken: 'BNBUSDT', kucoin: 'BNB-USDT', gateio: 'BNB_USDT' },
-  { chain: 'ethereum', pair: 'XRP/USDT', symbol: 'XRPUSDT', okx: 'XRP-USDT', kraken: 'XRPUSDT', kucoin: 'XRP-USDT', gateio: 'XRP_USDT' },
-  { chain: 'ethereum', pair: 'ADA/USDT', symbol: 'ADAUSDT', okx: 'ADA-USDT', kraken: 'ADAUSDT', kucoin: 'ADA-USDT', gateio: 'ADA_USDT' },
-  { chain: 'ethereum', pair: 'AVAX/USDT', symbol: 'AVAXUSDT', okx: 'AVAX-USDT', kraken: 'AVAXUSDT', kucoin: 'AVAX-USDT', gateio: 'AVAX_USDT' },
-  { chain: 'ethereum', pair: 'LINK/USDT', symbol: 'LINKUSDT', okx: 'LINK-USDT', kraken: 'LINKUSDT', kucoin: 'LINK-USDT', gateio: 'LINK_USDT' },
-  { chain: 'ethereum', pair: 'DOGE/USDT', symbol: 'DOGEUSDT', okx: 'DOGE-USDT', kraken: 'DOGEUSDT', kucoin: 'DOGE-USDT', gateio: 'DOGE_USDT' },
+  { chain: 'bitcoin', pair: 'BTC/USDT', symbol: 'BTCUSDT', okx: 'BTC-USDT', kraken: 'XBTUSDT', kucoin: 'BTC-USDT', gateio: 'BTC_USDT', coinbase: 'BTC-USDT', bitget: 'BTCUSDT' },
+  { chain: 'ethereum', pair: 'ETH/USDT', symbol: 'ETHUSDT', okx: 'ETH-USDT', kraken: 'ETHUSDT', kucoin: 'ETH-USDT', gateio: 'ETH_USDT', coinbase: 'ETH-USDT', bitget: 'ETHUSDT' },
+  { chain: 'solana', pair: 'SOL/USDT', symbol: 'SOLUSDT', okx: 'SOL-USDT', kraken: 'SOLUSDT', kucoin: 'SOL-USDT', gateio: 'SOL_USDT', coinbase: 'SOL-USDT', bitget: 'SOLUSDT' },
+  { chain: 'bnb', pair: 'BNB/USDT', symbol: 'BNBUSDT', okx: 'BNB-USDT', kraken: 'BNBUSDT', kucoin: 'BNB-USDT', gateio: 'BNB_USDT', coinbase: 'BNB-USDT', bitget: 'BNBUSDT' },
+  { chain: 'ethereum', pair: 'XRP/USDT', symbol: 'XRPUSDT', okx: 'XRP-USDT', kraken: 'XRPUSDT', kucoin: 'XRP-USDT', gateio: 'XRP_USDT', coinbase: 'XRP-USDT', bitget: 'XRPUSDT' },
+  { chain: 'ethereum', pair: 'ADA/USDT', symbol: 'ADAUSDT', okx: 'ADA-USDT', kraken: 'ADAUSDT', kucoin: 'ADA-USDT', gateio: 'ADA_USDT', coinbase: 'ADA-USDT', bitget: 'ADAUSDT' },
+  { chain: 'ethereum', pair: 'AVAX/USDT', symbol: 'AVAXUSDT', okx: 'AVAX-USDT', kraken: 'AVAXUSDT', kucoin: 'AVAX-USDT', gateio: 'AVAX_USDT', coinbase: 'AVAX-USDT', bitget: 'AVAXUSDT' },
+  { chain: 'ethereum', pair: 'LINK/USDT', symbol: 'LINKUSDT', okx: 'LINK-USDT', kraken: 'LINKUSDT', kucoin: 'LINK-USDT', gateio: 'LINK_USDT', coinbase: 'LINK-USDT', bitget: 'LINKUSDT' },
+  { chain: 'ethereum', pair: 'DOGE/USDT', symbol: 'DOGEUSDT', okx: 'DOGE-USDT', kraken: 'DOGEUSDT', kucoin: 'DOGE-USDT', gateio: 'DOGE_USDT', coinbase: 'DOGE-USDT', bitget: 'DOGEUSDT' },
 ]
 
-const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio']
+const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio', 'coinbase', 'bitget']
 
 const PUBLIC_MARKET_ASSETS = [
   { chain: 'ethereum', symbol: 'BTC', coingecko: 'bitcoin' },
@@ -114,6 +114,15 @@ async function quote(exchange: string, pair: typeof PAIRS[number]) {
       const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
       const t = j?.data?.[0]
       return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx), latencyMs: Math.round(performance.now() - started) } : null
+    }
+    if (exchange === 'coinbase') {
+      const j = await fetchJson(`https://api.exchange.coinbase.com/products/${pair.coinbase}/ticker`)
+      return { exchange, bid: Number(j.bid), ask: Number(j.ask), latencyMs: Math.round(performance.now() - started) }
+    }
+    if (exchange === 'bitget') {
+      const j = await fetchJson(`https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol=${pair.bitget}`)
+      const t = Array.isArray(j?.data) ? j.data[0] : null
+      return t ? { exchange, bid: Number(t.bidPr), ask: Number(t.askPr), latencyMs: Math.round(performance.now() - started) } : null
     }
     if (exchange === 'kraken') {
       const j = await fetchJson(`https://api.kraken.com/0/public/Ticker?pair=${pair.kraken}`)
