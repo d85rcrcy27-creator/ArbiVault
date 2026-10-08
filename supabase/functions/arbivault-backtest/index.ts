@@ -83,27 +83,8 @@ Deno.serve(async (req) => {
       }))
       .filter((row: any) => Number.isFinite(row.spread));
 
-    const conditions = Array.isArray(skill?.conditions) ? skill.conditions : [];
-
-    const spreadCondition = conditions.find((item: any) =>
-      String(item?.label || "").toLowerCase().includes("spread")
-    );
-    const spreadThreshold = spreadCondition
-      ? Number(spreadCondition.value)
-      : null;
-
-    const riskThreshold = Number(skill?.risk_limits?.min_profit_threshold);
-    // The skill's persisted execution criteria are authoritative when a skill_id is provided.
-    // Client-supplied threshold is only a fallback for ad-hoc backtests without a skill.
-    const threshold = skillId
-      ? (Number.isFinite(spreadThreshold)
-          ? spreadThreshold
-          : Number.isFinite(riskThreshold)
-            ? riskThreshold
-            : null)
-      : (Number.isFinite(requestedThreshold) ? requestedThreshold : null);
-
-    const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
+    const threshold = Number.isFinite(requestedThreshold) ? requestedThreshold : null;
+    const requiresSpread = threshold !== null;
     const FEE_PCT = 0.10;
     const NOTIONAL = 10000;
 
