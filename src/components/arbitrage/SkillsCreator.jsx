@@ -355,7 +355,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
     try {
       setError('')
-      const backtest = await runBacktest({ threshold, days: 30 })
+      const backtest = await runBacktest({ threshold, days: 30, skillId: skill.id })
       // Backtest is research-only and does not require authentication or persist
       // results to the private strategy record. Keep the result local to the UI.
       setStrategies((prev) => prev.map((s) => s.id === skill.id
