@@ -26,6 +26,7 @@ export const PAIRS = [
   { symbol: 'BTC', label: 'BTC/USDT' },
   { symbol: 'ETH', label: 'ETH/USDT' },
   { symbol: 'SOL', label: 'SOL/USDT' },
+  { symbol: 'BNB', label: 'BNB/USDT' },
   { symbol: 'XRP', label: 'XRP/USDT' },
   { symbol: 'ADA', label: 'ADA/USDT' },
   { symbol: 'AVAX', label: 'AVAX/USDT' },
@@ -51,6 +52,8 @@ function normalizeTrade(row) {
 export function useLiveMarketData() {
   const [routes, setRoutes] = useState(EMPTY_ROUTES)
   const [marketSnapshot, setMarketSnapshot] = useState([])
+  const [chainRpcHealth, setChainRpcHealth] = useState([])
+  const [signerHealth, setSignerHealth] = useState([])
   const [trades, setTrades] = useState([])
   const [engineStatus, setEngineStatus] = useState('ACTIVE')
   const [status, setStatus] = useState('connecting')
@@ -88,6 +91,8 @@ export function useLiveMarketData() {
         : []
       setRoutes(nextRoutes)
       setMarketSnapshot(nextSnapshot)
+      setChainRpcHealth(Array.isArray(data?.chain_rpc_health) ? data.chain_rpc_health : [])
+      setSignerHealth(Array.isArray(data?.signer_health) ? data.signer_health : [])
       setGlobalLatency(Number(data?.latency_ms) || 0)
       setConnected({
         binance: Array.isArray(data?.feeds) && data.feeds.includes('binance'),
@@ -102,6 +107,8 @@ export function useLiveMarketData() {
       setConnected({ binance: false, bybit: false, okx: false, kraken: false, kucoin: false, gateio: false })
       setGlobalLatency(0)
       setMarketSnapshot([])
+      setChainRpcHealth([])
+      setSignerHealth([])
       setStatus('degraded')
     }
   }, [marketControls.minSpreadPct, marketControls.maxRoutes])
@@ -121,5 +128,5 @@ export function useLiveMarketData() {
 
   const sessionPnL = +trades.reduce((sum, t) => sum + t.pnl, 0).toFixed(2)
 
-  return { routes, marketSnapshot, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
+  return { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
