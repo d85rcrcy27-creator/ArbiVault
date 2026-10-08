@@ -8,7 +8,13 @@ const ECPair=ECPairFactory(ecc)
 const url=Deno.env.get('SUPABASE_URL')!, serviceKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const admin=createClient(url,serviceKey)
 const auth=(req:Request)=>createClient(url,Deno.env.get('SUPABASE_ANON_KEY')!,{global:{headers:{Authorization:req.headers.get('Authorization')??''}}})
-const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{'cache-control':'no-store'}})
+const corsHeaders={
+ 'Access-Control-Allow-Origin':'https://arbivault.vercel.app',
+ 'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type',
+ 'Access-Control-Allow-Methods':'POST, OPTIONS',
+ 'Vary':'Origin'
+}
+const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{...corsHeaders,'cache-control':'no-store'}})
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'){
  const {data:existing}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
  if(existing?.secret_ref)return existing
@@ -85,4 +91,4 @@ async function ensureBindings(userId:string,wallets:any[]){
  }
  return bot
 }
-Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok');if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin'];const chains=['bnb','solana','ethereum','bitcoin'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
+Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok',{status:200,headers:corsHeaders});if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin'];const chains=['bnb','solana','ethereum','bitcoin'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
