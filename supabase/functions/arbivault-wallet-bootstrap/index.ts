@@ -55,9 +55,11 @@ async function ensureBindings(userId:string,wallets:any[]){
   const {data:binding}=await admin.from('bot_wallet_bindings').select('id').eq('owner_id',userId).eq('bot_config_id',bot.id).eq('wallet_id',w.id).eq('role','execution').maybeSingle()
   if(!binding)await admin.from('bot_wallet_bindings').insert({owner_id:userId,bot_config_id:bot.id,wallet_id:w.id,role:'execution'})
   const chain=w.chain
+  // Only create adapters for chains supported by the current internal-vault signer.
+  // Ethereum is not supported by the deployed signer and must not create a stale blocker row.
+  if(!['bnb','solana','bitcoin'].includes(chain)) continue
   const {data:adapter}=await admin.from('execution_adapters').select('id').eq('chain',chain).eq('allowed_wallet_id',w.id).eq('signer_provider','internal_vault').maybeSingle()
-  const signerSupported=['bnb','solana','bitcoin'].includes(chain)
-  const patch={configured:signerSupported,health_status:signerSupported?'healthy':'unconfigured',read_only:false,signing_boundary:'internal_vault',can_broadcast:signerSupported,can_withdraw:false,automatic_signing:signerSupported,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:signerSupported?null:'signer_chain_support_pending',updated_at:new Date().toISOString()}
+  const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:null,updated_at:new Date().toISOString()}
   if(adapter)await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
   else await admin.from('execution_adapters').insert({...patch,name:'ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer',adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_contracts:[],allowed_programs:[]})
  }
