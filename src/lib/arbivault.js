@@ -72,13 +72,9 @@ export async function listTrades(limit = 100) {
 }
 
 
-export async function runBacktest({ skillId = null, threshold = 0, days = 30 } = {}) {
-  const session = await getAuthenticatedSession()
+export async function runBacktest({ threshold = 0, days = 30 } = {}) {
   const { data, error } = await supabase.functions.invoke('arbivault-backtest', {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-    body: { skill_id: skillId, threshold, days },
+    body: { threshold, days },
   })
   if (error) throw error
   if (!data?.ok) throw new Error(data?.error || 'Unable to run backtest')
