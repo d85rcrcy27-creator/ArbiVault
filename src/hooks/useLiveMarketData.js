@@ -132,7 +132,7 @@ export function useLiveMarketData() {
     throw new Error('Browser execution is disabled; use the server-side execution bot')
   }, [])
 
-  const sessionPnL = +trades.filter((t) => t.status === 'confirmed' || t.executionMode === 'confirmed').reduce((sum, t) => sum + t.pnl, 0).toFixed(2)
+  // P&L is sourced only from confirmed on-chain trades. The trades schema uses\n  // status='executed' and execution_mode='on_chain'; 'confirmed' is not a valid\n  // trade status, so the old filter could never include a live trade.\n  const sessionPnL = +trades\n    .filter((t) => t.status === 'executed' && t.executionMode === 'on_chain' && !!t.txid)\n    .reduce((sum, t) => sum + t.pnl, 0)\n    .toFixed(2)
 
   return { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
