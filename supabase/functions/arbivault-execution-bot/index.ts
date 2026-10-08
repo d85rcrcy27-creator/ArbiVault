@@ -6,8 +6,20 @@ const supabase = createClient(
 )
 
 const PAIRS = [
-  { chain: 'solana', pair: 'SOL/USDT', symbol: 'SOLUSDT', okx: 'SOL-USDT' },
-  { chain: 'bnb', pair: 'BNB/USDT', symbol: 'BNBUSDT', okx: 'BNB-USDT' },
+  {
+    chain: 'solana',
+    pair: 'SOL/USDC',
+    symbol: 'SOLUSDC',
+    okx: 'SOL-USDC',
+    probe: { sell: '10000000', buy: '100000000' }, // 0.01 SOL / 100 USDC
+  },
+  {
+    chain: 'bnb',
+    pair: 'BNB/USDT',
+    symbol: 'BNBUSDT',
+    okx: 'BNB-USDT',
+    probe: { sell: '1000000000000000', buy: '1000000000000000000' }, // 0.001 BNB / 1 USDT
+  },
 ]
 
 const QUALIFYING_SPREAD_PCT = 0.5
@@ -107,6 +119,87 @@ async function spreadFor(pair: typeof PAIRS[number]) {
   }
 }
 
+async function builderToken() {
+  const { data } = await supabase.rpc('get_bot_cron_token')
+  return data ? String(data) : null
+}
+
+async function callTransactionBuilder(input: Record<string, unknown>) {
+  const token = await builderToken()
+  if (!token) throw new Error('transaction_builder_auth_unavailable')
+
+  const endpoint = `${Deno.env.get('SUPABASE_URL')}/functions/v1/arbivault-transaction-builder`
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-arbivault-cron-token': token,
+    },
+    body: JSON.stringify(input),
+  })
+
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(body?.error || `transaction_builder_http_${response.status}`)
+  }
+  return body
+}
+
+function dexQuotePrice(build: any, side: 'buy' | 'sell') {
+  const input = Number(build?.in_amount || build?.input_amount || 0)
+  const output = Number(build?.out_amount || build?.expected_out || 0)
+  if (!(input > 0) || !(output > 0)) return null
+
+  return side === 'sell'
+    ? output / input
+    : input / output
+}
+
+async function buildDexPreflight(
+  route: any,
+  walletId: string,
+  walletAddress: string,
+  probe: { sell: string; buy: string },
+) {
+  if (!route?.transaction_builder) return null
+
+  const [sell, buy] = await Promise.all([
+    callTransactionBuilder({
+      route_id: route.id,
+      source_wallet_id: walletId,
+      side: 'sell',
+      amount_raw: probe.sell,
+      slippage_bps: 50,
+      price_impact_pct: 0,
+    }),
+    callTransactionBuilder({
+      route_id: route.id,
+      source_wallet_id: walletId,
+      side: 'buy',
+      amount_raw: probe.buy,
+      slippage_bps: 50,
+      price_impact_pct: 0,
+    }),
+  ])
+
+  return {
+    wallet: walletAddress,
+    builder: route.transaction_builder,
+    sell: {
+      price: dexQuotePrice(sell, 'sell'),
+      out_amount: sell?.out_amount || sell?.expected_out || null,
+      transaction_payload_hash: sell?.transaction_payload_hash || null,
+      executable_unsigned: sell?.executable === true,
+    },
+    buy: {
+      price: dexQuotePrice(buy, 'buy'),
+      out_amount: buy?.out_amount || buy?.expected_out || null,
+      transaction_payload_hash: buy?.transaction_payload_hash || null,
+      executable_unsigned: buy?.executable === true,
+    },
+  }
+}
+
 async function sha256(value: string) {
   const bytes = await crypto.subtle.digest(
     'SHA-256',
@@ -160,7 +253,7 @@ export default {
 
     const { data: routes, error: routeError } = await supabase
       .from('arbivault_strategy_routes')
-      .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only')
+      .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status')
       .eq('enabled', true)
 
     if (routeError) return Response.json({ error: routeError.message }, { status: 500 })
@@ -206,6 +299,16 @@ export default {
         const chains = bot.chains?.length ? bot.chains : ['solana', 'bnb']
         const opportunities: any[] = []
 
+        const wallets = await supabase
+          .from('wallets')
+          .select('id,chain,address,status,is_hot,wallet_role')
+          .eq('owner_id', bot.owner_id)
+          .eq('status', 'active')
+          .eq('is_hot', true)
+          .eq('wallet_role', 'trading_hot')
+
+        if (wallets.error) throw wallets.error
+
         for (const pair of PAIRS.filter((candidate) => chains.includes(candidate.chain))) {
           const quote = await spreadFor(pair)
           if (!quote?.qualifying) continue
@@ -214,23 +317,49 @@ export default {
             .filter((candidate: any) =>
               candidate.chain === quote.chain &&
               candidate.pair === quote.pair &&
-              candidate.route_type === 'orderbook' &&
+              candidate.enabled === true &&
               candidate.strategy_bot_id
             )
-            .sort((a: any, b: any) =>
-              Number(b.discovery_only) - Number(a.discovery_only)
-            )[0] || null
+            .sort((a: any, b: any) => {
+              const aBuilder = a.builder_enabled === true && !!a.transaction_builder ? 1 : 0
+              const bBuilder = b.builder_enabled === true && !!b.transaction_builder ? 1 : 0
+              return bBuilder - aBuilder
+            })[0] || null
 
           const strategyBot = route?.strategy_bot_id
             ? (strategyBots || []).find((candidate: any) => candidate.id === route.strategy_bot_id)
             : null
 
-          const research = {
+          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === quote.chain) || null
+          const research: any = {
             ...quote,
             route_id: route?.id || null,
             strategy_bot_id: strategyBot?.id || null,
             strategy: strategyBot?.strategy || route?.strategy || null,
             research_layer: 'A Deep Mind',
+            builder: route?.transaction_builder || null,
+          }
+
+          let dexPreflight: any = null
+          let builderError: string | null = null
+
+          if (
+            route?.builder_enabled === true &&
+            route?.transaction_builder &&
+            wallet
+          ) {
+            try {
+              dexPreflight = await buildDexPreflight(
+                route,
+                wallet.id,
+                wallet.address,
+                pair.probe,
+              )
+              research.dex_preflight = dexPreflight
+            } catch (e) {
+              builderError = e instanceof Error ? e.message : String(e)
+              research.dex_preflight_error = builderError
+            }
           }
 
           const observationInsert = await supabase
@@ -252,7 +381,10 @@ export default {
             observation_saved: !observationInsert.error,
           })
 
-          const venueExecutionAdapterConfigured = false
+          const cexExecutionAdapterConfigured = false
+          const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash &&
+            !!dexPreflight?.buy?.transaction_payload_hash
+
           const executionGate = !zeroCapitalWindow
             ? 'zero_capital_policy_not_active'
             : !strategyBot
@@ -261,14 +393,26 @@ export default {
                 ? 'strategy_route_not_linked'
                 : route.discovery_only
                   ? 'strategy_route_discovery_only'
-                  : !venueExecutionAdapterConfigured
-                    ? 'market_execution_adapter_missing'
-                    : !signerAdapters.length
-                      ? 'internal_signer_unavailable'
-                      : 'eligible'
+                  : !route.builder_enabled || !route.transaction_builder
+                    ? 'transaction_builder_not_configured'
+                    : builderError
+                      ? 'transaction_builder_preflight_failed'
+                      : route.route_type !== 'dex_cex'
+                        ? 'route_requires_atomic_multileg_builder'
+                        : !transactionBuilt
+                          ? 'transaction_builder_incomplete'
+                          : !cexExecutionAdapterConfigured
+                            ? 'cex_execution_adapter_missing'
+                            : !signerAdapters.length
+                              ? 'internal_signer_unavailable'
+                              : 'eligible'
 
           if (executionGate !== 'eligible') {
             const payloadHash = await sha256(JSON.stringify(research))
+            const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash ||
+              dexPreflight?.buy?.transaction_payload_hash ||
+              null
+
             await supabase.from('execution_attempts').insert({
               owner_id: bot.owner_id,
               adapter_id: null,
@@ -277,6 +421,7 @@ export default {
               execution_mode: 'cex',
               status: 'blocked',
               opportunity_payload_hash: payloadHash,
+              transaction_payload_hash: txPayloadHash,
               capital_used: 0,
               failure_reason: executionGate,
               validated_at: now.toISOString(),
@@ -286,13 +431,16 @@ export default {
 
         const output = {
           ok: true,
-          execution_mode: zeroCapitalWindow ? 'research_validated' : 'blocked_policy',
+          execution_mode: zeroCapitalWindow ? 'builder_preflighted' : 'blocked_policy',
           research_layer: 'A Deep Mind',
           opportunities,
           controls: {
             withdrawal_path_available_to_bot: false,
             real_trade_claims_disabled_until_tx_hash: true,
-            market_execution_adapter_present: false,
+            transaction_builder_present: true,
+            transaction_builder_preflighted: opportunities.some((item) => item.dex_preflight),
+            cex_execution_adapter_present: false,
+            atomic_multileg_builder_present: false,
             internal_signers_present: signerAdapters.length > 0,
           },
         }
