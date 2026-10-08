@@ -50,6 +50,7 @@ function normalizeTrade(row) {
 
 export function useLiveMarketData() {
   const [routes, setRoutes] = useState(EMPTY_ROUTES)
+  const [marketSnapshot, setMarketSnapshot] = useState([])
   const [trades, setTrades] = useState([])
   const [engineStatus, setEngineStatus] = useState('ACTIVE')
   const [status, setStatus] = useState('connecting')
@@ -80,9 +81,13 @@ export function useLiveMarketData() {
       })
       if (error) throw error
       const nextRoutes = Array.isArray(data?.routes)
-        ? data.routes.sort((a, b) => Number(b.spreadPct || 0) - Number(a.spreadPct || 0)).slice(0, marketControls.maxRoutes)
+        ? data.routes.slice().sort((a, b) => Number(b.spreadPct || 0) - Number(a.spreadPct || 0)).slice(0, marketControls.maxRoutes)
+        : []
+      const nextSnapshot = Array.isArray(data?.market_snapshot)
+        ? data.market_snapshot
         : []
       setRoutes(nextRoutes)
+      setMarketSnapshot(nextSnapshot)
       setGlobalLatency(Number(data?.latency_ms) || 0)
       setConnected({
         binance: Array.isArray(data?.feeds) && data.feeds.includes('binance'),
@@ -96,6 +101,7 @@ export function useLiveMarketData() {
     } catch {
       setConnected({ binance: false, bybit: false, okx: false, kraken: false, kucoin: false, gateio: false })
       setGlobalLatency(0)
+      setMarketSnapshot([])
       setStatus('degraded')
     }
   }, [marketControls.minSpreadPct, marketControls.maxRoutes])
@@ -115,5 +121,5 @@ export function useLiveMarketData() {
 
   const sessionPnL = +trades.reduce((sum, t) => sum + t.pnl, 0).toFixed(2)
 
-  return { routes, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
+  return { routes, marketSnapshot, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
