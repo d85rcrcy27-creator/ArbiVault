@@ -27,8 +27,15 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
                   <span className="rounded bg-[#12141D] px-1.5 py-0.5 font-mono text-[0.5625rem] text-[#5a6080]">
                     {r.buyExchange}→{r.sellExchange}
                   </span>
+                  <span className="rounded bg-[#12141D] px-1.5 py-0.5 font-mono text-[0.5625rem] uppercase text-[#5a6080]">
+                    {r.chain}
+                  </span>
                 </div>
                 <span className="font-mono text-xs font-semibold text-[#FFB800]">{r.spreadPct.toFixed(3)}%</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[0.55rem] text-[#5a6080]">
+                <span>BUY {Number(r.buyPrice || 0).toFixed(4)}</span>
+                <span>SELL {Number(r.sellPrice || 0).toFixed(4)}</span>
               </div>
               <div className="mt-2 flex items-center gap-3">
                 <div className="h-1 flex-1 overflow-hidden rounded-full bg-[#1a1d2b]">
@@ -40,8 +47,8 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
                 <span className="w-16 shrink-0 text-right font-mono text-[0.625rem] text-[#00FF87]">
                   +${profit.toFixed(2)}
                 </span>
-                <span className="w-12 shrink-0 text-right font-mono text-[0.625rem] text-[#5a6080]">
-                  {r.latency}ms
+                <span className="w-auto shrink-0 text-right font-mono text-[0.55rem] text-[#5a6080]">
+                  {r.qualifying ? 'QUALIFYING' : 'OBSERVED'} · {Number(r.latency || 0)}ms
                 </span>
               </div>
             </button>
