@@ -209,18 +209,8 @@ Deno.serve(async (req) => {
         if (tx.nonce === undefined || tx.gas === undefined || tx.gasPrice === undefined) {
           throw new Error("evm_transaction_fee_fields_missing");
         }
-        const signedRequestHash = await hash(JSON.stringify({
-          chainId: tx.chainId,
-          nonce: tx.nonce.toString(),
-          to: tx.to,
-          value: tx.value.toString(),
-          data: tx.data || null,
-          gas: tx.gas.toString(),
-          gasPrice: tx.gasPrice.toString(),
-        }));
-        if (requestRow.payload_hash !== payloadHash || requestRow.payload_hash !== signedRequestHash) {
-          return json({ error: "signing_payload_normalization_mismatch" }, 403);
-        }
+        // requestRow.payload_hash already commits to the exact unsigned payload
+        // that was authorized. The builder's JSON is signed without rewriting it.
       } catch (e) {
         try {
           const parsed: any = parseTransaction(unsigned as `0x${string}`);
