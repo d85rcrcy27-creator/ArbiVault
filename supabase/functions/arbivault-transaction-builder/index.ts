@@ -326,6 +326,7 @@ Deno.serve(async (req) => {
 
     if (routeError) return json({ error: routeError.message }, 500);
     if (!route || route.enabled !== true) return json({ error: "route_not_enabled" }, 404);
+    if (route.discovery_only === true) return json({ error: "discovery_only_route_cannot_execute" }, 409);
     if (route.builder_enabled !== true || !route.transaction_builder) {
       return json({ error: "transaction_builder_not_configured" }, 409);
     }
