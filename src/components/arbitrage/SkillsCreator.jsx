@@ -68,6 +68,64 @@ const STRATEGY_PRESETS = [
 const NOTIONAL = 10000
 const FEE_PCT = 0.1
 
+const VENUE_STRATEGY_PRESETS = [
+  {
+    id:'eight_venue_spread_lab',
+    family:'exchange_arbitrage',
+    name:'8-Venue Spread Lab',
+    description:'Compare public best-bid/best-ask data across Binance, Bybit, OKX, Kraken, KuCoin, Gate.io, Coinbase, and Bitget.',
+    dataSources:['public_exchange_order_books'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.25', unit:'%' },
+      { type:'condition', label:'IF Volume >', value:'10000', unit:'USD' },
+      { type:'action', label:'THEN Send Alert' },
+    ],
+  },
+  {
+    id:'venue_latency_monitor',
+    family:'market_microstructure',
+    name:'Venue Latency Monitor',
+    description:'Rank public venue quote latency and detect persistent feed-quality differences.',
+    dataSources:['public_exchange_order_books'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Latency <', value:'60', unit:'ms' },
+      { type:'condition', label:'IF Spread >', value:'0.15', unit:'%' },
+      { type:'action', label:'THEN Send Alert' },
+    ],
+  },
+  {
+    id:'coinbase_bitget_cross_venue',
+    family:'exchange_arbitrage',
+    name:'Coinbase + Bitget Cross-Venue',
+    description:'Research price dislocations between Coinbase and Bitget using public spot market data.',
+    dataSources:['coinbase_public','bitget_public'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.25', unit:'%' },
+      { type:'action', label:'THEN Send Alert' },
+    ],
+  },
+  {
+    id:'binance_bybit_okx_triage',
+    family:'exchange_arbitrage',
+    name:'Binance + Bybit + OKX Triage',
+    description:'Compare three high-liquidity public books to rank cross-venue spread candidates.',
+    dataSources:['binance_public','bybit_public','okx_public'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.20', unit:'%' },
+      { type:'condition', label:'IF Latency <', value:'100', unit:'ms' },
+      { type:'action', label:'THEN Send Alert' },
+    ],
+  },
+]
+
 const PUBLIC_STRATEGY_PRESETS = [
   { id:'cross_venue_crypto', family:'exchange_arbitrage', name:'Cross-Venue Crypto', description:'Compare live public exchange books for cross-venue price dislocations.', dataSources:['crypto_exchanges'], observationOnly:true, discoveryEnabled:true, blocks:[] },
   { id:'btc_mempool_pressure', family:'bitcoin_network', name:'BTC Mempool Pressure', description:'Monitor Bitcoin mempool size and fee pressure for congestion regimes.', dataSources:['bitcoin_mempool'], observationOnly:true, discoveryEnabled:true, blocks:[] },
@@ -272,7 +330,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
         <div className="border-b border-[#232738] p-4">
           <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Strategy name…" className="mb-3 w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-1.5 font-mono text-xs text-[#e0e4f0]" />
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Current Strategy Presets</span><div className="flex flex-wrap gap-1.5">{STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div></div>
-          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Public Data Strategy Packs</span><div className="flex flex-wrap gap-1.5">{PUBLIC_STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div>{draftSources.length > 0 && <div className="mt-2 font-mono text-[0.5625rem] text-[#5a6080]">Sources: {draftSources.join(' · ')} · {draftObservationOnly ? 'OBSERVE-ONLY' : 'EXECUTION-CAPABLE'}</div>}</div>
+          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Public Venue Strategy Packs</span><div className="flex flex-wrap gap-1.5">{VENUE_STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div>{draftSources.length > 0 && <div className="mt-2 font-mono text-[0.5625rem] text-[#5a6080]">Sources: {draftSources.join(' · ')} · {draftObservationOnly ? 'OBSERVE-ONLY' : 'EXECUTION-CAPABLE'}</div>}</div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Conditions</span><div className="flex flex-wrap gap-1.5">{CONDITION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#FFB800]/30 bg-[#FFB800]/5 px-2 py-1 font-mono text-[0.625rem] text-[#FFB800]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Actions</span><div className="flex flex-wrap gap-1.5">{ACTION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 px-2 py-1 font-mono text-[0.625rem] text-[#00F0FF]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <label className="mb-3 flex cursor-pointer items-center gap-2 font-mono text-[0.625rem] uppercase tracking-wider text-[#8a90b0]">
