@@ -26,9 +26,22 @@ export async function updateBotConfig(id, updates) {
   if (error) throw error
   return data
 }
-export async function createBotSkill({ botConfigId = null, name, description = '', conditions = [], actions = [], riskLimits = {}, cooldownSeconds = 30 }) {
+export async function createBotSkill({ botConfigId = null, name, description = '', conditions = [], actions = [], riskLimits = {}, cooldownSeconds = 30, strategyFamily = null, dataSources = [], observationOnly = true, discoveryEnabled = false }) {
   const ownerId = await currentUserId()
-  const { data, error } = await supabase.from('bot_skills').insert({ owner_id: ownerId, bot_config_id: botConfigId, name, description, conditions, actions, risk_limits: riskLimits, cooldown_seconds: cooldownSeconds }).select().single()
+  const { data, error } = await supabase.from('bot_skills').insert({
+    owner_id: ownerId,
+    bot_config_id: botConfigId,
+    name,
+    description,
+    conditions,
+    actions,
+    risk_limits: riskLimits,
+    cooldown_seconds: cooldownSeconds,
+    strategy_family: strategyFamily,
+    data_sources: dataSources,
+    observation_only: observationOnly,
+    discovery_enabled: discoveryEnabled,
+  }).select().single()
   if (error) throw error
   return data
 }
@@ -58,4 +71,13 @@ export async function listTrades(limit = 100) {
   const { data, error } = await supabase.from('trades').select('*').order('created_at', { ascending: false }).limit(limit)
   if (error) throw error
   return data || []
+}
+
+
+export async function scoutPublicData({ sources = [], skillId = null, persist = false, params = {} } = {}) {
+  const { data, error } = await supabase.functions.invoke('arbivault-public-scout', {
+    body: { sources, skill_id: skillId, persist, params },
+  })
+  if (error) throw error
+  return data
 }
