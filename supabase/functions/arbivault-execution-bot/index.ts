@@ -293,9 +293,10 @@ export default {
       (!policy.ends_at || new Date(policy.ends_at) > now)
 
     const capitalAllowance = policyActive ? Number(policy.capital_allowance || 0) : 0
-    const zeroCapitalWindow = policyActive &&
-      policy.mode === 'zero_capital' &&
-      capitalAllowance === 0
+    const executionWindowActive = policyActive && (
+      (policy.mode === 'zero_capital' && capitalAllowance === 0) ||
+      (policy.mode === 'live' && capitalAllowance > 0)
+    )
 
     const { data: bots, error: botError } = await supabase
       .from('bot_configs')
@@ -412,7 +413,7 @@ export default {
             : null
           const executionAdapterConfigured = !!executionAdapter
           const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash && !!dexPreflight?.buy?.transaction_payload_hash
-          const executionGate = !zeroCapitalWindow ? 'zero_capital_policy_not_active'
+          const executionGate = !executionWindowActive ? 'execution_policy_not_active'
             : !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
@@ -472,7 +473,7 @@ export default {
 
         const output = {
           ok: true,
-          execution_mode: zeroCapitalWindow ? 'builder_preflighted' : 'blocked_policy',
+          execution_mode: executionWindowActive ? (policy?.mode === 'live' ? 'live_preflighted' : 'builder_preflighted') : 'blocked_policy',
           opportunities,
           controls: {
             withdrawal_path_available_to_bot: false,
@@ -541,7 +542,7 @@ export default {
       worker: 'execution',
       signer_invocations: signerInvocations,
       priority: 'early_bird',
-      live_execution_policy: zeroCapitalWindow ? 'zero_capital_for_initial_24h' : 'policy_blocked',
+      live_execution_policy: executionWindowActive ? String(policy?.mode || 'configured') : 'policy_blocked',
       actual_broadcasts: signerInvocations.filter((item: any) => item.broadcast === true).length,
       confirmed_profits: 0,
       results,
