@@ -171,19 +171,69 @@ Deno.serve(async (req) => {
 
     if (chain === "bnb") {
       const account = privateKeyToAccount(sv as `0x${string}`);
-      const parsed: any = parseTransaction(unsigned as `0x${string}`);
-      if (!parsed.to) return json({ error: "contract_creation_not_allowed" }, 403);
-      if (parsed.from && parsed.from.toLowerCase() !== wallet.address.toLowerCase()) {
-        return json({ error: "transaction_sender_mismatch" }, 403);
+      let tx: any;
+      try {
+        const parsedCandidate = JSON.parse(unsigned);
+        if (!parsedCandidate || typeof parsedCandidate !== "object") throw new Error("evm_json_not_object");
+        const to = String(parsedCandidate.to || "");
+        if (!/^0x[a-fA-F0-9]{40}$/.test(to)) throw new Error("evm_destination_invalid");
+        if (parsedCandidate.from && String(parsedCandidate.from).toLowerCase() !== wallet.address.toLowerCase()) {
+          throw new Error("transaction_sender_mismatch");
+        }
+        const allowed = Array.isArray(adapter.allowed_contracts) ? adapter.allowed_contracts : [];
+        if (
+          allowed.length &&
+          !allowed.some((x: any) => String(x).toLowerCase() === to.toLowerCase())
+        ) {
+          return json({ error: "destination_contract_not_allowlisted" }, 403);
+        }
+        if (parsedCandidate.chainId !== undefined && Number(parsedCandidate.chainId) !== 56) {
+          throw new Error("transaction_chain_id_mismatch");
+        }
+        const toBigInt = (name: string, value: unknown) => {
+          if (value === undefined || value === null) return undefined;
+          const s = String(value);
+          if (/^0x[0-9a-fA-F]+$/.test(s)) return BigInt(s);
+          if (/^\\d+$/.test(s)) return BigInt(s);
+          throw new Error(`evm_${name}_invalid`);
+        };
+        tx = {
+          chainId: 56,
+          nonce: toBigInt("nonce", parsedCandidate.nonce),
+          to,
+          value: toBigInt("value", parsedCandidate.value) ?? 0n,
+          data: parsedCandidate.data ? String(parsedCandidate.data) as `0x${string}` : undefined,
+          gas: toBigInt("gas", parsedCandidate.gas),
+          gasPrice: toBigInt("gasPrice", parsedCandidate.gasPrice),
+        };
+        if (tx.nonce === undefined || tx.gas === undefined || tx.gasPrice === undefined) {
+          throw new Error("evm_transaction_fee_fields_missing");
+        }
+        const signedRequestHash = await hash(JSON.stringify({
+          chainId: tx.chainId,
+          nonce: tx.nonce.toString(),
+          to: tx.to,
+          value: tx.value.toString(),
+          data: tx.data || null,
+          gas: tx.gas.toString(),
+          gasPrice: tx.gasPrice.toString(),
+        }));
+        if (requestRow.payload_hash !== payloadHash || requestRow.payload_hash !== signedRequestHash) {
+          return json({ error: "signing_payload_normalization_mismatch" }, 403);
+        }
+      } catch (e) {
+        try {
+          const parsed: any = parseTransaction(unsigned as `0x${string}`);
+          if (!parsed.to) return json({ error: "contract_creation_not_allowed" }, 403);
+          if (parsed.from && parsed.from.toLowerCase() !== wallet.address.toLowerCase()) {
+            return json({ error: "transaction_sender_mismatch" }, 403);
+          }
+          tx = parsed;
+        } catch {
+          return json({ error: e instanceof Error ? e.message : "evm_transaction_decode_failed" }, 400);
+        }
       }
-      const allowed = Array.isArray(adapter.allowed_contracts) ? adapter.allowed_contracts : [];
-      if (
-        allowed.length &&
-        !allowed.some((x: any) => String(x).toLowerCase() === String(parsed.to).toLowerCase())
-      ) {
-        return json({ error: "destination_contract_not_allowlisted" }, 403);
-      }
-      signed = await account.signTransaction(parsed);
+      signed = await account.signTransaction(tx);
     } else if (chain === "solana") {
       const raw = decode64(unsigned);
       const kp = Keypair.fromSecretKey(
