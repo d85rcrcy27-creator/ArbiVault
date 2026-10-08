@@ -313,12 +313,27 @@ export default {
           const quote = await spreadFor(pair)
           if (!quote?.qualifying) continue
 
-          const route = (routes || [])
+          // The market observer route and the executable route are distinct.
+          // The observer is the market/CEX route that was actually seen; the
+          // execution route is the strategy route that has a real transaction builder.
+          const observedRoute = (routes || [])
             .filter((candidate: any) =>
               candidate.chain === quote.chain &&
               candidate.pair === quote.pair &&
               candidate.enabled === true &&
+              candidate.route_type === 'orderbook' &&
               candidate.strategy_bot_id
+            )[0] || null
+
+          const executionRoute = (routes || [])
+            .filter((candidate: any) =>
+              candidate.chain === quote.chain &&
+              candidate.pair === quote.pair &&
+              candidate.enabled === true &&
+              candidate.strategy_bot_id &&
+              candidate.builder_enabled === true &&
+              !!candidate.transaction_builder &&
+              ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
             )
             .sort((a: any, b: any) => {
               const aBuilder = a.builder_enabled === true && !!a.transaction_builder ? 1 : 0
@@ -326,16 +341,22 @@ export default {
               return bBuilder - aBuilder
             })[0] || null
 
-          const strategyBot = route?.strategy_bot_id
-            ? (strategyBots || []).find((candidate: any) => candidate.id === route.strategy_bot_id)
+          const route = executionRoute || observedRoute
+
+          const strategyBot = (executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id)
+            ? (strategyBots || []).find((candidate: any) =>
+                candidate.id === (executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id)
+              )
             : null
 
           const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === quote.chain) || null
           const research: any = {
             ...quote,
-            route_id: route?.id || null,
+            observed_route_id: observedRoute?.id || null,
+            execution_route_id: executionRoute?.id || null,
+            route_id: executionRoute?.id || observedRoute?.id || null,
             strategy_bot_id: strategyBot?.id || null,
-            strategy: strategyBot?.strategy || route?.strategy || null,
+            strategy: strategyBot?.strategy || executionRoute?.strategy || observedRoute?.strategy || null,
             research_layer: 'A Deep Mind',
             builder: route?.transaction_builder || null,
           }
@@ -344,13 +365,13 @@ export default {
           let builderError: string | null = null
 
           if (
-            route?.builder_enabled === true &&
-            route?.transaction_builder &&
+            executionRoute?.builder_enabled === true &&
+            executionRoute?.transaction_builder &&
             wallet
           ) {
             try {
               dexPreflight = await buildDexPreflight(
-                route,
+                executionRoute,
                 wallet.id,
                 wallet.address,
                 pair.probe,
@@ -374,6 +395,11 @@ export default {
               value: quote.spread_pct,
               observed_at: now.toISOString(),
               metadata: research,
+              observed_route_id: observedRoute?.id || null,
+              execution_route_id: executionRoute?.id || null,
+              strategy_bot_id: strategyBot?.id || null,
+              execution_bot_config_id: bot.id,
+              qualifying: quote.qualifying === true,
             })
 
           opportunities.push({
@@ -389,17 +415,19 @@ export default {
             ? 'zero_capital_policy_not_active'
             : !strategyBot
               ? 'strategy_bot_not_linked'
-              : !route
-                ? 'strategy_route_not_linked'
-                : route.discovery_only
-                  ? 'strategy_route_discovery_only'
-                  : !route.builder_enabled || !route.transaction_builder
-                    ? 'transaction_builder_not_configured'
-                    : builderError
-                      ? 'transaction_builder_preflight_failed'
-                      : route.route_type !== 'dex_cex'
-                        ? 'route_requires_atomic_multileg_builder'
-                        : !transactionBuilt
+              : !observedRoute
+                ? 'observed_route_not_linked'
+                : !executionRoute
+                  ? 'execution_route_not_linked'
+                  : executionRoute.discovery_only
+                    ? 'strategy_route_discovery_only'
+                    : !executionRoute.builder_enabled || !executionRoute.transaction_builder
+                      ? 'transaction_builder_not_configured'
+                      : builderError
+                        ? 'transaction_builder_preflight_failed'
+                        : !['dex_cex', 'cyclic', 'multi_venue'].includes(executionRoute.route_type)
+                          ? 'route_requires_atomic_multileg_builder'
+                          : !transactionBuilt
                           ? 'transaction_builder_incomplete'
                           : !cexExecutionAdapterConfigured
                             ? 'cex_execution_adapter_missing'
@@ -417,6 +445,9 @@ export default {
               owner_id: bot.owner_id,
               adapter_id: null,
               strategy_bot_id: strategyBot?.id || null,
+              observation_id: observationInsert.data?.[0]?.id || null,
+              observed_route_id: observedRoute?.id || null,
+              execution_route_id: executionRoute?.id || null,
               chain: quote.chain,
               execution_mode: 'cex',
               status: 'blocked',
