@@ -43,6 +43,7 @@ async function rpc(url: string, method: string, params: unknown[]) {
 }
 
 async function broadcastSigned(chain: string, signed: string) {
+  // Broadcast only serialized, signed transactions. Never accept unsigned payloads here.
   if (chain === "bnb") {
     const txHash = await rpc(BSC_RPC, "eth_sendRawTransaction", [signed]);
     if (!txHash) throw new Error("bsc_broadcast_missing_tx_hash");
@@ -52,6 +53,21 @@ async function broadcastSigned(chain: string, signed: string) {
     const txHash = await rpc(SOLANA_RPC, "sendTransaction", [signed, { encoding: "base64", skipPreflight: false, maxRetries: 3 }]);
     if (!txHash) throw new Error("solana_broadcast_missing_signature");
     return String(txHash);
+  }
+  if (chain === "bitcoin") {
+    // bitcoinjs-lib returns a finalized PSBT; extract the raw network transaction
+    // before submitting to a public Bitcoin relay.
+    const psbt = bitcoin.Psbt.fromBase64(signed, { network: bitcoin.networks.bitcoin });
+    const txHex = psbt.extractTransaction().toHex();
+    const response = await fetch("https://mempool.space/api/tx", {
+      method: "POST",
+      headers: { "content-type": "text/plain", accept: "text/plain" },
+      body: txHex,
+    });
+    const body = (await response.text()).trim();
+    if (!response.ok) throw new Error(`bitcoin_broadcast_http_${response.status}${body ? `_${body.slice(0, 160)}` : ""}`);
+    if (!body) throw new Error("bitcoin_broadcast_missing_tx_hash");
+    return body;
   }
   throw new Error("broadcast_chain_not_configured");
 }
@@ -250,6 +266,28 @@ Deno.serve(async (req) => {
     }
 
     const now = new Date().toISOString();
+
+    // Idempotency: once a signing request has a broadcast tx hash, return it
+    // instead of attempting to submit the same transaction again.
+    const { data: latestRequest } = await supabase
+      .from("signing_requests")
+      .select("status,tx_hash,broadcast_at")
+      .eq("id", requestRow.id)
+      .maybeSingle();
+    if (latestRequest?.status === "broadcast" && latestRequest.tx_hash) {
+      return json({
+        ok: true,
+        signing_request_id: requestRow.id,
+        provider: "internal_vault",
+        chain,
+        mode,
+        tx_hash: String(latestRequest.tx_hash),
+        signed: true,
+        broadcast: true,
+        idempotent_replay: true,
+      });
+    }
+
     const txHash = await broadcastSigned(chain, signed);
     const broadcastAt = new Date().toISOString();
 
@@ -259,7 +297,32 @@ Deno.serve(async (req) => {
       .eq("id", requestRow.id)
       .eq("status", "authorized");
 
-    if (markError) return json({ error: "broadcast_state_update_failed", tx_hash: txHash }, 500);
+    if (markError) {
+      // The network broadcast already succeeded. Persist the execution attempt too,
+      // then return success with an explicit persistence warning instead of causing
+      // the caller to retry and potentially rebroadcast the same nonce.
+      if (requestRow.execution_attempt_id) {
+        await supabase.from("execution_attempts").update({
+          status: "broadcast",
+          tx_hash: txHash,
+          signed_at: now,
+          broadcast_at: broadcastAt,
+          updated_at: broadcastAt,
+          failure_reason: null,
+        }).eq("id", requestRow.execution_attempt_id);
+      }
+      return json({
+        ok: true,
+        signing_request_id: requestRow.id,
+        provider: "internal_vault",
+        chain,
+        mode,
+        tx_hash: txHash,
+        signed: true,
+        broadcast: true,
+        state_persisted: false,
+      }, 202);
+    }
 
     await supabase
       .from("execution_adapters")
