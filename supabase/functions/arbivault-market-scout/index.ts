@@ -270,6 +270,27 @@ Deno.serve(async (req) => {
     const strategyBotIds = new Set((strategyBots || []).map((bot: any) => bot.id))
     const executionBot = (executionBots || [])[0] || null
 
+    const publicApis = await publicApiData()
+    const publicResearch = [
+      ...publicApis.coingecko.map((item: any) => ({
+        owner_id: user.id, bot_skill_id: null, source_key: item.source, domain: 'market_research',
+        symbol: item.symbol + '/USD', metric: 'public_market_price', value: item.usd,
+        observed_at: new Date().toISOString(), metadata: item, observed_route_id: null,
+        execution_route_id: null, strategy_bot_id: null, execution_bot_config_id: null,
+      })),
+      ...publicApis.dexscreener.map((item: any) => ({
+        owner_id: user.id, bot_skill_id: null, source_key: item.source, domain: 'dex_research',
+        symbol: item.symbol + '/USDT', metric: 'dex_liquidity_usd', value: item.liquidityUsd,
+        observed_at: new Date().toISOString(), metadata: item, observed_route_id: null,
+        execution_route_id: null, strategy_bot_id: null, execution_bot_config_id: null,
+      })),
+    ]
+    let public_observation_persisted = 0
+    if (publicResearch.length) {
+      const { data: saved } = await admin.from('strategy_observations').insert(publicResearch).select('id')
+      public_observation_persisted = saved?.length || 0
+    }
+
     const linkedRoutes = marketRoutes.map((route: any) => {
       const observedRoute = (routeCatalog || []).find((candidate: any) =>
         candidate.chain === route.chain &&
@@ -310,11 +331,11 @@ Deno.serve(async (req) => {
           latency_ms: route.latency,
           quotes: route.quotes,
           public_market_data: {
-        coingecko: publicApis.coingecko.length,
-        dexscreener: publicApis.dexscreener.length,
-        persisted: public_observation_persisted,
-      },
-      source: 'public_exchange_order_books',
+            coingecko: publicApis.coingecko.length,
+            dexscreener: publicApis.dexscreener.length,
+            persisted: public_observation_persisted,
+          },
+          source: 'public_exchange_order_books',
         },
         observed_route_id: route.observed_route_id,
         execution_route_id: null,
@@ -366,45 +387,6 @@ Deno.serve(async (req) => {
         automatic_signing: matches.some((adapter: any) => adapter.automatic_signing === true),
       }
     })
-
-    const publicApis = await publicApiData()
-    const publicResearch = [
-      ...publicApis.coingecko.map((item: any) => ({
-        owner_id: user.id,
-        bot_skill_id: null,
-        source_key: item.source,
-        domain: 'market_research',
-        symbol: item.symbol + '/USD',
-        metric: 'public_market_price',
-        value: item.usd,
-        observed_at: new Date().toISOString(),
-        metadata: item,
-        observed_route_id: null,
-        execution_route_id: null,
-        strategy_bot_id: null,
-        execution_bot_config_id: null,
-      })),
-      ...publicApis.dexscreener.map((item: any) => ({
-        owner_id: user.id,
-        bot_skill_id: null,
-        source_key: item.source,
-        domain: 'dex_research',
-        symbol: item.symbol + '/USDT',
-        metric: 'dex_liquidity_usd',
-        value: item.liquidityUsd,
-        observed_at: new Date().toISOString(),
-        metadata: item,
-        observed_route_id: null,
-        execution_route_id: null,
-        strategy_bot_id: null,
-        execution_bot_config_id: null,
-      })),
-    ]
-    let public_observation_persisted = 0
-    if (publicResearch.length) {
-      const { data: saved } = await admin.from('strategy_observations').insert(publicResearch).select('id')
-      public_observation_persisted = saved?.length || 0
-    }
 
     const rpc = await rpcHealth()
     return json({
