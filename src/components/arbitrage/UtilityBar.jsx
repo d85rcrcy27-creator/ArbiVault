@@ -9,9 +9,9 @@ const FEEDS = [
   { id: 'gateio', name: 'GAT' },
 ];
 
-export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, onToggleEngine, status, connected, onOpenWallets }) {
+export default function UtilityBar({ globalLatency, livePnl = 0, engineStatus, onToggleEngine, status, connected, onOpenWallets }) {
   const latencyColor = globalLatency === 0 ? 'text-[#5a6080]' : globalLatency < 60 ? 'text-[#00FF87]' : globalLatency < 120 ? 'text-[#FFB800]' : 'text-[#FF4D4D]';
-  const pnlPositive = sessionPnL >= 0;
+  const pnlPositive = Number(livePnl) >= 0;
 
   return (
     <header className="sticky top-0 z-30 border-b border-[#232738] bg-[#090A0F]/95 backdrop-blur">
@@ -58,7 +58,7 @@ export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, on
             <div className="flex flex-col">
               <span className="font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Session PnL</span>
               <span className={`font-mono text-sm font-semibold ${pnlPositive ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}`}>
-                {pnlPositive ? '+' : '-'}${Math.abs(sessionPnL).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {pnlPositive ? '+' : '-'}${Math.abs(Number(livePnl)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
           </div>
