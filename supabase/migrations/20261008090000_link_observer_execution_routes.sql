@@ -25,3 +25,21 @@ create index if not exists execution_attempts_observation_idx
 
 create index if not exists execution_attempts_execution_route_idx
   on public.execution_attempts(execution_route_id);
+
+create index if not exists strategy_observations_observed_route_idx
+  on public.strategy_observations(observed_route_id);
+
+create index if not exists strategy_observations_execution_route_idx
+  on public.strategy_observations(execution_route_id);
+
+create index if not exists strategy_observations_strategy_bot_idx
+  on public.strategy_observations(strategy_bot_id);
+
+create index if not exists strategy_observations_execution_bot_config_idx
+  on public.strategy_observations(execution_bot_config_id);
+
+create index if not exists execution_attempts_observed_route_idx
+  on public.execution_attempts(observed_route_id);
+
+create index if not exists execution_attempts_strategy_bot_idx
+  on public.execution_attempts(strategy_bot_id);
