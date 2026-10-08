@@ -25,13 +25,9 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   try {
-    const auth = req.headers.get("Authorization") || "";
-    const token = auth.replace(/^Bearer\s+/i, "");
-    if (!token) return json({ error: "authentication_required" }, 401);
-
-    const { data: userData, error: userError } = await admin.auth.getUser(token);
-    if (userError || !userData.user) return json({ error: "authentication_required" }, 401);
-
+    // Public research backtest: no user/session authentication.
+    // Only aggregated public market observations are queried; private wallet/skill
+    // records are never read by this endpoint.
     const body = await req.json().catch(() => ({}));
     const skillId = String(body.skill_id || "");
     const requestedThreshold = Number(body.threshold);
@@ -41,19 +37,7 @@ Deno.serve(async (req) => {
       return json({ error: "invalid_threshold" }, 400);
     }
 
-    let skill: any = null;
-    if (skillId) {
-      const { data, error } = await admin
-        .from("bot_skills")
-        .select("id,name,conditions,risk_limits")
-        .eq("id", skillId)
-        .eq("owner_id", userData.user.id)
-        .maybeSingle();
-      if (error) return json({ error: error.message }, 500);
-      if (!data) return json({ error: "skill_not_found" }, 404);
-      skill = data;
-    }
-
+    const skill: any = null;
     const since = new Date(Date.now() - days * 86400000).toISOString();
     const fetchAll = async (skillFilter: string | null = null) => {
       const pageSize = 1000;
@@ -62,14 +46,12 @@ Deno.serve(async (req) => {
       for (let page = 0; page < 20; page += 1) {
         let query = admin
           .from("strategy_observations")
-          .select("id,bot_skill_id,source_key,domain,symbol,metric,value,observed_at,metadata")
-          .eq("owner_id", userData.user.id)
+          .select("id,source_key,domain,symbol,metric,value,observed_at,metadata")
+          .eq("source_key", "public_exchange_order_books")
           .eq("metric", "spread_pct")
           .gte("observed_at", since)
           .order("observed_at", { ascending: true })
           .range(page * pageSize, (page + 1) * pageSize - 1);
-
-        if (skillFilter) query = query.eq("bot_skill_id", skillFilter);
 
         const { data, error } = await query;
         if (error) return { rows: [], error };
@@ -84,20 +66,12 @@ Deno.serve(async (req) => {
     // Live scout observations are intentionally stored without a skill linkage.
     // A skill-specific backtest therefore uses linked samples when they exist,
     // otherwise it falls back to the owner's real historical market observations.
-    let fetched = await fetchAll(skillId || null);
+    const fetched = await fetchAll(null);
     if (fetched.error) return json({ error: fetched.error.message }, 500);
 
-    let observations = fetched.rows;
-    let dataScope = skillId ? "skill_linked_observations" : "owner_market_observations";
-    let fallbackUsed = false;
-
-    if (skillId && observations.length === 0) {
-      fetched = await fetchAll(null);
-      if (fetched.error) return json({ error: fetched.error.message }, 500);
-      observations = fetched.rows;
-      dataScope = "owner_market_observations_fallback";
-      fallbackUsed = true;
-    }
+    const observations = fetched.rows;
+    const dataScope = "public_exchange_order_books";
+    const fallbackUsed = false;
 
     const samples = (observations || [])
       .map((row: any) => ({
@@ -180,7 +154,7 @@ Deno.serve(async (req) => {
       fallback_used: fallbackUsed,
       source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
       skill_id: skillId || null,
-      strategy: skill?.name || null,
+      strategy: "public_market_backtest",
       days,
       threshold_pct: threshold,
       samples: samples.length,
