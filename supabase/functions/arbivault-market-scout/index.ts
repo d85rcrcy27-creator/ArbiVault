@@ -26,6 +26,63 @@ const PAIRS = [
 ]
 
 const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio']
+
+const PUBLIC_MARKET_ASSETS = [
+  { chain: 'ethereum', symbol: 'BTC', coingecko: 'bitcoin' },
+  { chain: 'ethereum', symbol: 'ETH', coingecko: 'ethereum' },
+  { chain: 'solana', symbol: 'SOL', coingecko: 'solana' },
+  { chain: 'bnb', symbol: 'BNB', coingecko: 'binancecoin' },
+  { chain: 'ethereum', symbol: 'XRP', coingecko: 'ripple' },
+  { chain: 'ethereum', symbol: 'ADA', coingecko: 'cardano' },
+  { chain: 'ethereum', symbol: 'AVAX', coingecko: 'avalanche-2' },
+  { chain: 'ethereum', symbol: 'LINK', coingecko: 'chainlink' },
+  { chain: 'ethereum', symbol: 'DOGE', coingecko: 'dogecoin' },
+]
+
+async function publicApiData() {
+  const [cg, dex] = await Promise.all([
+    (async () => {
+      try {
+        const ids = PUBLIC_MARKET_ASSETS.map((a) => a.coingecko).join(',')
+        const j = await fetchJson(`https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd&include_24hr_vol=true&include_24hr_change=true`)
+        return PUBLIC_MARKET_ASSETS.map((a) => ({
+          source: 'coingecko',
+          chain: a.chain,
+          symbol: a.symbol,
+          usd: Number(j?.[a.coingecko]?.usd),
+          volume24h: Number(j?.[a.coingecko]?.usd_24h_vol),
+          change24h: Number(j?.[a.coingecko]?.usd_24h_change),
+        })).filter((x) => Number.isFinite(x.usd) && x.usd > 0)
+      } catch { return [] }
+    })(),
+    (async () => {
+      try {
+        const results = await Promise.all(PUBLIC_MARKET_ASSETS.map(async (a) => {
+          const j = await fetchJson(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(a.symbol + '/USDT')}`)
+          const pairs = Array.isArray(j?.pairs) ? j.pairs : []
+          return pairs
+            .filter((p: any) => Number(p?.priceUsd) > 0)
+            .sort((x: any, y: any) => Number(y?.liquidity?.usd || 0) - Number(x?.liquidity?.usd || 0))
+            .slice(0, 3)
+            .map((p: any) => ({
+              source: 'dexscreener',
+              chain: a.chain,
+              symbol: a.symbol,
+              dex_chain: p.chainId,
+              dex: p.dexId,
+              pair_address: p.pairAddress,
+              priceUsd: Number(p.priceUsd),
+              liquidityUsd: Number(p.liquidity?.usd || 0),
+              volume24hUsd: Number(p.volume?.h24 || 0),
+              url: p.url,
+            }))
+        }))
+        return results.flat()
+      } catch { return [] }
+    })(),
+  ])
+  return { coingecko: cg, dexscreener: dex }
+}
 async function fetchJson(input: string) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 1800)
@@ -252,7 +309,12 @@ Deno.serve(async (req) => {
           spread_pct: route.spreadPct,
           latency_ms: route.latency,
           quotes: route.quotes,
-          source: 'public_exchange_order_books',
+          public_market_data: {
+        coingecko: publicApis.coingecko.length,
+        dexscreener: publicApis.dexscreener.length,
+        persisted: public_observation_persisted,
+      },
+      source: 'public_exchange_order_books',
         },
         observed_route_id: route.observed_route_id,
         execution_route_id: null,
@@ -304,6 +366,45 @@ Deno.serve(async (req) => {
         automatic_signing: matches.some((adapter: any) => adapter.automatic_signing === true),
       }
     })
+
+    const publicApis = await publicApiData()
+    const publicResearch = [
+      ...publicApis.coingecko.map((item: any) => ({
+        owner_id: user.id,
+        bot_skill_id: null,
+        source_key: item.source,
+        domain: 'market_research',
+        symbol: item.symbol + '/USD',
+        metric: 'public_market_price',
+        value: item.usd,
+        observed_at: new Date().toISOString(),
+        metadata: item,
+        observed_route_id: null,
+        execution_route_id: null,
+        strategy_bot_id: null,
+        execution_bot_config_id: null,
+      })),
+      ...publicApis.dexscreener.map((item: any) => ({
+        owner_id: user.id,
+        bot_skill_id: null,
+        source_key: item.source,
+        domain: 'dex_research',
+        symbol: item.symbol + '/USDT',
+        metric: 'dex_liquidity_usd',
+        value: item.liquidityUsd,
+        observed_at: new Date().toISOString(),
+        metadata: item,
+        observed_route_id: null,
+        execution_route_id: null,
+        strategy_bot_id: null,
+        execution_bot_config_id: null,
+      })),
+    ]
+    let public_observation_persisted = 0
+    if (publicResearch.length) {
+      const { data: saved } = await admin.from('strategy_observations').insert(publicResearch).select('id')
+      public_observation_persisted = saved?.length || 0
+    }
 
     const rpc = await rpcHealth()
     return json({
