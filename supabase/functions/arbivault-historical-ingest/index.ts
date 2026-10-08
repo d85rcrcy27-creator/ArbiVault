@@ -9,9 +9,9 @@ const DATASET_KEY = "crypto_cross_venue_2024_2025";
 const START = Date.parse("2024-01-01T00:00:00Z");
 const END = Date.parse("2025-12-31T23:59:59Z");
 const ASSETS = [
-  { symbol: "BTC/USD", binance: "BTCUSDT", coinbase: "BTC-USD" },
-  { symbol: "ETH/USD", binance: "ETHUSDT", coinbase: "ETH-USD" },
-  { symbol: "SOL/USD", binance: "SOLUSDT", coinbase: "SOL-USD" },
+  { symbol: "BTC/USD", coinbase: "BTC-USD", kraken: "XBTUSD" },
+  { symbol: "ETH/USD", coinbase: "ETH-USD", kraken: "ETHUSD" },
+  { symbol: "SOL/USD", coinbase: "SOL-USD", kraken: "SOLUSD" },
 ];
 
 async function authorized(req: Request) {
@@ -27,26 +27,15 @@ async function fetchJson(url: string) {
   return response.json();
 }
 
-async function binanceDaily(symbol: string) {
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1d&startTime=${START}&endTime=${END}&limit=1000`;
-  const rows = await fetchJson(url);
-  return (rows || []).map((row: any[]) => ({
-    ts: Number(row[0]),
-    close: Number(row[4]),
-    volume: Number(row[7]),
-  })).filter((r: any) => Number.isFinite(r.close));
-}
-
 async function coinbaseDaily(product: string) {
   const out: any[] = [];
   const DAY = 86400000;
   let cursor = START;
   while (cursor <= END) {
-    const windowEnd = Math.min(END, cursor + 249 * DAY + (DAY - 1));
-    const startIso = new Date(cursor).toISOString();
-    const endIso = new Date(windowEnd).toISOString();
-    const url = `https://api.exchange.coinbase.com/products/${product}/candles?granularity=86400&start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}`;
-    const rows = await fetchJson(url);
+    const windowEnd = Math.min(END, cursor + 299 * DAY + (DAY - 1));
+    const rows = await fetchJson(
+      `https://api.exchange.coinbase.com/products/${product}/candles?granularity=86400&start=${encodeURIComponent(new Date(cursor).toISOString())}&end=${encodeURIComponent(new Date(windowEnd).toISOString())}`,
+    );
     for (const row of rows || []) {
       const ts = Number(row[0]) * 1000;
       const close = Number(row[4]);
@@ -58,17 +47,36 @@ async function coinbaseDaily(product: string) {
   return out;
 }
 
+async function krakenDaily(pair: string) {
+  const out: any[] = [];
+  const oneYear = 366 * 86400;
+  // Kraken's OHLC endpoint caps rows; two year-sized windows cover 2024-2025.
+  for (const since of [START / 1000, Date.parse("2025-01-01T00:00:00Z") / 1000]) {
+    const body = await fetchJson(
+      `https://api.kraken.com/0/public/OHLC?pair=${encodeURIComponent(pair)}&interval=1440&since=${Math.floor(since)}`,
+    );
+    if (Array.isArray(body?.error) && body.error.length) throw new Error(`kraken_${body.error.join("_")}`);
+    const key = Object.keys(body?.result || {}).find((k) => k !== "last");
+    for (const row of (key ? body.result[key] : []) || []) {
+      const ts = Number(row[0]) * 1000;
+      const close = Number(row[4]);
+      const volume = Number(row[6]);
+      if (ts >= START && ts <= END && Number.isFinite(close)) out.push({ ts, close, volume });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return out;
+}
+
 function dayKey(ts: number) {
   return new Date(ts).toISOString().slice(0, 10);
 }
 
 async function upsertBatched(rows: any[]) {
   for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await admin
-      .from("strategy_training_observations")
-      .upsert(rows.slice(i, i + 500), {
-        onConflict: "dataset_id,source_key,symbol,metric,observed_at",
-      });
+    const { error } = await admin.from("strategy_training_observations").upsert(rows.slice(i, i + 500), {
+      onConflict: "dataset_id,source_key,symbol,metric,observed_at",
+    });
     if (error) throw error;
   }
 }
@@ -92,28 +100,16 @@ Deno.serve(async (req) => {
     const summaries: any[] = [];
 
     for (const asset of ASSETS) {
-      const [binance, coinbase] = await Promise.all([
-        binanceDaily(asset.binance),
+      const [coinbase, kraken] = await Promise.all([
         coinbaseDaily(asset.coinbase),
+        krakenDaily(asset.kraken),
       ]);
 
-      const b = new Map(binance.map((r: any) => [dayKey(r.ts), r]));
       const c = new Map(coinbase.map((r: any) => [dayKey(r.ts), r]));
+      const k = new Map(kraken.map((r: any) => [dayKey(r.ts), r]));
 
-      const raw: any[] = [];
-      for (const r of binance) {
-        raw.push({
-          dataset_id: dataset.id,
-          source_key: "binance_historical",
-          symbol: asset.symbol,
-          metric: "daily_close_usd",
-          value: r.close,
-          observed_at: new Date(r.ts).toISOString(),
-          metadata: { venue: "binance", interval: "1d", volume_quote: r.volume },
-        });
-      }
-      for (const r of coinbase) {
-        raw.push({
+      const raw: any[] = [
+        ...coinbase.map((r: any) => ({
           dataset_id: dataset.id,
           source_key: "coinbase_historical",
           symbol: asset.symbol,
@@ -121,17 +117,26 @@ Deno.serve(async (req) => {
           value: r.close,
           observed_at: new Date(r.ts).toISOString(),
           metadata: { venue: "coinbase", interval: "1d", volume_base: r.volume },
-        });
-      }
+        })),
+        ...kraken.map((r: any) => ({
+          dataset_id: dataset.id,
+          source_key: "kraken_historical",
+          symbol: asset.symbol,
+          metric: "daily_close_usd",
+          value: r.close,
+          observed_at: new Date(r.ts).toISOString(),
+          metadata: { venue: "kraken", interval: "1d", volume_base: r.volume },
+        })),
+      ];
 
-      const sharedDays = [...b.keys()].filter((d) => c.has(d)).sort();
+      const sharedDays = [...c.keys()].filter((d) => k.has(d)).sort();
       const spreads = sharedDays.map((d) => {
-        const bp = b.get(d)!.close;
         const cp = c.get(d)!.close;
-        const buy = bp <= cp ? "binance" : "coinbase";
-        const sell = bp <= cp ? "coinbase" : "binance";
-        const low = Math.min(bp, cp);
-        const high = Math.max(bp, cp);
+        const kp = k.get(d)!.close;
+        const buy = cp <= kp ? "coinbase" : "kraken";
+        const sell = cp <= kp ? "kraken" : "coinbase";
+        const low = Math.min(cp, kp);
+        const high = Math.max(cp, kp);
         return {
           dataset_id: dataset.id,
           source_key: "historical_cross_venue",
@@ -143,8 +148,8 @@ Deno.serve(async (req) => {
             interval: "1d",
             buy_exchange: buy,
             sell_exchange: sell,
-            binance_close: bp,
             coinbase_close: cp,
+            kraken_close: kp,
             methodology: "aligned_daily_close",
           },
         };
@@ -154,17 +159,17 @@ Deno.serve(async (req) => {
       inserted += raw.length + spreads.length;
       summaries.push({
         symbol: asset.symbol,
-        binance_days: binance.length,
         coinbase_days: coinbase.length,
+        kraken_days: kraken.length,
         shared_days: sharedDays.length,
         spread_samples: spreads.length,
       });
     }
 
-    await admin
-      .from("strategy_training_datasets")
-      .update({ last_ingested_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", dataset.id);
+    await admin.from("strategy_training_datasets").update({
+      last_ingested_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq("id", dataset.id);
 
     return Response.json({
       ok: true,
@@ -176,9 +181,8 @@ Deno.serve(async (req) => {
       live_feed_tables_untouched: true,
     });
   } catch (error) {
-    return Response.json(
-      { error: error instanceof Error ? error.message : "historical_ingest_error" },
-      { status: 500 },
-    );
+    return Response.json({
+      error: error instanceof Error ? error.message : "historical_ingest_error",
+    }, { status: 500 });
   }
 });
