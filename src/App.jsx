@@ -11,6 +11,7 @@ import LockScreen from '@/pages/LockScreen'
 import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
+import Wallets from '@/pages/Wallets'
 
 function App() {
   return (
@@ -31,6 +32,7 @@ function App() {
             {/* Protected routes */}
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<AppErrorBoundary><Home /></AppErrorBoundary>} />
+              <Route path="/wallets" element={<Wallets />} />
             </Route>
 
             {/* Catch-all */}
