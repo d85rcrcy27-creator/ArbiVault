@@ -29,6 +29,73 @@ async function authorized(req: Request) {
   return !!data && token === data
 }
 
+async function invokeAuthorizedSigners() {
+  const { data: requests, error } = await supabase
+    .from('signing_requests')
+    .select('id,owner_id,execution_attempt_id,source_wallet_id,chain,unsigned_transaction,execution_authorization_id,approval_expires_at')
+    .eq('status','authorized')
+    .eq('biometric_required',true)
+    .eq('biometric_verified',true)
+    .gt('approval_expires_at', new Date().toISOString())
+    .limit(10)
+  if (error) throw error
+
+  const signerUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/arbivault-signer`
+  const cronToken = (await supabase.rpc('get_bot_cron_token')).data
+  const results = []
+
+  for (const request of requests || []) {
+    const { data: attempt } = await supabase
+      .from('execution_attempts')
+      .select('id,adapter_id,chain,wallet_id,status')
+      .eq('id', request.execution_attempt_id)
+      .maybeSingle()
+
+    if (!attempt || attempt.status !== 'validated' || !attempt.adapter_id || !attempt.wallet_id) {
+      results.push({ signing_request_id: request.id, invoked: false, reason: 'execution_attempt_not_ready' })
+      continue
+    }
+
+    const response = await fetch(signerUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-arbivault-cron-token': String(cronToken || ''),
+      },
+      body: JSON.stringify({
+        adapter_id: attempt.adapter_id,
+        source_wallet_id: attempt.wallet_id,
+        signing_request_id: request.id,
+        chain: request.chain,
+        unsigned_transaction: request.unsigned_transaction,
+        mode: 'trade',
+      }),
+    })
+    const body = await response.json().catch(() => ({}))
+    const broadcastAt = new Date().toISOString()
+    if (response.ok && body?.tx_hash) {
+      await supabase.from('execution_attempts').update({
+        status: 'broadcast',
+        tx_hash: String(body.tx_hash),
+        signed_at: broadcastAt,
+        broadcast_at: broadcastAt,
+        updated_at: broadcastAt,
+        failure_reason: null,
+      }).eq('id', attempt.id).eq('status', 'validated')
+    }
+    results.push({
+      signing_request_id: request.id,
+      execution_attempt_id: attempt.id,
+      invoked: response.ok,
+      signer_status: response.status,
+      tx_hash: body?.tx_hash || null,
+      broadcast: response.ok === true && !!body?.tx_hash,
+      error: body?.error || null,
+    })
+  }
+  return results
+}
+
 async function fetchWithTimeout(url: string) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 1800)
@@ -160,24 +227,22 @@ async function buildDexPreflight(
 ) {
   if (!route?.transaction_builder) return null
 
-  const [sell, buy] = await Promise.all([
-    callTransactionBuilder({
-      route_id: route.id,
-      source_wallet_id: walletId,
-      side: 'sell',
-      amount_raw: probe.sell,
-      slippage_bps: 50,
-      price_impact_pct: 0,
-    }),
-    callTransactionBuilder({
-      route_id: route.id,
-      source_wallet_id: walletId,
-      side: 'buy',
-      amount_raw: probe.buy,
-      slippage_bps: 50,
-      price_impact_pct: 0,
-    }),
-  ])
+  const sell = await callTransactionBuilder({
+    route_id: route.id,
+    source_wallet_id: walletId,
+    side: 'sell',
+    amount_raw: probe.sell,
+    slippage_bps: 50,
+    price_impact_pct: 0,
+  })
+  const buy = await callTransactionBuilder({
+    route_id: route.id,
+    source_wallet_id: walletId,
+    side: 'buy',
+    amount_raw: probe.buy,
+    slippage_bps: 50,
+    price_impact_pct: 0,
+  })
 
   return {
     wallet: walletAddress,
@@ -356,16 +421,52 @@ export default {
             : !transactionBuilt ? 'transaction_builder_incomplete'
 : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
-          const payloadHash = await sha256(JSON.stringify(executionContext))
-          const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash || dexPreflight?.buy?.transaction_payload_hash || null
-          await supabase.from('execution_attempts').insert({
-            owner_id: bot.owner_id, adapter_id: null, strategy_bot_id: strategyBot?.id || null, observation_id: null,
-            observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain, execution_mode: 'cex',
-            status: executionGate === 'eligible' ? 'validated' : 'blocked', opportunity_payload_hash: payloadHash,
-            transaction_payload_hash: txPayloadHash, capital_used: 0, failure_reason: executionGate === 'eligible' ? null : executionGate,
-            validated_at: now.toISOString(),
+          const opportunityHash = await sha256(JSON.stringify(executionContext))
+          const unsignedTransaction = dexPreflight?.sell?.transaction || dexPreflight?.buy?.transaction || null
+          const txPayloadHash = unsignedTransaction ? await sha256(String(unsignedTransaction)) : null
+          const executionAdapterId = executionAdapter?.id || null
+          const { data: attempt, error: attemptError } = await supabase.from('execution_attempts').insert({
+            owner_id: bot.owner_id, adapter_id: executionAdapterId, strategy_bot_id: strategyBot?.id || null, observation_id: null,
+            observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain,
+            execution_mode: 'on_chain', status: executionGate === 'eligible' ? 'validated' : 'blocked',
+            opportunity_payload_hash: opportunityHash, transaction_payload_hash: txPayloadHash,
+            capital_used: 0, failure_reason: executionGate === 'eligible' ? null : executionGate,
+            validated_at: now.toISOString(), wallet_id: wallet?.id || null,
+          }).select('id').single()
+          if (attemptError) throw attemptError
+
+          let signingRequestId: string | null = null
+          if (executionGate === 'eligible' && unsignedTransaction && txPayloadHash && executionAdapterId && wallet?.id) {
+            const { data: sr, error: srError } = await supabase.from('signing_requests').insert({
+              owner_id: bot.owner_id,
+              execution_attempt_id: attempt.id,
+              signer_type: 'hot_wallet_signer',
+              chain: executionRoute.chain,
+              source_wallet_id: wallet.id,
+              payload_hash: txPayloadHash,
+              unsigned_transaction: String(unsignedTransaction),
+              status: 'pending',
+              biometric_required: true,
+              biometric_verified: false,
+              approval_method: 'passkey_qr',
+              execution_authorization_id: null,
+              expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+              approval_expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            }).select('id').single()
+            if (srError) throw srError
+            signingRequestId = sr.id
+          }
+          opportunities.push({
+            ...executionContext,
+            execution_gate: executionGate,
+            execution_route_id: executionRoute.id,
+            execution_attempt_id: attempt.id,
+            adapter_id: executionAdapterId,
+            signing_request_id: signingRequestId,
+            signing: signingRequestId ? 'pending_human_authorization' : 'not_created',
+            broadcast: 'awaiting_authorized_signing',
+            observation_saved: false
           })
-          opportunities.push({ ...executionContext, execution_gate: executionGate, execution_route_id: executionRoute.id, observation_saved: false })
 
         }
 
@@ -430,12 +531,18 @@ export default {
       }
     }
 
+    const signerInvocations = await invokeAuthorizedSigners().catch((error) => [{
+      invoked: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }])
+
     return Response.json({
       ok: true,
       worker: 'execution',
+      signer_invocations: signerInvocations,
       priority: 'early_bird',
       live_execution_policy: zeroCapitalWindow ? 'zero_capital_for_initial_24h' : 'policy_blocked',
-      actual_broadcasts: 0,
+      actual_broadcasts: signerInvocations.filter((item: any) => item.broadcast === true).length,
       confirmed_profits: 0,
       results,
     })
