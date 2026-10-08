@@ -74,6 +74,15 @@ export async function listTrades(limit = 100) {
 }
 
 
+export async function runBacktest({ skillId = null, threshold = 0, days = 30 } = {}) {
+  const { data, error } = await supabase.functions.invoke('arbivault-backtest', {
+    body: { skill_id: skillId, threshold, days },
+  })
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Unable to run backtest')
+  return data
+}
+
 export async function scoutPublicData({ sources = [], skillId = null, persist = false, params = {} } = {}) {
   const { data, error } = await supabase.functions.invoke('arbivault-public-scout', {
     body: { sources, skill_id: skillId, persist, params },
