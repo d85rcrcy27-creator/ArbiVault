@@ -16,6 +16,22 @@ const TABS = [
   { id: 'skills', label: 'Skills' }, { id: 'bots', label: 'Bots' }, { id: 'wallets', label: 'Wallets' },
 ]
 
+const PUBLIC_VENUES = [
+  ['Binance', 'Public order books'],
+  ['Bybit', 'Public order books'],
+  ['OKX', 'Public order books'],
+  ['Kraken', 'Public order books'],
+  ['KuCoin', 'Public order books'],
+  ['Gate.io', 'Public order books'],
+  ['Coinbase', 'Public order books'],
+  ['Bitget', 'Public order books'],
+  ['Jupiter', 'Public Solana routing/quotes'],
+  ['PancakeSwap', 'Public BNB RPC/quoter'],
+  ['Uniswap', 'Public Ethereum RPC/quoter'],
+  ['DexScreener', 'Public DEX market discovery'],
+  ['CoinGecko', 'Public market pricing/volume'],
+]
+
 export default function Home() {
   const navigate = useNavigate()
   const isMobile = useIsMobile()
@@ -87,6 +103,20 @@ export default function Home() {
     </div>
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
     <UtilityBar globalLatency={globalLatency} livePnl={livePnl} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
+    <div className="px-4 pt-4"><div className="max-w-xl rounded border border-[#232738] bg-[#0C0E16] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Public Venue Feeds</div>
+        <div className="font-mono text-[0.55rem] uppercase text-[#00FF87]">READ ONLY · SKILL SOURCE</div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {PUBLIC_VENUES.map(([name, kind]) => (
+          <div key={name} className="rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2">
+            <div className="font-mono text-[0.62rem] font-semibold text-[#e0e4f0]">{name}</div>
+            <div className="mt-1 font-mono text-[0.48rem] uppercase tracking-wider text-[#5a6080]">{kind}</div>
+          </div>
+        ))}
+      </div>
+    </div></div>
     <div className="px-4 pt-4"><WalletBootstrap /></div>
     <div className="px-4 pt-4"><RuntimeControls controls={marketControls} latency={globalLatency} status={status} onChange={setMarketControls} onRefresh={refreshMarket} /></div>
     <div className="px-4 pt-4">{livePanel}</div>
