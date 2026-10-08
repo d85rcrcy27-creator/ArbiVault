@@ -208,9 +208,8 @@ Deno.serve(async (req) => {
         qualifying: route.spreadPct >= qualifyingThreshold,
       }))
 
-    // Persist observed market routes and explicitly link them to the strategy
-    // bot plus a separate executable strategy route. Observation never grants
-    // permission to trade; downstream builder/signer gates remain authoritative.
+    // Persist research observations only. A qualifying observation is never
+    // linked to or used as an execution trigger.
     const [{ data: routeCatalog }, { data: strategyBots }, { data: executionBots }] = await Promise.all([
       admin.from('arbivault_strategy_routes')
         .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status')
@@ -238,25 +237,14 @@ Deno.serve(async (req) => {
         strategyBotIds.has(candidate.strategy_bot_id)
       ) || null
 
-      const executionRoute = (routeCatalog || [])
-        .filter((candidate: any) =>
-          candidate.chain === route.chain &&
-          candidate.pair === route.pair &&
-          candidate.enabled === true &&
-          candidate.strategy_bot_id &&
-          strategyBotIds.has(candidate.strategy_bot_id) &&
-          candidate.builder_enabled === true &&
-          !!candidate.transaction_builder &&
-          ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
-        )
-        .sort((a: any, b: any) => Number(b.builder_enabled) - Number(a.builder_enabled))[0] || null
+
 
       return {
         ...route,
         observed_route_id: observedRoute?.id || null,
-        execution_route_id: executionRoute?.id || null,
-        strategy_bot_id: executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id || null,
-        execution_bot_config_id: executionBot?.id || null,
+        execution_route_id: null,
+        strategy_bot_id: observedRoute?.strategy_bot_id || null,
+        execution_bot_config_id: null,
       }
     })
 
@@ -284,9 +272,9 @@ Deno.serve(async (req) => {
           source: 'public_exchange_order_books',
         },
         observed_route_id: route.observed_route_id,
-        execution_route_id: route.execution_route_id,
+        execution_route_id: null,
         strategy_bot_id: route.strategy_bot_id,
-        execution_bot_config_id: route.execution_bot_config_id,
+        execution_bot_config_id: null,
         qualifying: true,
       }))
 
@@ -344,7 +332,7 @@ Deno.serve(async (req) => {
       routes,
       observer_execution_links: {
         observation_persisted,
-        execution_bot_config_id: executionBot?.id || null,
+        execution_bot_config_id: null,
         linked_route_count: linkedRoutes.filter((route: any) => route.observed_route_id || route.execution_route_id).length,
       },
       market_snapshot: snapshots,
