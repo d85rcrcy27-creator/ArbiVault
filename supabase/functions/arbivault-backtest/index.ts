@@ -96,11 +96,63 @@ Deno.serve(async (req) => {
       }))
       .filter((row: any) => Number.isFinite(row.spread));
 
-    const FEE_PCT = 0.20;
-    const NOTIONAL = 1000;
+    const conditions = Array.isArray(skill.conditions) ? skill.conditions : [];
+    const conditionText = JSON.stringify(skill.conditions || {}).toLowerCase();
+
+    const spreadCondition = conditions.find((item: any) =>
+      String(item?.label || "").toLowerCase().includes("spread")
+    );
+    const spreadThreshold = spreadCondition
+      ? Number(spreadCondition.value)
+      : null;
+
+    const riskThreshold = Number(skill.risk_limits?.min_profit_threshold);
+    const threshold = Number.isFinite(spreadThreshold)
+      ? spreadThreshold
+      : Number.isFinite(riskThreshold)
+        ? riskThreshold
+        : null;
+
+    const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
+    const FEE_PCT = 0.10;
+    const NOTIONAL = 10000;
+
+    // A historical spread observation is not automatically a trade.
+    // Only observations meeting an explicit spread/profit threshold qualify.
+    if (!requiresSpread || threshold === null) {
+      return json({
+        ok: true,
+        source: "historical_strategy_observations",
+        data_scope: dataScope,
+        fallback_used: fallbackUsed,
+        source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
+        skill_id: skillId || null,
+        days,
+        threshold_pct: null,
+        supported: false,
+        reason: "strategy_has_no_spread_profit_backtest_criterion",
+        samples: samples.length,
+        trades: 0,
+        wins: 0,
+        losses: 0,
+        winRate: 0,
+        pnl: 0,
+        gross_pnl: 0,
+        estimated_net_pnl: 0,
+        fee_pct: FEE_PCT,
+        notional: NOTIONAL,
+        first_observation: samples[0]?.observed_at || null,
+        last_observation: samples[samples.length - 1]?.observed_at || null,
+      });
+    }
+
     const qualifying = samples.filter((row: any) => row.spread >= threshold);
-    const wins = qualifying.filter((row: any) => row.spread > FEE_PCT);
-    const pnl = qualifying.reduce(
+    const profitable = qualifying.filter((row: any) => row.spread > FEE_PCT);
+    const grossPnl = qualifying.reduce(
+      (sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100,
+      0,
+    );
+    const netPnl = qualifying.reduce(
       (sum: number, row: any) => sum + (NOTIONAL * (row.spread - FEE_PCT)) / 100,
       0,
     );
@@ -117,9 +169,11 @@ Deno.serve(async (req) => {
       samples: samples.length,
       trades: qualifying.length,
       wins: wins.length,
-      losses: Math.max(0, qualifying.length - wins.length),
-      winRate: qualifying.length ? Math.round((wins.length / qualifying.length) * 100) : 0,
-      pnl: Number(pnl.toFixed(2)),
+      losses: Math.max(0, qualifying.length - profitable.length),
+      winRate: qualifying.length ? Math.round((profitable.length / qualifying.length) * 100) : 0,
+      pnl: Number(netPnl.toFixed(2)),
+      gross_pnl: Number(grossPnl.toFixed(2)),
+      estimated_net_pnl: Number(netPnl.toFixed(2)),
       fee_pct: FEE_PCT,
       notional: NOTIONAL,
       first_observation: samples[0]?.observed_at || null,
