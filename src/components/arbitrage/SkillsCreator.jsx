@@ -67,6 +67,15 @@ const STRATEGY_PRESETS = [
 const NOTIONAL = 10000
 const FEE_PCT = 0.1
 
+// Supabase JSONB should contain arrays, but older/migrated rows may contain
+// a single object. Normalize before any spread/iteration so one bad row
+// cannot blank the entire dashboard.
+function asBlockArray(value) {
+  if (Array.isArray(value)) return value
+  if (value && typeof value === 'object') return [value]
+  return []
+}
+
 function blockMatches(block, route) {
   const value = Number.parseFloat(block.value)
   if (Number.isNaN(value)) return false
@@ -147,10 +156,10 @@ export default function SkillsCreator({ routes = [], onExecute }) {
   }
 
   const runBacktest = async (skill) => {
-    const blocks = [...(skill.conditions || [])]
+    const blocks = asBlockArray(skill.conditions)
     const thresholdBlock = blocks.find((b) => b.label?.includes('Spread'))
     const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
-    const samples = routes.flatMap((r) => r.history || [])
+    const samples = routes.flatMap((r) => asBlockArray(r.history))
     const trades = samples.filter((s) => s >= threshold)
     const wins = trades.filter((s) => s - FEE_PCT > 0)
     const pnl = trades.reduce((sum, s) => sum + (NOTIONAL * (s - FEE_PCT)) / 100, 0)
@@ -166,9 +175,9 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     const now = Date.now()
     strategies.forEach((skill) => {
       if (!skill.active) return
-      const actions = skill.actions || []
+      const actions = asBlockArray(skill.actions)
       if (!actions.some((a) => a.label?.includes('Execute'))) return
-      const conditions = skill.conditions || []
+      const conditions = asBlockArray(skill.conditions)
       if (!conditions.length) return
       routes.forEach((route) => {
         if (route.spreadPct <= 0 || !conditions.every((c) => blockMatches(c, route))) return
@@ -196,7 +205,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
         <div className="p-4"><span className="mb-3 block font-mono text-[0.6875rem] font-semibold uppercase tracking-wider text-[#8a90b0]">Saved Skills</span><div className="space-y-2">
           {strategies.map((s) => <div key={s.id} className={`rounded border p-3 ${s.active ? 'border-[#00FF87]/30 bg-[#00FF87]/5' : 'border-[#232738] bg-[#12141D]'}`}>
             <div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2"><button onClick={() => toggleStrategy(s)} className={`flex h-4 w-7 items-center rounded-full p-0.5 ${s.active ? 'bg-[#00FF87]/30' : 'bg-[#232738]'}`}><span className={`h-3 w-3 rounded-full ${s.active ? 'translate-x-3 bg-[#00FF87]' : 'bg-[#5a6080]'}`} /></button><span className="font-mono text-xs font-semibold text-[#e0e4f0]">{s.name}</span></div><button onClick={() => removeStrategy(s.id)} className="text-[#3a4060] hover:text-[#FF4D4D]"><Trash2 className="h-3 w-3" /></button></div>
-            <div className="mb-2 flex flex-wrap gap-1">{[...(s.conditions || []), ...(s.actions || [])].map((b, i) => <span key={i} className={`rounded border px-1.5 py-0.5 font-mono text-[0.5625rem] ${b.type === 'condition' ? 'border-[#FFB800]/30 text-[#FFB800]' : 'border-[#00F0FF]/30 text-[#00F0FF]'}`}>{b.label}{b.value ? ` ${b.value}${b.unit || ''}` : ''}</span>)}</div>
+            <div className="mb-2 flex flex-wrap gap-1">{[...asBlockArray(s.conditions), ...asBlockArray(s.actions)].map((b, i) => <span key={i} className={`rounded border px-1.5 py-0.5 font-mono text-[0.5625rem] ${b.type === 'condition' ? 'border-[#FFB800]/30 text-[#FFB800]' : 'border-[#00F0FF]/30 text-[#00F0FF]'}`}>{b.label}{b.value ? ` ${b.value}${b.unit || ''}` : ''}</span>)}</div>
             <div className="flex items-center justify-between"><div className="font-mono text-[0.625rem] text-[#5a6080]">{s.backtest ? <>WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Trades: {s.backtest.trades} · PnL: <span className={s.backtest.pnl >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.pnl).toFixed(1)}</span></> : 'No backtest yet'}</div><button onClick={() => runBacktest(s)} disabled={!routes.length} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40"><FlaskConical className="h-3 w-3" />Backtest</button></div>
           </div>)}
           {!strategies.length && <p className="font-mono text-[0.65rem] text-[#3a4060]">No saved skills yet.</p>}
