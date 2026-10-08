@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const skillId = String(body.skill_id || "");
     const requestedThreshold = Number(body.threshold);
-    const days = Math.min(90, Math.max(1, Number(body.days ?? 30)));
+    const days = Math.min(730, Math.max(1, Number(body.days ?? 730)));
 
     if (Number.isFinite(requestedThreshold) && requestedThreshold < 0) {
       return json({ error: "invalid_threshold" }, 400);
@@ -61,13 +61,18 @@ Deno.serve(async (req) => {
       }, 409);
     }
 
-    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    // Historical windows are anchored to the dataset's end date, never to "now".
+    // This prevents a 2024-2025 training backtest from silently returning zero
+    // because the current calendar date is in 2026.
+    const datasetEnd = new Date(`${dataset.end_date}T23:59:59.999Z`);
+    const datasetStart = new Date(datasetEnd.getTime() - days * 86400000);
     const { data: observations, error: observationsError } = await admin
       .from("strategy_training_observations")
       .select("id,source_key,symbol,metric,value,observed_at,metadata")
       .eq("dataset_id", dataset.id)
       .eq("metric", "spread_pct")
-      .gte("observed_at", cutoff)
+      .gte("observed_at", datasetStart.toISOString())
+      .lte("observed_at", datasetEnd.toISOString())
       .order("observed_at", { ascending: true })
       .limit(10000);
 
@@ -137,6 +142,10 @@ Deno.serve(async (req) => {
       ok: true,
       source: "historical_strategy_training",
       data_scope: dataset.dataset_key,
+      training_window_start: datasetStart.toISOString(),
+      training_window_end: datasetEnd.toISOString(),
+      training_window_start: datasetStart.toISOString(),
+      training_window_end: datasetEnd.toISOString(),
       fallback_used: false,
       source_keys: [...new Set(samples.map((row: any) => row.source_key).filter(Boolean))],
       skill_id: skillId || null,
