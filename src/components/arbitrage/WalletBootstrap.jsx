@@ -73,8 +73,7 @@ export default function WalletBootstrap() {
         const missing=required.some((chain)=>!(existing||[]).some((w)=>w.chain===chain))
         if(missing){
           const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
-            body:{chains:required},
-            headers:{Authorization:`Bearer ${session.access_token}`}
+            body:{chains:required}
           })
           if(error)throw error
           if(active&&data?.wallets)setWallets(data.wallets)
@@ -92,8 +91,7 @@ export default function WalletBootstrap() {
     try{
       const session = await waitForSession()
       const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
-        body:{chains:['bnb','solana','ethereum','bitcoin']},
-        headers:{Authorization:`Bearer ${session.access_token}`}
+        body:{chains:['bnb','solana','ethereum','bitcoin']}
       })
       if(error)throw error
       if(!data?.ok)throw new Error(data?.error||'Wallet bootstrap failed')
