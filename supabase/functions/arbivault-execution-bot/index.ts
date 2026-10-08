@@ -401,6 +401,8 @@ export default {
               execution_bot_config_id: bot.id,
               qualifying: quote.qualifying === true,
             })
+            .select('id')
+            .single()
 
           opportunities.push({
             ...research,
