@@ -139,7 +139,7 @@ const PNL_STRATEGY_PRESETS = [
       { type:'condition', label:'IF Spread >', value:'0.50', unit:'%' },
       { type:'condition', label:'IF Profit >', value:'5.00', unit:'USD' },
       { type:'condition', label:'IF Latency <', value:'100', unit:'ms' },
-      { type:'action', label:'THEN Execute Order' },
+      { type:'action', label:'THEN Send Alert' },
     ],
   },
   {
@@ -154,7 +154,7 @@ const PNL_STRATEGY_PRESETS = [
       { type:'condition', label:'IF Spread >', value:'0.35', unit:'%' },
       { type:'condition', label:'IF Profit >', value:'3.00', unit:'USD' },
       { type:'condition', label:'IF Latency <', value:'80', unit:'ms' },
-      { type:'action', label:'THEN Execute Order' },
+      { type:'action', label:'THEN Send Alert' },
     ],
   },
   {
@@ -169,7 +169,7 @@ const PNL_STRATEGY_PRESETS = [
       { type:'condition', label:'IF Spread >', value:'0.25', unit:'%' },
       { type:'condition', label:'IF Profit >', value:'2.00', unit:'USD' },
       { type:'condition', label:'IF Latency <', value:'60', unit:'ms' },
-      { type:'action', label:'THEN Execute Order' },
+      { type:'action', label:'THEN Send Alert' },
     ],
   },
   {
@@ -355,7 +355,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
     try {
       setError('')
-      const backtest = await runBacktest({ threshold, days: 30, skillId: skill.id })
+      const backtest = await runBacktest({ threshold, days: 730, skillId: skill.id })
       // Backtest is research-only and does not require authentication or persist
       // results to the private strategy record. Keep the result local to the UI.
       setStrategies((prev) => prev.map((s) => s.id === skill.id
