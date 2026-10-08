@@ -37,15 +37,16 @@ async function fetchJson(input: string) {
 }
 
 async function quote(exchange: string, pair: typeof PAIRS[number]) {
+  const started = performance.now()
   try {
     if (exchange === 'binance') {
       const j = await fetchJson(`https://api.binance.com/api/v3/ticker/bookTicker?symbol=${pair.symbol}`)
-      return { exchange, bid: Number(j.bidPrice), ask: Number(j.askPrice) }
+      return { exchange, bid: Number(j.bidPrice), ask: Number(j.askPrice), latencyMs: Math.round(performance.now() - started) }
     }
     if (exchange === 'bybit') {
       const j = await fetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${pair.symbol}`)
       const t = j?.result?.list?.[0]
-      return t ? { exchange, bid: Number(t.bid1Price), ask: Number(t.ask1Price) } : null
+      return t ? { exchange, bid: Number(t.bid1Price), ask: Number(t.ask1Price), latencyMs: Math.round(performance.now() - started) } : null
     }
     const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
     const t = j?.data?.[0]
@@ -57,7 +58,7 @@ async function quote(exchange: string, pair: typeof PAIRS[number]) {
 
 async function buildRoute(pair: typeof PAIRS[number]) {
   const quotes = (await Promise.all(EXCHANGES.map((exchange) => quote(exchange, pair))))
-    .filter((item): item is { exchange: string; bid: number; ask: number } =>
+    .filter((item): item is { exchange: string; bid: number; ask: number; latencyMs: number } =>
       !!item && Number.isFinite(item.bid) && Number.isFinite(item.ask) && item.ask > 0
     )
   if (quotes.length < 2) return null
@@ -79,6 +80,7 @@ async function buildRoute(pair: typeof PAIRS[number]) {
     sellPrice: bestSell.bid,
     spreadPct,
     qualifying: spreadPct >= QUALIFYING_SPREAD_PCT,
+    latency: Math.max(...quotes.map((quote) => quote.latencyMs)),
     history: [{ t: Date.now(), v: spreadPct }],
     quotes,
   }
@@ -94,13 +96,29 @@ Deno.serve(async (req) => {
     const { data: { user }, error } = await client.auth.getUser()
     if (error || !user) return json({ error: 'authentication_required' }, 401)
 
-    const routes = (await Promise.all(PAIRS.map(buildRoute))).filter(Boolean)
+    const body = await req.json().catch(() => ({}))
+    const requestedThreshold = Number(body?.qualifying_spread_pct)
+    const qualifyingThreshold = Number.isFinite(requestedThreshold)
+      ? Math.max(0.05, Math.min(10, requestedThreshold))
+      : QUALIFYING_SPREAD_PCT
+
+    const routeResults = await Promise.all(PAIRS.map(buildRoute))
+    const routes = routeResults.filter(Boolean).map((route) => ({
+      ...route,
+      qualifying: route.spreadPct >= qualifyingThreshold,
+    }))
+    const successfulQuotes = routes.flatMap((route) => route.quotes || [])
+    const averageLatency = successfulQuotes.length
+      ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
+      : 0
+    const feeds = [...new Set(successfulQuotes.map((quote) => quote.exchange))]
     return json({
       ok: true,
       timestamp_ms: Date.now(),
-      qualifying_spread_pct: QUALIFYING_SPREAD_PCT,
+      qualifying_spread_pct: qualifyingThreshold,
+      latency_ms: averageLatency,
       routes,
-      feeds: EXCHANGES,
+      feeds,
       source: 'public_exchange_order_books',
     })
   } catch (error) {
