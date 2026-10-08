@@ -26,8 +26,6 @@ const PAIRS = [
 ]
 
 const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio']
-const QUALIFYING_SPREAD_PCT = 0.5
-
 async function fetchJson(input: string) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 1800)
@@ -173,7 +171,6 @@ async function buildRoute(pair: typeof PAIRS[number]) {
       buyPrice: bestBuy.ask,
       sellPrice: bestSell.bid,
       spreadPct,
-      qualifying: spreadPct >= QUALIFYING_SPREAD_PCT,
       latency: snapshot.latency,
       history: [{ t: Date.now(), v: spreadPct }],
       quotes,
@@ -193,23 +190,11 @@ Deno.serve(async (req) => {
     if (error || !user) return json({ error: 'authentication_required' }, 401)
 
     const body = await req.json().catch(() => ({}))
-    const requestedThreshold = Number(body?.qualifying_spread_pct)
-    const qualifyingThreshold = Number.isFinite(requestedThreshold)
-      ? Math.max(0.05, Math.min(10, requestedThreshold))
-      : QUALIFYING_SPREAD_PCT
-
     const routeResults = await Promise.all(PAIRS.map(buildRoute))
     const snapshots = routeResults.map((item) => item.snapshot)
-    const marketRoutes = routeResults
-      .map((item) => item.route)
-      .filter(Boolean)
-      .map((route) => ({
-        ...route,
-        qualifying: route.spreadPct >= qualifyingThreshold,
-      }))
+    const marketRoutes = routeResults.map((item) => item.route).filter(Boolean)
 
-    // Persist research observations only. A qualifying observation is never
-    // linked to or used as an execution trigger.
+    // Persist research observations only. Research observations have no execution eligibility state.
     const [{ data: routeCatalog }, { data: strategyBots }, { data: executionBots }] = await Promise.all([
       admin.from('arbivault_strategy_routes')
         .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status')
@@ -248,9 +233,7 @@ Deno.serve(async (req) => {
       }
     })
 
-    const observations = linkedRoutes
-      .filter((route: any) => route.qualifying === true)
-      .map((route: any) => ({
+    const observations = linkedRoutes.map((route: any) => ({
         owner_id: user.id,
         bot_skill_id: null,
         source_key: 'public_exchange_order_books',
@@ -275,7 +258,6 @@ Deno.serve(async (req) => {
         execution_route_id: null,
         strategy_bot_id: route.strategy_bot_id,
         execution_bot_config_id: null,
-        qualifying: true,
       }))
 
     let observation_persisted = 0
@@ -327,7 +309,6 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       timestamp_ms: Date.now(),
-      qualifying_spread_pct: qualifyingThreshold,
       latency_ms: averageLatency,
       routes,
       observer_execution_links: {
