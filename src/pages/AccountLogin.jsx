@@ -108,11 +108,11 @@ export default function AccountLogin() {
             <span>{error}</span>
           </div>
         )}
-        <button type="button" onClick={handleRegisterPasskey} disabled={busy} className="h-12 w-full rounded-md bg-primary font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2">
+        <button type="button" onClick={handleRegisterPasskey} disabled={busy} className="min-h-12 w-full touch-manipulation rounded-md bg-primary px-4 py-3 text-base font-medium text-primary-foreground disabled:opacity-50 flex items-center justify-center gap-2">
           {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
           {busy ? 'Registering passkey…' : 'Register passkey'}
         </button>
-        <p className="mt-4 text-xs leading-5 text-muted-foreground">On Chromebook, choose “Use a phone or tablet” / “Save on another device” when Chrome offers it, then scan the QR code with your iPhone and approve with Face ID. This creates the ArbiVault passkey in iCloud Keychain/Passwords.</p>
+        <p className="mt-4 text-xs leading-5 text-muted-foreground">On Chromebook, choose “Use a phone or tablet” / “Save on another device.” Scan the QR shown by Chrome with your iPhone Camera. iOS controls the passkey handoff and may use iCloud Keychain/Passwords; approve with Face ID when prompted.</p>
         <button type="button" onClick={() => { setNeedsPasskey(false); unlock(); navigate(returnTo, { replace: true }) }} className="mt-4 w-full text-sm text-muted-foreground hover:underline">Continue with password for now</button>
       </AuthLayout>
     )
@@ -151,12 +151,12 @@ export default function AccountLogin() {
         {busy ? 'Authenticating…' : 'Continue with passkey'}
       </button>
 
-      <p className="mt-3 text-center text-xs text-muted-foreground">
-        On Chromebook, Chrome may offer “Use a phone or tablet” to authenticate with a passkey stored on your iPhone.
+      <p className="mx-auto mt-3 max-w-md text-center text-xs leading-5 text-muted-foreground">
+        On Chromebook, choose “Use Passkey from Another Device” or “Use a phone or tablet” when Chrome offers it. Scan Chrome’s QR with the iPhone Camera; iOS then uses the passkey provider (such as iCloud Keychain/Passwords) and asks for Face ID. ArbiVault cannot force-launch Apple’s Passwords app; that decision is controlled by iOS.
       </p>
 
       {needsPasskey && user && (
-        <div className="mt-4 rounded-md border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-3">
+        <div className="mt-4 rounded-lg border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-4">
           <div className="font-medium text-sm">Passkey not enrolled</div>
           <div className="mt-1 text-xs text-muted-foreground">Your account is authenticated. Register a passkey on this device or choose your iPhone when Chrome offers another-device enrollment.</div>
           <button type="button" onClick={handleRegisterPasskey} disabled={busy} className="mt-3 h-10 w-full rounded-md border border-[#00F0FF]/40 font-medium text-sm">Register passkey</button>
@@ -174,17 +174,17 @@ export default function AccountLogin() {
           <label htmlFor="arbivault-email" className="text-sm font-medium">Email</label>
           <div className="relative">
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <input id="arbivault-email" type="email" autoComplete="username webauthn" value={email} onChange={(e) => setEmail(e.target.value)} className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3" required />
+            <input id="arbivault-email" type="email" autoComplete="username webauthn" value={email} onChange={(e) => setEmail(e.target.value)} className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3 text-base" required />
           </div>
         </div>
         <div className="space-y-2">
           <label htmlFor="arbivault-password" className="text-sm font-medium">Password</label>
           <div className="relative">
             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-            <input id="arbivault-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3" required />
+            <input id="arbivault-password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3 text-base" required />
           </div>
         </div>
-        <button type="submit" disabled={busy} className="h-12 w-full rounded-md border border-border bg-background font-medium text-foreground disabled:opacity-50">
+        <button type="submit" disabled={busy} className="min-h-12 w-full touch-manipulation rounded-md border border-border bg-background px-4 py-3 text-base font-medium text-foreground disabled:opacity-50">
           {busy ? 'Signing in…' : 'Sign in with password'}
         </button>
       </form>
