@@ -61,13 +61,16 @@ export function useLiveMarketData() {
   const [globalLatency, setGlobalLatency] = useState(0)
   const [marketControls, setMarketControlsState] = useState(loadMarketControls)
 
-  useEffect(() => {
-    let active = true
-    listTrades(100).then((rows) => {
-      if (active) setTrades(rows.map(normalizeTrade))
-    }).catch(() => {})
-    return () => { active = false }
+  const refreshTrades = useCallback(async () => {
+    try {
+      const rows = await listTrades(100)
+      setTrades(rows.map(normalizeTrade))
+    } catch {}
   }, [])
+
+  useEffect(() => {
+    refreshTrades().catch(() => {})
+  }, [refreshTrades])
 
   const setMarketControls = useCallback((updates) => {
     setMarketControlsState((prev) => {
@@ -80,7 +83,7 @@ export function useLiveMarketData() {
   const loadMarket = useCallback(async () => {
     try {
       const { data, error } = await supabase.functions.invoke('arbivault-market-scout', {
-        body: { qualifying_spread_pct: marketControls.minSpreadPct },
+        body: {},
       })
       if (error) throw error
       const nextRoutes = Array.isArray(data?.routes)
@@ -115,9 +118,11 @@ export function useLiveMarketData() {
 
   useEffect(() => {
     loadMarket()
-    const id = setInterval(loadMarket, marketControls.pollMs)
-    return () => clearInterval(id)
-  }, [loadMarket])
+    refreshTrades()
+    const marketId = setInterval(loadMarket, marketControls.pollMs)
+    const tradeId = setInterval(refreshTrades, 3000)
+    return () => { clearInterval(marketId); clearInterval(tradeId) }
+  }, [loadMarket, refreshTrades, marketControls.pollMs])
 
 
   // No browser-generated prices, spreads, volumes, latency, P/L, or fake fills.
