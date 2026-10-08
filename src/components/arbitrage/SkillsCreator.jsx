@@ -131,6 +131,28 @@ export default function SkillsCreator({ routes = [], onExecute }) {
       if (!active) return
       setStrategies(rows)
       setLoading(false)
+      const emptyBacktests = rows.filter((skill) => !skill.backtest?.samples)
+      if (emptyBacktests.length) {
+        Promise.all(emptyBacktests.map(async (skill) => {
+          try {
+            const thresholdBlock = asBlockArray(skill.conditions).find((b) => b.label?.includes('Spread'))
+            const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
+            const result = await runBacktest({ skillId: skill.id, threshold, days: 30 })
+            return { skillId: skill.id, backtest: { ...result, ranAt: new Date().toISOString() } }
+          } catch {
+            return null
+          }
+        })).then(async (results) => {
+          const valid = results.filter(Boolean)
+          await Promise.all(valid.map((item) => updateBotSkill(item.skillId, { backtest: item.backtest })))
+          if (active && valid.length) {
+            setStrategies((prev) => prev.map((skill) => {
+              const update = valid.find((item) => item.skillId === skill.id)
+              return update ? { ...skill, backtest: update.backtest } : skill
+            }))
+          }
+        }).catch(() => {})
+      }
     }).catch((e) => {
       if (!active) return
       setError(e.message || 'Unable to load skills')
