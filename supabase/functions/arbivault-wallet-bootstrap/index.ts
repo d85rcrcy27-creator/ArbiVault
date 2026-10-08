@@ -18,6 +18,10 @@ const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{...corsHeaders,
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'){
  const {data:existing}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
  if(existing?.secret_ref)return existing
+ if(existing?.id){
+  const {error:quarantineError}=await admin.from('wallets').update({status:'quarantined'}).eq('id',existing.id).eq('owner_id',userId)
+  if(quarantineError)throw new Error('wallet_orphan_quarantine_failed')
+ }
  let address='',secret='',derivation_path:string|null=null
  if(chain==='bnb'||chain==='ethereum'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
  else if(chain==='solana'){const kp=Keypair.generate();address=kp.publicKey.toBase58();secret=Array.from(kp.secretKey).map(b=>b.toString(16).padStart(2,'0')).join('');derivation_path='internal-random-ed25519'}
