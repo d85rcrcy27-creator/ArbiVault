@@ -361,7 +361,6 @@ export default {
     if (adapterError) return Response.json({ error: adapterError.message }, { status: 500 })
 
     // These adapters are signing/broadcast boundaries, not exchange trading venues.
-    // Do not treat them as a CEX/Dex market execution adapter.
     const signerAdapters = (adapters || []).filter((adapter: any) =>
       adapter.health_status === 'healthy' &&
       adapter.can_broadcast === true &&
@@ -369,6 +368,15 @@ export default {
       adapter.signer_provider === 'internal_vault' &&
       !!adapter.allowed_wallet_id
     )
+    const cexExecutionAdapters = (adapters || []).filter((adapter: any) =>
+      adapter.health_status === 'healthy' &&
+      adapter.configured === true &&
+      adapter.can_broadcast === true &&
+      adapter.read_only === false &&
+      ['cex','exchange_execution'].includes(String(adapter.adapter_type || '').toLowerCase())
+    )
+    const cexExecutionConfigured = cexExecutionAdapters.length > 0
+
 
     const results: any[] = []
 
@@ -427,8 +435,11 @@ export default {
           }
           let dexPreflight: any = null
           let builderError: string | null = null
-          const cexExecutionConfigured = false
-          const multiLegBuilderConfigured = false
+          const multiLegBuilderConfigured =
+            executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
+            executionRoute.builder_enabled === true &&
+            !!Deno.env.get('ARBIVAULT_BSC_FLASH_EXECUTOR') &&
+            !!Deno.env.get('ARBIVAULT_BSC_AAVE_POOL')
           if (wallet && executionRoute.route_type === 'dex_cex' && cexExecutionConfigured) {
             try {
               dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
@@ -446,7 +457,12 @@ export default {
               ) || null
             : null
           const executionAdapterConfigured = !!executionAdapter
-          const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash && !!dexPreflight?.buy?.transaction_payload_hash
+          const dexSellBuilt = !!dexPreflight?.sell?.transaction_payload_hash && dexPreflight?.sell?.executable_unsigned === true
+          const dexBuyBuilt = !!dexPreflight?.buy?.transaction_payload_hash && dexPreflight?.buy?.executable_unsigned === true
+          const transactionBuilt = dexSellBuilt && dexBuyBuilt
+          // A DEX/CEX arbitrage is two execution legs. A single DEX swap is never
+          // sufficient to claim an arbitrage execution or realized PnL.
+          const twoLegExecutionReady = transactionBuilt && cexExecutionConfigured
           const executionGate = !executionWindowActive ? 'execution_policy_not_active'
             : !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
@@ -454,11 +470,14 @@ export default {
             : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
             : executionRoute.route_type === 'dex_cex' && !cexExecutionConfigured ? 'cex_execution_adapter_required'
             : builderError ? 'transaction_builder_preflight_failed'
+            : executionRoute.route_type === 'dex_cex' && !twoLegExecutionReady ? 'two_leg_execution_not_ready'
             : !transactionBuilt ? 'transaction_builder_incomplete'
             : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
           const opportunityHash = await sha256(JSON.stringify(executionContext))
-          const unsignedTransaction = dexPreflight?.sell?.transaction || dexPreflight?.buy?.transaction || null
+          const unsignedTransaction = twoLegExecutionReady
+            ? (dexPreflight?.sell?.transaction || null)
+            : null
           const txPayloadHash = unsignedTransaction ? await sha256(String(unsignedTransaction)) : null
           const executionAdapterId = executionAdapter?.id || null
           const { data: attempt, error: attemptError } = await supabase.from('execution_attempts').insert({
