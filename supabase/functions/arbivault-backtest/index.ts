@@ -5,10 +5,23 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const json = (value: unknown, status = 200) =>
-  Response.json(value, { status, headers: { "cache-control": "no-store" } });
+  Response.json(value, {
+    status,
+    headers: {
+      ...corsHeaders,
+      "cache-control": "no-store",
+    },
+  });
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   try {
