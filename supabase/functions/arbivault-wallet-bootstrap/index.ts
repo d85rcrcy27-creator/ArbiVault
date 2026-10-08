@@ -9,11 +9,11 @@ const url=Deno.env.get('SUPABASE_URL')!, serviceKey=Deno.env.get('SUPABASE_SERVI
 const admin=createClient(url,serviceKey)
 const auth=(req:Request)=>createClient(url,Deno.env.get('SUPABASE_ANON_KEY')!,{global:{headers:{Authorization:req.headers.get('Authorization')??''}}})
 const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{'cache-control':'no-store'}})
-async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'){
+async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'){
  const {data:existing}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
  if(existing?.secret_ref)return existing
  let address='',secret='',derivation_path:string|null=null
- if(chain==='bnb'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
+ if(chain==='bnb'||chain==='ethereum'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
  else if(chain==='solana'){const kp=Keypair.generate();address=kp.publicKey.toBase58();secret=Array.from(kp.secretKey).map(b=>b.toString(16).padStart(2,'0')).join('');derivation_path='internal-random-ed25519'}
  else{const key=ECPair.makeRandom(),payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin});if(!payment.address)throw new Error('bitcoin_address_derivation_failed');address=payment.address;secret=key.toWIF();derivation_path='internal-random-secp256k1-p2wpkh'}
  const {data:wallet,error}=await admin.from('wallets').insert({owner_id:userId,chain,address,label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',status:'active',is_hot:true,custody_type:'server_vault',wallet_role:'trading_hot',verification_source:'arbivault-wallet-bootstrap',data_quality_status:'verified',derivation_path}).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').single()
@@ -46,10 +46,43 @@ async function ensureBindings(userId:string,wallets:any[]){
   if(!binding)await admin.from('bot_wallet_bindings').insert({owner_id:userId,bot_config_id:bot.id,wallet_id:w.id,role:'execution'})
   const chain=w.chain
   const {data:adapter}=await admin.from('execution_adapters').select('id').eq('chain',chain).eq('allowed_wallet_id',w.id).eq('signer_provider','internal_vault').maybeSingle()
-  const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:null,updated_at:new Date().toISOString()}
+  const signerSupported=['bnb','solana','bitcoin'].includes(chain)
+  const patch={configured:signerSupported,health_status:signerSupported?'healthy':'unconfigured',read_only:false,signing_boundary:'internal_vault',can_broadcast:signerSupported,can_withdraw:false,automatic_signing:signerSupported,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:signerSupported?null:'signer_chain_support_pending',updated_at:new Date().toISOString()}
   if(adapter)await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
   else await admin.from('execution_adapters').insert({...patch,name:'ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer',adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_contracts:[],allowed_programs:[]})
  }
+
+ const walletByChain=new Map(wallets.map((w:any)=>[w.chain,w]))
+ const {data:strategyBots,error:sbe}=await admin
+  .from('arbivault_strategy_bots')
+  .select('id')
+  .eq('owner_id',userId)
+  .eq('enabled',true)
+  .eq('execution_enabled',true)
+ if(sbe)throw sbe
+
+ for(const strategyBot of strategyBots||[]){
+  const {data:strategyRoutes,error:sre}=await admin
+   .from('arbivault_strategy_routes')
+   .select('chain')
+   .eq('strategy_bot_id',strategyBot.id)
+   .eq('enabled',true)
+  if(sre)throw sre
+  const chains=[...new Set((strategyRoutes||[]).map((r:any)=>r.chain))]
+  for(const chain of chains){
+   const wallet=walletByChain.get(chain)||null
+   const values={owner_id:userId,strategy_bot_id:strategyBot.id,chain,wallet_id:wallet?.id||null,purpose:'strategy_execution',status:wallet?'assigned':'unassigned',destination_policy:'approved_only',updated_at:new Date().toISOString()}
+   const {data:existing,error:ee}=await admin.from('arbivault_strategy_wallets').select('id').eq('strategy_bot_id',strategyBot.id).eq('chain',chain).maybeSingle()
+   if(ee)throw ee
+   if(existing?.id){
+    const {error:e}=await admin.from('arbivault_strategy_wallets').update(values).eq('id',existing.id)
+    if(e)throw e
+   }else{
+    const {error:e}=await admin.from('arbivault_strategy_wallets').insert(values)
+    if(e)throw e
+   }
+  }
+ }
  return bot
 }
-Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok');if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','bitcoin'];const chains=['bnb','solana','bitcoin'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'bitcoin')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
+Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok');if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin'];const chains=['bnb','solana','ethereum','bitcoin'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
