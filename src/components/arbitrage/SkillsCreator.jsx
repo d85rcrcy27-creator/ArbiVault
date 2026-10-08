@@ -126,6 +126,68 @@ const VENUE_STRATEGY_PRESETS = [
   },
 ]
 
+const PNL_STRATEGY_PRESETS = [
+  {
+    id:'pnl_gain_conservative',
+    family:'exchange_arbitrage',
+    name:'PnL Gain — Conservative',
+    description:'Target repeatable net-positive spread opportunities using live venue feeds, with a conservative entry threshold and execution-cost buffer.',
+    dataSources:['public_exchange_order_books','historical_training_2024_2025'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.50', unit:'%' },
+      { type:'condition', label:'IF Profit >', value:'5.00', unit:'USD' },
+      { type:'condition', label:'IF Latency <', value:'100', unit:'ms' },
+      { type:'action', label:'THEN Execute Order' },
+    ],
+  },
+  {
+    id:'pnl_gain_balanced',
+    family:'exchange_arbitrage',
+    name:'PnL Gain — Balanced',
+    description:'Balance opportunity frequency against execution quality using a moderate spread threshold, profit floor, and latency filter.',
+    dataSources:['public_exchange_order_books','historical_training_2024_2025'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.35', unit:'%' },
+      { type:'condition', label:'IF Profit >', value:'3.00', unit:'USD' },
+      { type:'condition', label:'IF Latency <', value:'80', unit:'ms' },
+      { type:'action', label:'THEN Execute Order' },
+    ],
+  },
+  {
+    id:'pnl_gain_aggressive',
+    family:'exchange_arbitrage',
+    name:'PnL Gain — Aggressive',
+    description:'Capture shorter-lived higher-frequency spread opportunities while retaining a hard profit floor and latency constraint.',
+    dataSources:['public_exchange_order_books','historical_training_2024_2025'],
+    observationOnly:true,
+    discoveryEnabled:true,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.25', unit:'%' },
+      { type:'condition', label:'IF Profit >', value:'2.00', unit:'USD' },
+      { type:'condition', label:'IF Latency <', value:'60', unit:'ms' },
+      { type:'action', label:'THEN Execute Order' },
+    ],
+  },
+  {
+    id:'pnl_gain_flash',
+    family:'blockchain_execution',
+    name:'PnL Gain — Flash',
+    description:'Use historical spread behavior to prioritize atomic flash-liquidity candidates, while live execution remains gated by a real atomic executor and on-chain confirmation.',
+    dataSources:['public_exchange_order_books','historical_training_2024_2025'],
+    observationOnly:false,
+    discoveryEnabled:false,
+    blocks:[
+      { type:'condition', label:'IF Spread >', value:'0.25', unit:'%' },
+      { type:'condition', label:'IF Profit >', value:'5.00', unit:'USD' },
+      { type:'action', label:'THEN Execute Order' },
+    ],
+  },
+]
+
 const PUBLIC_STRATEGY_PRESETS = [
   { id:'cross_venue_crypto', family:'exchange_arbitrage', name:'Cross-Venue Crypto', description:'Compare live public exchange books for cross-venue price dislocations.', dataSources:['crypto_exchanges'], observationOnly:true, discoveryEnabled:true, blocks:[] },
   { id:'btc_mempool_pressure', family:'bitcoin_network', name:'BTC Mempool Pressure', description:'Monitor Bitcoin mempool size and fee pressure for congestion regimes.', dataSources:['bitcoin_mempool'], observationOnly:true, discoveryEnabled:true, blocks:[] },
@@ -330,6 +392,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
         <div className="border-b border-[#232738] p-4">
           <input value={draftName} onChange={(e) => setDraftName(e.target.value)} placeholder="Strategy name…" className="mb-3 w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-1.5 font-mono text-xs text-[#e0e4f0]" />
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Current Strategy Presets</span><div className="flex flex-wrap gap-1.5">{STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div></div>
+          <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">PnL Gain Presets</span><div className="flex flex-wrap gap-1.5">{PNL_STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className="rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] hover:border-[#00FF87]/40">{p.name}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Public Venue Strategy Packs</span><div className="flex flex-wrap gap-1.5">{VENUE_STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div>{draftSources.length > 0 && <div className="mt-2 font-mono text-[0.5625rem] text-[#5a6080]">Sources: {draftSources.join(' · ')} · {draftObservationOnly ? 'OBSERVE-ONLY' : 'EXECUTION-CAPABLE'}</div>}</div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Conditions</span><div className="flex flex-wrap gap-1.5">{CONDITION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#FFB800]/30 bg-[#FFB800]/5 px-2 py-1 font-mono text-[0.625rem] text-[#FFB800]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Actions</span><div className="flex flex-wrap gap-1.5">{ACTION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 px-2 py-1 font-mono text-[0.625rem] text-[#00F0FF]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
