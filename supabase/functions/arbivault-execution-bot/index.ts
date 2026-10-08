@@ -285,7 +285,6 @@ export default {
           input: {
             role: 'execution',
             priority: 'early_bird',
-            research_layer: 'A Deep Mind',
             capital_policy: policy?.mode || 'unconfigured',
           },
         })
@@ -323,20 +322,20 @@ export default {
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
           const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
-          const research: any = {
+          const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
-            research_layer: null, builder: executionRoute.transaction_builder, execution_source: 'explicit_execution_route',
+            builder: executionRoute.transaction_builder, execution_source: 'explicit_execution_route',
           }
           let dexPreflight: any = null
           let builderError: string | null = null
           if (wallet) {
             try {
               dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
-              research.dex_preflight = dexPreflight
+              executionContext.dex_preflight = dexPreflight
             } catch (e) {
               builderError = e instanceof Error ? e.message : String(e)
-              research.dex_preflight_error = builderError
+              executionContext.dex_preflight_error = builderError
             }
           }
           const cexExecutionAdapterConfigured = false
@@ -350,7 +349,7 @@ export default {
             : !transactionBuilt ? 'transaction_builder_incomplete'
             : !cexExecutionAdapterConfigured ? 'cex_execution_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
-          const payloadHash = await sha256(JSON.stringify(research))
+          const payloadHash = await sha256(JSON.stringify(executionContext))
           const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash || dexPreflight?.buy?.transaction_payload_hash || null
           await supabase.from('execution_attempts').insert({
             owner_id: bot.owner_id, adapter_id: null, strategy_bot_id: strategyBot?.id || null, observation_id: null,
@@ -359,14 +358,13 @@ export default {
             transaction_payload_hash: txPayloadHash, capital_used: 0, failure_reason: executionGate === 'eligible' ? null : executionGate,
             validated_at: now.toISOString(),
           })
-          opportunities.push({ ...research, execution_gate: executionGate, execution_route_id: executionRoute.id, observation_saved: false })
+          opportunities.push({ ...executionContext, execution_gate: executionGate, execution_route_id: executionRoute.id, observation_saved: false })
 
         }
 
         const output = {
           ok: true,
           execution_mode: zeroCapitalWindow ? 'builder_preflighted' : 'blocked_policy',
-          research_layer: null,
           opportunities,
           controls: {
             withdrawal_path_available_to_bot: false,
@@ -429,7 +427,6 @@ export default {
       ok: true,
       worker: 'execution',
       priority: 'early_bird',
-      research_layer: null,
       live_execution_policy: zeroCapitalWindow ? 'zero_capital_for_initial_24h' : 'policy_blocked',
       actual_broadcasts: 0,
       confirmed_profits: 0,
