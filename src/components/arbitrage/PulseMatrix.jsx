@@ -48,7 +48,7 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
                   +${profit.toFixed(2)}
                 </span>
                 <span className="w-auto shrink-0 text-right font-mono text-[0.55rem] text-[#5a6080]">
-                  {r.qualifying ? 'QUALIFYING' : 'OBSERVED'} · {Number(r.latency || 0)}ms
+                  OBSERVED · {Number(r.latency || 0)}ms
                 </span>
               </div>
             </button>
