@@ -29,31 +29,46 @@ Deno.serve(async (req) => {
     }
 
     const since = new Date(Date.now() - days * 86400000).toISOString();
-    const baseQuery = () => admin
-      .from("strategy_observations")
-      .select("id,bot_skill_id,source_key,domain,symbol,metric,value,observed_at,metadata")
-      .eq("owner_id", userData.user.id)
-      .eq("metric", "spread_pct")
-      .gte("observed_at", since)
-      .order("observed_at", { ascending: true })
-      .limit(10000);
+    const fetchAll = async (skillFilter: string | null = null) => {
+      const pageSize = 1000;
+      const rows: any[] = [];
+
+      for (let page = 0; page < 20; page += 1) {
+        let query = admin
+          .from("strategy_observations")
+          .select("id,bot_skill_id,source_key,domain,symbol,metric,value,observed_at,metadata")
+          .eq("owner_id", userData.user.id)
+          .eq("metric", "spread_pct")
+          .gte("observed_at", since)
+          .order("observed_at", { ascending: true })
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+
+        if (skillFilter) query = query.eq("bot_skill_id", skillFilter);
+
+        const { data, error } = await query;
+        if (error) return { rows: [], error };
+        const batch = data || [];
+        rows.push(...batch);
+        if (batch.length < pageSize) break;
+      }
+
+      return { rows, error: null };
+    };
 
     // Live scout observations are intentionally stored without a skill linkage.
     // A skill-specific backtest therefore uses linked samples when they exist,
     // otherwise it falls back to the owner's real historical market observations.
-    let { data: observations, error } = skillId
-      ? await baseQuery().eq("bot_skill_id", skillId)
-      : await baseQuery();
+    let fetched = await fetchAll(skillId || null);
+    if (fetched.error) return json({ error: fetched.error.message }, 500);
 
-    if (error) return json({ error: error.message }, 500);
-
+    let observations = fetched.rows;
     let dataScope = skillId ? "skill_linked_observations" : "owner_market_observations";
     let fallbackUsed = false;
 
-    if (skillId && !(observations || []).length) {
-      const fallback = await baseQuery();
-      if (fallback.error) return json({ error: fallback.error.message }, 500);
-      observations = fallback.data || [];
+    if (skillId && observations.length === 0) {
+      fetched = await fetchAll(null);
+      if (fetched.error) return json({ error: fetched.error.message }, 500);
+      observations = fetched.rows;
       dataScope = "owner_market_observations_fallback";
       fallbackUsed = true;
     }
