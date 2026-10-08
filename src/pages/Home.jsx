@@ -19,7 +19,7 @@ const TABS = [
 export default function Home() {
   const navigate = useNavigate()
   const isMobile = useIsMobile()
-  const { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
+  const { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [mobileTab, setMobileTab] = useState('matrix')
   const toggleEngine = () => setEngineStatus((s) => s === 'ACTIVE' ? 'PAUSED' : 'ACTIVE')
@@ -86,7 +86,7 @@ export default function Home() {
       </div>
     </div>
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
-    <UtilityBar globalLatency={globalLatency} sessionPnL={sessionPnL} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
+    <UtilityBar globalLatency={globalLatency} livePnl={livePnl} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
     <div className="px-4 pt-4"><WalletBootstrap /></div>
     <div className="px-4 pt-4"><RuntimeControls controls={marketControls} latency={globalLatency} status={status} onChange={setMarketControls} onRefresh={refreshMarket} /></div>
     <div className="px-4 pt-4">{livePanel}</div>
