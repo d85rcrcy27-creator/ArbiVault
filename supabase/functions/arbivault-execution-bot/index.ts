@@ -427,7 +427,9 @@ export default {
           }
           let dexPreflight: any = null
           let builderError: string | null = null
-          if (wallet) {
+          const cexExecutionConfigured = false
+          const multiLegBuilderConfigured = false
+          if (wallet && executionRoute.route_type === 'dex_cex' && cexExecutionConfigured) {
             try {
               dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
               executionContext.dex_preflight = dexPreflight
@@ -449,10 +451,11 @@ export default {
             : !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
+            : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
+            : executionRoute.route_type === 'dex_cex' && !cexExecutionConfigured ? 'cex_execution_adapter_required'
             : builderError ? 'transaction_builder_preflight_failed'
-            : !['dex_cex', 'cyclic', 'multi_venue'].includes(executionRoute.route_type) ? 'route_requires_atomic_multileg_builder'
             : !transactionBuilt ? 'transaction_builder_incomplete'
-: !executionAdapterConfigured ? 'execution_signer_adapter_missing'
+            : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
           const opportunityHash = await sha256(JSON.stringify(executionContext))
           const unsignedTransaction = dexPreflight?.sell?.transaction || dexPreflight?.buy?.transaction || null
