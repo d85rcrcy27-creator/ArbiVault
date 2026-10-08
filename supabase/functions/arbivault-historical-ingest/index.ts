@@ -100,10 +100,20 @@ Deno.serve(async (req) => {
     const summaries: any[] = [];
 
     for (const asset of ASSETS) {
-      const [coinbase, kraken] = await Promise.all([
-        coinbaseDaily(asset.coinbase),
-        krakenDaily(asset.kraken),
-      ]);
+      let coinbase: any[] = [];
+      let kraken: any[] = [];
+      try {
+        [coinbase, kraken] = await Promise.all([
+          coinbaseDaily(asset.coinbase),
+          krakenDaily(asset.kraken),
+        ]);
+      } catch (error) {
+        console.error("historical_asset_fetch_failed", {
+          symbol: asset.symbol,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
 
       const c = new Map(coinbase.map((r: any) => [dayKey(r.ts), r]));
       const k = new Map(kraken.map((r: any) => [dayKey(r.ts), r]));
@@ -181,6 +191,7 @@ Deno.serve(async (req) => {
       live_feed_tables_untouched: true,
     });
   } catch (error) {
+    console.error("historical_ingest_failed", error);
     return Response.json({
       error: error instanceof Error ? error.message : "historical_ingest_error",
     }, { status: 500 });
