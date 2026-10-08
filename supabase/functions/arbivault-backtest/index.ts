@@ -12,22 +12,13 @@ const corsHeaders = {
 };
 
 const json = (value: unknown, status = 200) =>
-  Response.json(value, {
-    status,
-    headers: {
-      ...corsHeaders,
-      "cache-control": "no-store",
-    },
-  });
+  Response.json(value, { status, headers: { ...corsHeaders, "cache-control": "no-store" } });
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   try {
-    // Public research backtest: no user/session authentication.
-    // Only aggregated public market observations are queried; private wallet/skill
-    // records are never read by this endpoint.
     const body = await req.json().catch(() => ({}));
     const skillId = String(body.skill_id || "");
     const requestedThreshold = Number(body.threshold);
@@ -37,41 +28,50 @@ Deno.serve(async (req) => {
       return json({ error: "invalid_threshold" }, 400);
     }
 
-    const skill: any = null;
-    const since = new Date(Date.now() - days * 86400000).toISOString();
-    const fetchAll = async (skillFilter: string | null = null) => {
-      const pageSize = 1000;
-      const rows: any[] = [];
+    let skill: any = null;
+    if (skillId) {
+      const { data, error } = await admin
+        .from("bot_skills")
+        .select("id,name,conditions,risk_limits,observation_only,discovery_enabled,strategy_bot_id")
+        .eq("id", skillId)
+        .maybeSingle();
+      if (error) return json({ error: error.message }, 500);
+      if (!data) return json({ error: "skill_not_found" }, 404);
+      skill = data;
+    }
 
-      for (let page = 0; page < 20; page += 1) {
-        let query = admin
-          .from("strategy_observations")
-          .select("id,source_key,domain,symbol,metric,value,observed_at,metadata")
-          .eq("source_key", "public_exchange_order_books")
-          .eq("metric", "spread_pct")
-          .gte("observed_at", since)
-          .order("observed_at", { ascending: true })
-          .range(page * pageSize, (page + 1) * pageSize - 1);
+    const { data: dataset, error: datasetError } = await admin
+      .from("strategy_training_datasets")
+      .select("id,dataset_key,start_date,end_date,last_ingested_at")
+      .eq("dataset_key", "crypto_cross_venue_2024_2025")
+      .eq("active", true)
+      .maybeSingle();
 
-        const { data, error } = await query;
-        if (error) return { rows: [], error };
-        const batch = data || [];
-        rows.push(...batch);
-        if (batch.length < pageSize) break;
-      }
+    if (datasetError) return json({ error: datasetError.message }, 500);
+    if (!dataset || !dataset.last_ingested_at) {
+      return json({
+        ok: false,
+        source: "historical_strategy_training",
+        data_scope: "crypto_cross_venue_2024_2025",
+        supported: false,
+        reason: "historical_training_dataset_not_populated",
+        dataset_start: dataset?.start_date || "2024-01-01",
+        dataset_end: dataset?.end_date || "2025-12-31",
+        skill_id: skillId || null,
+      }, 409);
+    }
 
-      return { rows, error: null };
-    };
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    const { data: observations, error: observationsError } = await admin
+      .from("strategy_training_observations")
+      .select("id,source_key,symbol,metric,value,observed_at,metadata")
+      .eq("dataset_id", dataset.id)
+      .eq("metric", "spread_pct")
+      .gte("observed_at", cutoff)
+      .order("observed_at", { ascending: true })
+      .limit(10000);
 
-    // Live scout observations are intentionally stored without a skill linkage.
-    // A skill-specific backtest therefore uses linked samples when they exist,
-    // otherwise it falls back to the owner's real historical market observations.
-    const fetched = await fetchAll(null);
-    if (fetched.error) return json({ error: fetched.error.message }, 500);
-
-    const observations = fetched.rows;
-    const dataScope = "public_exchange_order_books";
-    const fallbackUsed = false;
+    if (observationsError) return json({ error: observationsError.message }, 500);
 
     const samples = (observations || [])
       .map((row: any) => ({
@@ -83,21 +83,32 @@ Deno.serve(async (req) => {
       }))
       .filter((row: any) => Number.isFinite(row.spread));
 
-    const threshold = Number.isFinite(requestedThreshold) ? requestedThreshold : null;
-    const requiresSpread = threshold !== null;
+    const conditions = Array.isArray(skill?.conditions) ? skill.conditions : [];
+    const spreadCondition = conditions.find((item: any) =>
+      String(item?.label || "").toLowerCase().includes("spread")
+    );
+    const spreadThreshold = spreadCondition ? Number(spreadCondition.value) : null;
+    const riskThreshold = Number(skill?.risk_limits?.min_profit_threshold);
+
+    const threshold = skillId
+      ? (Number.isFinite(spreadThreshold)
+          ? spreadThreshold
+          : Number.isFinite(riskThreshold) ? riskThreshold : null)
+      : (Number.isFinite(requestedThreshold) ? requestedThreshold : null);
+
+    const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
     const FEE_PCT = 0.10;
     const NOTIONAL = 10000;
 
-    // A historical spread observation is not automatically a trade.
-    // Only observations meeting an explicit spread/profit threshold qualify.
     if (!requiresSpread || threshold === null) {
       return json({
         ok: true,
-        source: "historical_strategy_observations",
-        data_scope: dataScope,
-        fallback_used: fallbackUsed,
-        source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
+        source: "historical_strategy_training",
+        data_scope: dataset.dataset_key,
+        fallback_used: false,
+        source_keys: [...new Set(samples.map((row: any) => row.source_key).filter(Boolean))],
         skill_id: skillId || null,
+        strategy: skill?.name || null,
         days,
         threshold_pct: null,
         supported: false,
@@ -119,23 +130,17 @@ Deno.serve(async (req) => {
 
     const qualifying = samples.filter((row: any) => row.spread >= threshold);
     const profitable = qualifying.filter((row: any) => row.spread > FEE_PCT);
-    const grossPnl = qualifying.reduce(
-      (sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100,
-      0,
-    );
-    const netPnl = qualifying.reduce(
-      (sum: number, row: any) => sum + (NOTIONAL * (row.spread - FEE_PCT)) / 100,
-      0,
-    );
+    const grossPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
+    const netPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - FEE_PCT)) / 100, 0);
 
     return json({
       ok: true,
-      source: "historical_strategy_observations",
-      data_scope: dataScope,
-      fallback_used: fallbackUsed,
-      source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
+      source: "historical_strategy_training",
+      data_scope: dataset.dataset_key,
+      fallback_used: false,
+      source_keys: [...new Set(samples.map((row: any) => row.source_key).filter(Boolean))],
       skill_id: skillId || null,
-      strategy: "public_market_backtest",
+      strategy: skill?.name || null,
       days,
       threshold_pct: threshold,
       samples: samples.length,
