@@ -14,11 +14,18 @@ const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, 'cache-control': 'no-store' } })
 
 const PAIRS = [
-  { chain: 'solana', pair: 'SOL/USDT', symbol: 'SOLUSDT', okx: 'SOL-USDT' },
-  { chain: 'bnb', pair: 'BNB/USDT', symbol: 'BNBUSDT', okx: 'BNB-USDT' },
+  { chain: 'bitcoin', pair: 'BTC/USDT', symbol: 'BTCUSDT', okx: 'BTC-USDT', kraken: 'XBTUSDT', kucoin: 'BTC-USDT', gateio: 'BTC_USDT' },
+  { chain: 'ethereum', pair: 'ETH/USDT', symbol: 'ETHUSDT', okx: 'ETH-USDT', kraken: 'ETHUSDT', kucoin: 'ETH-USDT', gateio: 'ETH_USDT' },
+  { chain: 'solana', pair: 'SOL/USDT', symbol: 'SOLUSDT', okx: 'SOL-USDT', kraken: 'SOLUSDT', kucoin: 'SOL-USDT', gateio: 'SOL_USDT' },
+  { chain: 'bnb', pair: 'BNB/USDT', symbol: 'BNBUSDT', okx: 'BNB-USDT', kraken: 'BNBUSDT', kucoin: 'BNB-USDT', gateio: 'BNB_USDT' },
+  { chain: 'ethereum', pair: 'XRP/USDT', symbol: 'XRPUSDT', okx: 'XRP-USDT', kraken: 'XRPUSDT', kucoin: 'XRP-USDT', gateio: 'XRP_USDT' },
+  { chain: 'ethereum', pair: 'ADA/USDT', symbol: 'ADAUSDT', okx: 'ADA-USDT', kraken: 'ADAUSDT', kucoin: 'ADA-USDT', gateio: 'ADA_USDT' },
+  { chain: 'ethereum', pair: 'AVAX/USDT', symbol: 'AVAXUSDT', okx: 'AVAX-USDT', kraken: 'AVAXUSDT', kucoin: 'AVAX-USDT', gateio: 'AVAX_USDT' },
+  { chain: 'ethereum', pair: 'LINK/USDT', symbol: 'LINKUSDT', okx: 'LINK-USDT', kraken: 'LINKUSDT', kucoin: 'LINK-USDT', gateio: 'LINK_USDT' },
+  { chain: 'ethereum', pair: 'DOGE/USDT', symbol: 'DOGEUSDT', okx: 'DOGE-USDT', kraken: 'DOGEUSDT', kucoin: 'DOGE-USDT', gateio: 'DOGE_USDT' },
 ]
 
-const EXCHANGES = ['binance', 'bybit', 'okx']
+const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio']
 const QUALIFYING_SPREAD_PCT = 0.5
 
 async function fetchJson(input: string) {
@@ -48,12 +55,74 @@ async function quote(exchange: string, pair: typeof PAIRS[number]) {
       const t = j?.result?.list?.[0]
       return t ? { exchange, bid: Number(t.bid1Price), ask: Number(t.ask1Price), latencyMs: Math.round(performance.now() - started) } : null
     }
-    const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
-    const t = j?.data?.[0]
-    return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx), latencyMs: Math.round(performance.now() - started) } : null
+    if (exchange === 'okx') {
+      const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
+      const t = j?.data?.[0]
+      return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx), latencyMs: Math.round(performance.now() - started) } : null
+    }
+    if (exchange === 'kraken') {
+      const j = await fetchJson(`https://api.kraken.com/0/public/Ticker?pair=${pair.kraken}`)
+      const t = Object.values(j?.result || {})[0] as any
+      return t ? { exchange, bid: Number(t.b?.[0]), ask: Number(t.a?.[0]), latencyMs: Math.round(performance.now() - started) } : null
+    }
+    if (exchange === 'kucoin') {
+      const j = await fetchJson(`https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${pair.kucoin}`)
+      const t = j?.data
+      return t ? { exchange, bid: Number(t.bestBid), ask: Number(t.bestAsk), latencyMs: Math.round(performance.now() - started) } : null
+    }
+    const j = await fetchJson(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair.gateio}`)
+    const t = j?.[0]
+    return t ? { exchange, bid: Number(t.highest_bid), ask: Number(t.lowest_ask), latencyMs: Math.round(performance.now() - started) } : null
   } catch {
     return null
   }
+}
+
+async function rpcHealth() {
+  const checks = await Promise.all([
+    (async () => {
+      const started = performance.now()
+      try {
+        const j = await fetchJson('https://cloudflare-eth.com')
+        return { chain: 'ethereum', ok: !!j, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
+      } catch { return { chain: 'ethereum', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
+    })(),
+    (async () => {
+      const started = performance.now()
+      try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 1800)
+        const response = await fetch('https://bsc-dataseed.binance.org', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'eth_blockNumber', params: [] }),
+          signal: controller.signal,
+        })
+        clearTimeout(timer)
+        const j = await response.json()
+        return { chain: 'bnb', ok: response.ok && !!j?.result, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
+      } catch { return { chain: 'bnb', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
+    })(),
+    (async () => {
+      const started = performance.now()
+      try {
+        const j = await fetch('https://api.mainnet-beta.solana.com', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'getLatestBlockhash', params: [] }),
+        }).then((r) => r.json())
+        return { chain: 'solana', ok: !!j?.result?.value?.blockhash, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
+      } catch { return { chain: 'solana', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
+    })(),
+    (async () => {
+      const started = performance.now()
+      try {
+        const response = await fetch('https://mempool.space/api/blocks/tip/height')
+        return { chain: 'bitcoin', ok: response.ok, latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc' }
+      } catch { return { chain: 'bitcoin', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc' } }
+    })(),
+  ])
+  return checks
 }
 
 async function buildRoute(pair: typeof PAIRS[number]) {
@@ -138,6 +207,7 @@ Deno.serve(async (req) => {
       ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
       : 0
     const feeds = [...new Set(successfulQuotes.map((quote) => quote.exchange))]
+    const rpc = await rpcHealth()
     return json({
       ok: true,
       timestamp_ms: Date.now(),
@@ -148,6 +218,11 @@ Deno.serve(async (req) => {
       live_quote_count: successfulQuotes.length,
       live_pair_count: snapshots.filter((snapshot) => snapshot.quote_count > 0).length,
       feeds,
+      feed_health: EXCHANGES.map((exchange) => ({
+        exchange,
+        live_pairs: snapshots.filter((snapshot: any) => (snapshot.quotes || []).some((quote: any) => quote.exchange === exchange)).length,
+      })),
+      chain_rpc_health: rpc,
       source: 'public_exchange_order_books',
     })
   } catch (error) {
