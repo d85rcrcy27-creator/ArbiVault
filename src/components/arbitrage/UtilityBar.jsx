@@ -27,7 +27,7 @@ export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, on
             </span>
           </div>
           <div className="hidden items-center gap-1.5 sm:flex">
-            {FEEDS.map((f) => (
+            {FEEDS.filter((f) => connected?.[f.id]).map((f) => (
               <span
                 key={f.id}
                 className={`rounded px-1.5 py-0.5 font-mono text-[0.5625rem] tracking-wider ${
