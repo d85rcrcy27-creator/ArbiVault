@@ -160,6 +160,7 @@ async function buildPancake(
   side: string,
   amountRaw: string,
   slippageBps: number,
+  quoteOnly = false,
 ) {
   const assets = routeAssets("bnb", pair, side);
   const amountIn = BigInt(amountRaw);
@@ -183,6 +184,29 @@ async function buildPancake(
 
   const expectedOut = amounts[amounts.length - 1];
   const minOut = expectedOut * BigInt(10000 - slippageBps) / 10000n;
+
+  if (quoteOnly) {
+    return {
+      builder: "pancakeswap_v2",
+      chain: "bnb",
+      pair,
+      side,
+      source: taker,
+      transaction: null,
+      transaction_format: "evm_json",
+      transaction_payload_hash: null,
+      expected_out: expectedOut.toString(),
+      minimum_out: minOut.toString(),
+      input_amount: amountRaw,
+      slippage_bps: slippageBps,
+      router: PANCAKE_V2_ROUTER,
+      executable: false,
+      quoted: true,
+      broadcast_by_builder: false,
+      reference: "PancakeSwap V2 router",
+    };
+  }
+
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 30);
   const nonce = toBigInt(await rpc("eth_getTransactionCount", [taker, "pending"]));
   const gasPrice = toBigInt(await rpc("eth_gasPrice", []));
@@ -198,17 +222,19 @@ async function buildPancake(
     });
     value = amountIn;
   } else {
-    const allowanceCall = encodeFunctionData({
-      abi: ERC20_ABI,
-      functionName: "allowance",
-      args: [taker, PANCAKE_V2_ROUTER],
-    });
-    const allowanceRaw = await rpc("eth_call", [
-      { to: BSC_USDT, data: allowanceCall },
-      "latest",
-    ]);
-    if (toBigInt(allowanceRaw) < amountIn) {
-      throw new Error("pancakeswap_router_allowance_insufficient_for_usdt_input");
+    if (!quoteOnly) {
+      const allowanceCall = encodeFunctionData({
+        abi: ERC20_ABI,
+        functionName: "allowance",
+        args: [taker, PANCAKE_V2_ROUTER],
+      });
+      const allowanceRaw = await rpc("eth_call", [
+        { to: BSC_USDT, data: allowanceCall },
+        "latest",
+      ]);
+      if (toBigInt(allowanceRaw) < amountIn) {
+        throw new Error("pancakeswap_router_allowance_insufficient_for_usdt_input");
+      }
     }
 
     data = encodeFunctionData({
@@ -273,6 +299,7 @@ Deno.serve(async (req) => {
     const amountRaw = String(body.amount_raw || "");
     const slippageBps = Number(body.slippage_bps ?? 50);
     const priceImpactPct = Number(body.price_impact_pct ?? 0);
+    const mode = body.mode === "quote" ? "quote" : "build";
 
     if (!routeId || !sourceWalletId || !amountRaw || !["buy", "sell"].includes(side)) {
       return json({ error: "invalid_request" }, 400);
@@ -321,7 +348,7 @@ Deno.serve(async (req) => {
     const built = route.transaction_builder === "jupiter_swap_v2"
       ? await buildJupiter(wallet.address, route.pair, side, amountRaw, slippageBps)
       : route.transaction_builder === "pancakeswap_v2"
-        ? await buildPancake(wallet.address, route.pair, side, amountRaw, slippageBps)
+        ? await buildPancake(wallet.address, route.pair, side, amountRaw, slippageBps, mode === "quote")
         : null;
 
     if (!built) return json({ error: "unsupported_transaction_builder" }, 409);
@@ -339,6 +366,7 @@ Deno.serve(async (req) => {
         discovery_only: route.discovery_only,
         builder: route.transaction_builder,
       },
+      mode,
       policy: {
         builder_creates_unsigned_only: true,
         builder_never_signs: true,
