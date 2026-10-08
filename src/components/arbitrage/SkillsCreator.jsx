@@ -207,32 +207,14 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     } catch (e) { setError(e.message || 'Unable to delete skill') }
   }
 
-  const runBacktest = async (skill) => {
+  const runSkillBacktest = async (skill) => {
     const blocks = asBlockArray(skill.conditions)
     const thresholdBlock = blocks.find((b) => b.label?.includes('Spread'))
     const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
     try {
-      const { data, error } = await supabase.functions.invoke('arbivault-market-scout', { body: {} })
-      if (error) throw error
-      const sourceRoutes = Array.isArray(data?.routes) && data.routes.length ? data.routes : routes
-      const samples = sourceRoutes.flatMap((route) =>
-        asBlockArray(route.history)
-          .map((sample) => Number(
-            typeof sample === 'number' ? sample : sample?.v
-          ))
-          .filter((value) => Number.isFinite(value))
-      )
-      const trades = samples.filter((spread) => spread >= threshold)
-      const wins = trades.filter((spread) => spread - FEE_PCT > 0)
-      const pnl = trades.reduce((sum, spread) => sum + (NOTIONAL * (spread - FEE_PCT)) / 100, 0)
-      const backtest = {
-        winRate: trades.length ? Math.round((wins.length / trades.length) * 100) : 0,
-        trades: trades.length,
-        pnl,
-        samples: samples.length,
-        ranAt: new Date().toISOString(),
-      }
-      const saved = await updateBotSkill(skill.id, { backtest })
+      setError('')
+      const backtest = await runBacktest({ skillId: skill.id, threshold, days: 30 })
+      const saved = await updateBotSkill(skill.id, { backtest: { ...backtest, ranAt: new Date().toISOString() } })
       setStrategies((prev) => prev.map((s) => s.id === skill.id ? saved : s))
     } catch (e) { setError(e.message || 'Unable to save backtest') }
   }
@@ -275,7 +257,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
             <div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2"><button onClick={() => toggleStrategy(s)} className={`flex h-4 w-7 items-center rounded-full p-0.5 ${s.active ? 'bg-[#00FF87]/30' : 'bg-[#232738]'}`}><span className={`h-3 w-3 rounded-full ${s.active ? 'translate-x-3 bg-[#00FF87]' : 'bg-[#5a6080]'}`} /></button><span className="font-mono text-xs font-semibold text-[#e0e4f0]">{s.name}</span></div><button onClick={() => removeStrategy(s.id)} className="text-[#3a4060] hover:text-[#FF4D4D]"><Trash2 className="h-3 w-3" /></button></div>
             <div className="mb-2 flex flex-wrap gap-1">{[...asBlockArray(s.conditions), ...asBlockArray(s.actions)].map((b, i) => <span key={i} className={`rounded border px-1.5 py-0.5 font-mono text-[0.5625rem] ${b.type === 'condition' ? 'border-[#FFB800]/30 text-[#FFB800]' : 'border-[#00F0FF]/30 text-[#00F0FF]'}`}>{b.label}{b.value ? ` ${b.value}${b.unit || ''}` : ''}</span>)}</div>
             {Array.isArray(s.data_sources) && s.data_sources.length > 0 && <div className="mb-2 font-mono text-[0.55rem] uppercase tracking-wider text-[#5a6080]">DATA: {s.data_sources.join(' · ')} · {s.discovery_enabled ? 'DISCOVERY' : 'STRATEGY'}</div>}
-            <div className="flex items-center justify-between"><div className="font-mono text-[0.625rem] text-[#5a6080]">{s.backtest ? <>WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Trades: {s.backtest.trades} · PnL: <span className={s.backtest.pnl >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.pnl).toFixed(1)}</span></> : 'No backtest yet'}</div><button onClick={() => runBacktest(s)} disabled={loading} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40"><FlaskConical className="h-3 w-3" />Backtest</button></div>
+            <div className="flex items-center justify-between"><div className="font-mono text-[0.625rem] text-[#5a6080]">{s.backtest ? <>WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Trades: {s.backtest.trades} · PnL: <span className={s.backtest.pnl >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.pnl).toFixed(1)}</span></> : 'No backtest yet'}</div><button onClick={() => runSkillBacktest(s)} disabled={loading} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40"><FlaskConical className="h-3 w-3" />Backtest</button></div>
           </div>)}
           {!strategies.length && <p className="font-mono text-[0.65rem] text-[#3a4060]">No saved skills yet.</p>}
         </div></div>
