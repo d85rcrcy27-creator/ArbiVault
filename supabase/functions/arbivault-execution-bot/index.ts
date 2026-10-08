@@ -22,8 +22,6 @@ const PAIRS = [
   },
 ]
 
-const QUALIFYING_SPREAD_PCT = 0.5
-
 async function authorized(req: Request) {
   const token = req.headers.get('x-arbivault-cron-token')
   if (!token) return false
@@ -115,7 +113,6 @@ async function spreadFor(pair: typeof PAIRS[number]) {
     buy_ask: buy.ask,
     sell_bid: sell.bid,
     spread_pct: spreadPct,
-    qualifying: spreadPct >= QUALIFYING_SPREAD_PCT,
   }
 }
 
