@@ -46,6 +46,7 @@ function normalizeTrade(row) {
     ts: new Date(row.created_at).getTime(),
     strategy: row.strategy || 'Unknown',
     executionMode: row.execution_mode,
+    status: row.status,
   }
 }
 
@@ -131,7 +132,7 @@ export function useLiveMarketData() {
     throw new Error('Browser execution is disabled; use the server-side execution bot')
   }, [])
 
-  const sessionPnL = +trades.reduce((sum, t) => sum + t.pnl, 0).toFixed(2)
+  const sessionPnL = +trades.filter((t) => t.status === 'confirmed' || t.executionMode === 'confirmed').reduce((sum, t) => sum + t.pnl, 0).toFixed(2)
 
   return { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, sessionPnL, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
