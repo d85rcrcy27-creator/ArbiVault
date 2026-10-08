@@ -50,7 +50,7 @@ async function quote(exchange: string, pair: typeof PAIRS[number]) {
     }
     const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
     const t = j?.data?.[0]
-    return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx) } : null
+    return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx), latencyMs: Math.round(performance.now() - started) } : null
   } catch {
     return null
   }
