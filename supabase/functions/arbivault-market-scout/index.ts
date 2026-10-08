@@ -83,8 +83,13 @@ async function rpcHealth() {
     (async () => {
       const started = performance.now()
       try {
-        const j = await fetchJson('https://cloudflare-eth.com')
-        return { chain: 'ethereum', ok: !!j, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
+        const response = await fetch('https://cloudflare-eth.com', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'eth_blockNumber', params: [] }),
+        })
+        const j = await response.json()
+        return { chain: 'ethereum', ok: response.ok && typeof j?.result === 'string', latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
       } catch { return { chain: 'ethereum', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
     })(),
     (async () => {
