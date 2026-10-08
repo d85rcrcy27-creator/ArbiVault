@@ -57,7 +57,7 @@ async function ensureBindings(userId:string,wallets:any[]){
   const chain=w.chain
   // Only create adapters for chains supported by the current internal-vault signer.
   // Ethereum is not supported by the deployed signer and must not create a stale blocker row.
-  if(!['bnb','solana','bitcoin'].includes(chain)) continue
+  if(!['ethereum','bnb','solana','bitcoin'].includes(chain)) continue
   const {data:adapter}=await admin.from('execution_adapters').select('id').eq('chain',chain).eq('allowed_wallet_id',w.id).eq('signer_provider','internal_vault').maybeSingle()
   const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:null,updated_at:new Date().toISOString()}
   if(adapter)await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
