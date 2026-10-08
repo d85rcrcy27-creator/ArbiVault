@@ -8,6 +8,8 @@ const supabase = createClient(
 
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
+const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+const BSC_AAVE_POOL = (Deno.env.get("ARBIVAULT_BSC_AAVE_POOL") || "").trim();
 
 const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
@@ -25,6 +27,14 @@ const ROUTER_ABI = parseAbi([
 
 const ERC20_ABI = parseAbi([
   "function allowance(address owner,address spender) view returns (uint256)",
+]);
+
+const FLASH_EXECUTOR_ABI = parseAbi([
+  "function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)",
+]);
+
+const ATOMIC_ALLOWED_TARGETS = new Set([
+  PANCAKE_V2_ROUTER.toLowerCase(),
 ]);
 
 const MAX_SLIPPAGE_BPS = 100;
@@ -154,6 +164,55 @@ async function buildJupiter(
   };
 }
 
+async function buildAtomicFlashLoan(
+  owner: string,
+  asset: string,
+  amountRaw: string,
+  minProfitRaw: string,
+  targets: string[],
+  valuesRaw: string[],
+  data: string[],
+) {
+  if (!BSC_FLASH_EXECUTOR || !BSC_AAVE_POOL) throw new Error("atomic_executor_not_configured");
+  if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
+  if (!/^0x[a-fA-F0-9]{40}$/.test(BSC_AAVE_POOL)) throw new Error("invalid_aave_pool_config");
+  if (!targets.length || targets.length !== valuesRaw.length || targets.length !== data.length) throw new Error("atomic_leg_shape_invalid");
+  for (const target of targets) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !ATOMIC_ALLOWED_TARGETS.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
+  }
+  for (const value of valuesRaw) if (!/^\d+$/.test(value)) throw new Error("atomic_value_invalid");
+  for (const callData of data) {
+    if (!/^0x[0-9a-fA-F]*$/.test(callData) || callData.length < 10) throw new Error("atomic_calldata_invalid");
+  }
+  const amount = BigInt(amountRaw);
+  const minProfit = BigInt(minProfitRaw || "0");
+  if (amount <= 0n || minProfit < 0n) throw new Error("invalid_atomic_amounts");
+  const encoded = encodeFunctionData({
+    abi: FLASH_EXECUTOR_ABI,
+    functionName: "executeFlashLoan",
+    args: [asset, amount, minProfit, targets as any, valuesRaw.map((v) => BigInt(v)), data as any],
+  });
+  const nonce = toBigInt(await rpc("eth_getTransactionCount", [owner, "pending"]));
+  const gasPrice = toBigInt(await rpc("eth_gasPrice", []));
+  const gas = toBigInt(await rpc("eth_estimateGas", [{ from: owner, to: BSC_FLASH_EXECUTOR, data: encoded, value: "0x0" }]));
+  const transaction = {
+    chainId: 56, nonce: toHex(nonce), to: BSC_FLASH_EXECUTOR, value: "0x0",
+    data: encoded, gas: toHex(gas), gasPrice: toHex(gasPrice), from: owner,
+  };
+  const serializedPayload = JSON.stringify(transaction);
+  return {
+    builder: "aave_v3_atomic_flash_loan_v1", chain: "bnb", source: owner,
+    executor: BSC_FLASH_EXECUTOR, flash_loan_pool: BSC_AAVE_POOL,
+    flash_loan_asset: asset, flash_loan_amount: amount.toString(),
+    minimum_profit: minProfit.toString(), targets, values: valuesRaw,
+    leg_count: targets.length, transaction: serializedPayload,
+    transaction_format: "evm_json",
+    transaction_payload_hash: await sha256(serializedPayload),
+    executable: true, atomic: true, builder_signs: false, builder_broadcasts: false,
+    repayment_required_in_same_transaction: true,
+    reference: "Aave V3 flashLoanSimple + dedicated ArbiVault atomic executor",
+  };
+}
 async function buildPancake(
   taker: string,
   pair: string,
@@ -330,7 +389,10 @@ Deno.serve(async (req) => {
     if (route.builder_enabled !== true || !route.transaction_builder) {
       return json({ error: "transaction_builder_not_configured" }, 409);
     }
-    if (!["dex_cex","cyclic","multi_venue"].includes(route.route_type)) {
+    const isAtomicFlashRoute =
+      route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
+      route.route_type === "flash_liquidity";
+    if (!isAtomicFlashRoute && !["dex_cex","cyclic","multi_venue"].includes(route.route_type)) {
       return json({ error: "route_type_not_supported_by_spot_builder" }, 409);
     }
 
@@ -346,11 +408,21 @@ Deno.serve(async (req) => {
     }
     if (wallet.chain !== route.chain) return json({ error: "wallet_route_chain_mismatch" }, 403);
 
-    const built = route.transaction_builder === "jupiter_swap_v2"
-      ? await buildJupiter(wallet.address, route.pair, side, amountRaw, slippageBps)
-      : route.transaction_builder === "pancakeswap_v2"
-        ? await buildPancake(wallet.address, route.pair, side, amountRaw, slippageBps, mode === "quote")
-        : null;
+    const built = route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
+      ? await buildAtomicFlashLoan(
+          wallet.address,
+          String(body.flash_loan_asset || ""),
+          amountRaw,
+          String(body.min_profit_raw || "0"),
+          Array.isArray(body.targets) ? body.targets.map(String) : [],
+          Array.isArray(body.values_raw) ? body.values_raw.map(String) : [],
+          Array.isArray(body.data) ? body.data.map(String) : [],
+        )
+      : route.transaction_builder === "jupiter_swap_v2"
+        ? await buildJupiter(wallet.address, route.pair, side, amountRaw, slippageBps)
+        : route.transaction_builder === "pancakeswap_v2"
+          ? await buildPancake(wallet.address, route.pair, side, amountRaw, slippageBps, mode === "quote")
+          : null;
 
     if (!built) return json({ error: "unsupported_transaction_builder" }, 409);
 
