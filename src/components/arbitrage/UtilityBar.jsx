@@ -9,7 +9,7 @@ const FEEDS = [
   { id: 'gateio', name: 'GAT' },
 ];
 
-export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, onToggleEngine, status, connected }) {
+export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, onToggleEngine, status, connected, onOpenWallets }) {
   const latencyColor = globalLatency === 0 ? 'text-[#5a6080]' : globalLatency < 60 ? 'text-[#00FF87]' : globalLatency < 120 ? 'text-[#FFB800]' : 'text-[#FF4D4D]';
   const pnlPositive = sessionPnL >= 0;
 
@@ -63,6 +63,13 @@ export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, on
             </div>
           </div>
 
+          <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenWallets}
+            className="hidden rounded border border-[#232738] bg-[#12141D] px-2.5 py-1.5 font-mono text-[0.6rem] font-semibold uppercase text-[#8a90b0] hover:border-[#00F0FF]/40 hover:text-[#00F0FF] sm:block"
+          >
+            Wallets
+          </button>
           <button
             onClick={onToggleEngine}
             className="group flex items-center gap-2 rounded border border-[#232738] bg-[#12141D] px-3 py-1.5 transition-colors hover:border-[#00F0FF]/40 hover:bg-[#1A1D2B]"
@@ -76,6 +83,7 @@ export default function UtilityBar({ globalLatency, sessionPnL, engineStatus, on
             </div>
             <Zap className={`h-3 w-3 ${engineStatus === 'ACTIVE' ? 'text-[#00FF87] glow-emerald' : 'text-[#5a6080]'}`} />
           </button>
+          </div>
         </div>
       </div>
     </header>
