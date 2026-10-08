@@ -1,0 +1,83 @@
+import { createClient } from "npm:@supabase/supabase-js@2.117.2";
+
+const admin = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+
+const json = (value: unknown, status = 200) =>
+  Response.json(value, { status, headers: { "cache-control": "no-store" } });
+
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+  try {
+    const auth = req.headers.get("Authorization") || "";
+    const token = auth.replace(/^Bearer\s+/i, "");
+    if (!token) return json({ error: "authentication_required" }, 401);
+
+    const { data: userData, error: userError } = await admin.auth.getUser(token);
+    if (userError || !userData.user) return json({ error: "authentication_required" }, 401);
+
+    const body = await req.json().catch(() => ({}));
+    const skillId = String(body.skill_id || "");
+    const threshold = Number(body.threshold ?? 0);
+    const days = Math.min(90, Math.max(1, Number(body.days ?? 30)));
+
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      return json({ error: "invalid_threshold" }, 400);
+    }
+
+    const since = new Date(Date.now() - days * 86400000).toISOString();
+    let query = admin
+      .from("strategy_observations")
+      .select("id,bot_skill_id,value,observed_at,metadata")
+      .eq("owner_id", userData.user.id)
+      .eq("metric", "spread_pct")
+      .gte("observed_at", since)
+      .order("observed_at", { ascending: true })
+      .limit(10000);
+
+    if (skillId) query = query.eq("bot_skill_id", skillId);
+
+    const { data: observations, error } = await query;
+    if (error) return json({ error: error.message }, 500);
+
+    const samples = (observations || [])
+      .map((row: any) => ({
+        spread: Number(row.value),
+        observed_at: row.observed_at,
+        metadata: row.metadata || {},
+      }))
+      .filter((row: any) => Number.isFinite(row.spread));
+
+    const FEE_PCT = 0.20;
+    const NOTIONAL = 1000;
+    const qualifying = samples.filter((row: any) => row.spread >= threshold);
+    const wins = qualifying.filter((row: any) => row.spread > FEE_PCT);
+    const pnl = qualifying.reduce(
+      (sum: number, row: any) => sum + (NOTIONAL * (row.spread - FEE_PCT)) / 100,
+      0,
+    );
+
+    return json({
+      ok: true,
+      source: "historical_strategy_observations",
+      skill_id: skillId || null,
+      days,
+      threshold_pct: threshold,
+      samples: samples.length,
+      trades: qualifying.length,
+      wins: wins.length,
+      losses: Math.max(0, qualifying.length - wins.length),
+      winRate: qualifying.length ? Math.round((wins.length / qualifying.length) * 100) : 0,
+      pnl: Number(pnl.toFixed(2)),
+      fee_pct: FEE_PCT,
+      notional: NOTIONAL,
+      first_observation: samples[0]?.observed_at || null,
+      last_observation: samples[samples.length - 1]?.observed_at || null,
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "backtest_error" }, 500);
+  }
+});
