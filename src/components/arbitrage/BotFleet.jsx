@@ -16,7 +16,7 @@ const AVAILABLE_STRATEGIES = [
 ]
 
 const META = {
-  execution: { label: 'Execution Bot', icon: Activity, desc: 'Scans qualifying spreads and records bounded executions.' },
+  execution: { label: 'Execution Bot', icon: Activity, desc: 'Scans only explicitly configured execution routes and records confirmed executions.' },
   sync: { label: 'Sync Bot', icon: RefreshCw, desc: 'Reconciles wallet balances and verification state.' },
   payment: { label: 'Payment Processing Bot', icon: CreditCard, desc: 'Processes payment lifecycle and crypto-payment reconciliation.' },
 }
