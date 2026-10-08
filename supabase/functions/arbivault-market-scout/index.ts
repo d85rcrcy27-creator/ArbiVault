@@ -200,13 +200,106 @@ Deno.serve(async (req) => {
 
     const routeResults = await Promise.all(PAIRS.map(buildRoute))
     const snapshots = routeResults.map((item) => item.snapshot)
-    const routes = routeResults
+    const marketRoutes = routeResults
       .map((item) => item.route)
       .filter(Boolean)
       .map((route) => ({
         ...route,
         qualifying: route.spreadPct >= qualifyingThreshold,
       }))
+
+    // Persist observed market routes and explicitly link them to the strategy
+    // bot plus a separate executable strategy route. Observation never grants
+    // permission to trade; downstream builder/signer gates remain authoritative.
+    const [{ data: routeCatalog }, { data: strategyBots }, { data: executionBots }] = await Promise.all([
+      admin.from('arbivault_strategy_routes')
+        .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status')
+        .eq('enabled', true),
+      admin.from('arbivault_strategy_bots')
+        .select('id,strategy,enabled,execution_enabled')
+        .eq('enabled', true)
+        .eq('execution_enabled', true),
+      admin.from('bot_configs')
+        .select('id,owner_id,bot_role,enabled,autonomy_enabled,autonomy_mode')
+        .eq('owner_id', user.id)
+        .eq('bot_role', 'execution')
+        .eq('enabled', true),
+    ])
+
+    const strategyBotIds = new Set((strategyBots || []).map((bot: any) => bot.id))
+    const executionBot = (executionBots || [])[0] || null
+
+    const linkedRoutes = marketRoutes.map((route: any) => {
+      const observedRoute = (routeCatalog || []).find((candidate: any) =>
+        candidate.chain === route.chain &&
+        candidate.pair === route.pair &&
+        candidate.route_type === 'orderbook' &&
+        candidate.strategy_bot_id &&
+        strategyBotIds.has(candidate.strategy_bot_id)
+      ) || null
+
+      const executionRoute = (routeCatalog || [])
+        .filter((candidate: any) =>
+          candidate.chain === route.chain &&
+          candidate.pair === route.pair &&
+          candidate.enabled === true &&
+          candidate.strategy_bot_id &&
+          strategyBotIds.has(candidate.strategy_bot_id) &&
+          candidate.builder_enabled === true &&
+          !!candidate.transaction_builder &&
+          ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
+        )
+        .sort((a: any, b: any) => Number(b.builder_enabled) - Number(a.builder_enabled))[0] || null
+
+      return {
+        ...route,
+        observed_route_id: observedRoute?.id || null,
+        execution_route_id: executionRoute?.id || null,
+        strategy_bot_id: executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id || null,
+        execution_bot_config_id: executionBot?.id || null,
+      }
+    })
+
+    const observations = linkedRoutes
+      .filter((route: any) => route.qualifying === true)
+      .map((route: any) => ({
+        owner_id: user.id,
+        bot_skill_id: null,
+        source_key: 'public_exchange_order_books',
+        domain: 'execution_scout',
+        symbol: route.pair,
+        metric: 'spread_pct',
+        value: route.spreadPct,
+        observed_at: new Date().toISOString(),
+        metadata: {
+          chain: route.chain,
+          pair: route.pair,
+          buy_exchange: route.buyExchange,
+          sell_exchange: route.sellExchange,
+          buy_price: route.buyPrice,
+          sell_price: route.sellPrice,
+          spread_pct: route.spreadPct,
+          latency_ms: route.latency,
+          quotes: route.quotes,
+          source: 'public_exchange_order_books',
+        },
+        observed_route_id: route.observed_route_id,
+        execution_route_id: route.execution_route_id,
+        strategy_bot_id: route.strategy_bot_id,
+        execution_bot_config_id: route.execution_bot_config_id,
+        qualifying: true,
+      }))
+
+    let observation_persisted = 0
+    if (observations.length > 0) {
+      const { data: savedObservations, error: observationError } = await admin
+        .from('strategy_observations')
+        .insert(observations)
+        .select('id')
+      if (!observationError) observation_persisted = savedObservations?.length || 0
+    }
+
+    const routes = linkedRoutes
     const successfulQuotes = snapshots.flatMap((snapshot) => snapshot.quotes || [])
     const averageLatency = successfulQuotes.length
       ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
@@ -249,6 +342,11 @@ Deno.serve(async (req) => {
       qualifying_spread_pct: qualifyingThreshold,
       latency_ms: averageLatency,
       routes,
+      observer_execution_links: {
+        observation_persisted,
+        execution_bot_config_id: executionBot?.id || null,
+        linked_route_count: linkedRoutes.filter((route: any) => route.observed_route_id || route.execution_route_id).length,
+      },
       market_snapshot: snapshots,
       live_quote_count: successfulQuotes.length,
       live_pair_count: snapshots.filter((snapshot) => snapshot.quote_count > 0).length,
