@@ -71,9 +71,10 @@ const FEE_PCT = 0.1
 // a single object. Normalize before any spread/iteration so one bad row
 // cannot blank the entire dashboard.
 function asBlockArray(value) {
-  if (Array.isArray(value)) return value
-  if (value && typeof value === 'object') return [value]
-  return []
+  const items = Array.isArray(value)
+    ? value
+    : (value && typeof value === 'object' ? [value] : [])
+  return items.filter((item) => item && typeof item === 'object' && typeof item.label === 'string')
 }
 
 function blockMatches(block, route) {
