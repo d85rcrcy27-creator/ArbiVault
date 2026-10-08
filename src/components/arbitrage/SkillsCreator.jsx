@@ -131,7 +131,7 @@ export default function SkillsCreator({ routes = [], onExecute }) {
       if (!active) return
       setStrategies(rows)
       setLoading(false)
-      const emptyBacktests = rows.filter((skill) => !skill.backtest?.samples)
+      const emptyBacktests = rows.filter((skill) => !skill.backtest?.samples || skill.backtest?.samples === 1000)
       if (emptyBacktests.length) {
         Promise.all(emptyBacktests.map(async (skill) => {
           try {
