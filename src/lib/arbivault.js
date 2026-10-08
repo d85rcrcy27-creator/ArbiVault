@@ -26,22 +26,19 @@ export async function updateBotConfig(id, updates) {
   if (error) throw error
   return data
 }
-export async function createBotSkill({ botConfigId = null, name, description = '', conditions = [], actions = [], riskLimits = {}, cooldownSeconds = 30, strategyFamily = null, dataSources = [], observationOnly = true, discoveryEnabled = false }) {
-  const ownerId = await currentUserId()
-  const { data, error } = await supabase.from('bot_skills').insert({
-    owner_id: ownerId,
-    bot_config_id: botConfigId,
-    name,
-    description,
-    conditions,
-    actions,
-    risk_limits: riskLimits,
-    cooldown_seconds: cooldownSeconds,
-    strategy_family: strategyFamily,
-    data_sources: dataSources,
-    observation_only: observationOnly,
-    discovery_enabled: discoveryEnabled,
-  }).select().single()
+export async function createBotSkill({ name, description = '', conditions = [], actions = [], riskLimits = {}, cooldownSeconds = 30, strategyFamily = null, dataSources = [], observationOnly = true, discoveryEnabled = false }) {
+  const { data, error } = await supabase.rpc('create_strategy_bot_for_skill', {
+    p_name: name,
+    p_description: description,
+    p_conditions: conditions,
+    p_actions: actions,
+    p_risk_limits: riskLimits,
+    p_cooldown_seconds: cooldownSeconds,
+    p_strategy_family: strategyFamily,
+    p_data_sources: dataSources,
+    p_observation_only: observationOnly,
+    p_discovery_enabled: discoveryEnabled,
+  })
   if (error) throw error
   return data
 }
