@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Plus, Trash2, ArrowRight, FlaskConical, GripVertical } from 'lucide-react'
+import { Plus, Trash2, ArrowRight, FlaskConical, GripVertical, Pencil, X } from 'lucide-react'
 import { createBotSkill, deleteBotSkill, listBotSkills, updateBotSkill, runBacktest } from '@/lib/arbivault'
 import { supabase } from '@/lib/supabase'
 
@@ -99,13 +99,13 @@ function blockMatches(block, route) {
   return false
 }
 
-function LogicBlock({ block, onRemove, index }) {
+function LogicBlock({ block, onRemove, onChange, index }) {
   const isCondition = block.type === 'condition'
   return (
     <div className="group flex items-center gap-2 rounded border border-[#232738] bg-[#12141D] px-2.5 py-2">
       <GripVertical className="h-3.5 w-3.5 shrink-0 cursor-grab text-[#3a4060]" />
       <span className={`shrink-0 font-mono text-[0.6875rem] font-semibold uppercase tracking-wide ${isCondition ? 'text-[#FFB800]' : 'text-[#00F0FF]'}`}>{block.label}</span>
-      {isCondition && <><input value={block.value || ''} onChange={() => {}} readOnly className="w-16 rounded border border-[#232738] bg-[#090A0F] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[#e0e4f0]" /><span className="font-mono text-[0.625rem] text-[#5a6080]">{block.unit}</span></>}
+      {isCondition && <><input value={block.value || ''} onChange={(e) => onChange(index, e.target.value)} inputMode="decimal" className="w-20 rounded border border-[#232738] bg-[#090A0F] px-1.5 py-0.5 font-mono text-[0.6875rem] text-[#e0e4f0] outline-none focus:border-[#00F0FF]" /><span className="font-mono text-[0.625rem] text-[#5a6080]">{block.unit}</span></>}
       <button onClick={() => onRemove(index)} className="ml-auto text-[#3a4060] hover:text-[#FF4D4D]"><Trash2 className="h-3 w-3" /></button>
     </div>
   )
@@ -116,6 +116,8 @@ export default function SkillsCreator({ routes = [], onExecute }) {
   const [draftBlocks, setDraftBlocks] = useState([])
   const [draftName, setDraftName] = useState('')
   const [draftPreset, setDraftPreset] = useState(null)
+  const [editingSkillId, setEditingSkillId] = useState(null)
+  const [draftExecutionEnabled, setDraftExecutionEnabled] = useState(false)
   const [draftSources, setDraftSources] = useState([])
   const [draftFamily, setDraftFamily] = useState(null)
   const [draftObservationOnly, setDraftObservationOnly] = useState(true)
@@ -150,14 +152,16 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     setDraftFamily(preset.family || null)
     setDraftObservationOnly(preset.observationOnly ?? false)
     setDraftDiscoveryEnabled(preset.discoveryEnabled ?? false)
+    setDraftExecutionEnabled(!(preset.observationOnly ?? false))
   }
   const removeBlock = (index) => setDraftBlocks((prev) => prev.filter((_, i) => i !== index))
+  const updateBlock = (index, value) => setDraftBlocks((prev) => prev.map((block, i) => i === index ? { ...block, value } : block))
 
   const saveStrategy = async () => {
     if (!draftName.trim() || (!draftBlocks.length && !draftDiscoveryEnabled)) return
     try {
       setError('')
-      const saved = await createBotSkill({
+      const payload = {
         name: draftName.trim(),
         description: draftPreset?.description || '',
         conditions: draftBlocks.filter((b) => b.type === 'condition'),
@@ -166,10 +170,24 @@ export default function SkillsCreator({ routes = [], onExecute }) {
         cooldownSeconds: 30,
         strategyFamily: draftFamily,
         dataSources: draftSources,
-        observationOnly: draftObservationOnly,
+        observationOnly: !draftExecutionEnabled,
         discoveryEnabled: draftDiscoveryEnabled,
-      })
-      setStrategies((prev) => [...prev, saved])
+      }
+      const saved = editingSkillId
+        ? await updateBotSkill(editingSkillId, {
+            name: payload.name,
+            description: payload.description,
+            conditions: payload.conditions,
+            actions: payload.actions,
+            risk_limits: payload.riskLimits,
+            cooldown_seconds: payload.cooldownSeconds,
+            strategy_family: payload.strategyFamily,
+            data_sources: payload.dataSources,
+            observation_only: payload.observationOnly,
+            discovery_enabled: payload.discoveryEnabled,
+          })
+        : await createBotSkill(payload)
+      setStrategies((prev) => editingSkillId ? prev.map((s) => s.id === editingSkillId ? saved : s) : [...prev, saved])
       setDraftBlocks([])
       setDraftName('')
       setDraftPreset(null)
@@ -177,6 +195,8 @@ export default function SkillsCreator({ routes = [], onExecute }) {
       setDraftFamily(null)
       setDraftObservationOnly(true)
       setDraftDiscoveryEnabled(false)
+      setDraftExecutionEnabled(false)
+      setEditingSkillId(null)
     } catch (e) { setError(e.message || 'Unable to save skill') }
   }
 
@@ -251,15 +271,21 @@ export default function SkillsCreator({ routes = [], onExecute }) {
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Public Data Strategy Packs</span><div className="flex flex-wrap gap-1.5">{PUBLIC_STRATEGY_PRESETS.map((p) => <button key={p.id} onClick={() => applyPreset(p)} title={p.description} className={`rounded border px-2 py-1 font-mono text-[0.625rem] ${draftPreset?.id === p.id ? 'border-[#00FF87]/50 bg-[#00FF87]/10 text-[#00FF87]' : 'border-[#232738] text-[#8a90b0] hover:border-[#00FF87]/40'}`}>{p.name}</button>)}</div>{draftSources.length > 0 && <div className="mt-2 font-mono text-[0.5625rem] text-[#5a6080]">Sources: {draftSources.join(' · ')} · {draftObservationOnly ? 'OBSERVE-ONLY' : 'EXECUTION-CAPABLE'}</div>}</div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Conditions</span><div className="flex flex-wrap gap-1.5">{CONDITION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#FFB800]/30 bg-[#FFB800]/5 px-2 py-1 font-mono text-[0.625rem] text-[#FFB800]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
           <div className="mb-3"><span className="mb-1.5 block font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Actions</span><div className="flex flex-wrap gap-1.5">{ACTION_BLOCKS.map((b) => <button key={b.id} onClick={() => addBlock(b)} className="flex items-center gap-1 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 px-2 py-1 font-mono text-[0.625rem] text-[#00F0FF]"><Plus className="h-2.5 w-2.5" />{b.label}</button>)}</div></div>
-          {draftBlocks.length > 0 && <div className="mb-3 space-y-1.5 rounded border border-[#232738] bg-[#090A0F] p-2.5">{draftBlocks.map((b, i) => <div key={i}><LogicBlock block={b} onRemove={removeBlock} index={i} />{i < draftBlocks.length - 1 && <div className="flex justify-center py-0.5"><ArrowRight className="h-2.5 w-2.5 rotate-90 text-[#3a4060]" /></div>}</div>)}</div>}
-          <button onClick={saveStrategy} disabled={!draftName.trim() || (!draftBlocks.length && !draftDiscoveryEnabled) || loading} className="w-full rounded border border-[#00F0FF] bg-[#00F0FF]/10 py-2 font-mono text-[0.6875rem] font-semibold uppercase text-[#00F0FF] disabled:opacity-40">Deploy Skill</button>
+          <label className="mb-3 flex cursor-pointer items-center gap-2 font-mono text-[0.625rem] uppercase tracking-wider text-[#8a90b0]">
+            <input type="checkbox" checked={draftExecutionEnabled} onChange={(e) => setDraftExecutionEnabled(e.target.checked)} />
+            Execution-capable bot
+            <span className="text-[#3a4060]">(research stays observation-only unless enabled)</span>
+          </label>
+          {draftBlocks.length > 0 && <div className="mb-3 space-y-1.5 rounded border border-[#232738] bg-[#090A0F] p-2.5">{draftBlocks.map((b, i) => <div key={i}><LogicBlock block={b} onRemove={removeBlock} onChange={updateBlock} index={i} />{i < draftBlocks.length - 1 && <div className="flex justify-center py-0.5"><ArrowRight className="h-2.5 w-2.5 rotate-90 text-[#3a4060]" /></div>}</div>)}</div>}
+          <button onClick={saveStrategy} disabled={!draftName.trim() || (!draftBlocks.length && !draftDiscoveryEnabled) || loading} className="w-full rounded border border-[#00F0FF] bg-[#00F0FF]/10 py-2 font-mono text-[0.6875rem] font-semibold uppercase text-[#00F0FF] disabled:opacity-40">{editingSkillId ? 'Save Strategy Bot' : 'Deploy Strategy Bot'}</button>
         </div>
         <div className="p-4"><span className="mb-3 block font-mono text-[0.6875rem] font-semibold uppercase tracking-wider text-[#8a90b0]">Saved Skills</span><div className="space-y-2">
           {strategies.map((s) => <div key={s.id} className={`rounded border p-3 ${s.active ? 'border-[#00FF87]/30 bg-[#00FF87]/5' : 'border-[#232738] bg-[#12141D]'}`}>
-            <div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2"><button onClick={() => toggleStrategy(s)} className={`flex h-4 w-7 items-center rounded-full p-0.5 ${s.active ? 'bg-[#00FF87]/30' : 'bg-[#232738]'}`}><span className={`h-3 w-3 rounded-full ${s.active ? 'translate-x-3 bg-[#00FF87]' : 'bg-[#5a6080]'}`} /></button><span className="font-mono text-xs font-semibold text-[#e0e4f0]">{s.name}</span></div><button onClick={() => removeStrategy(s.id)} className="text-[#3a4060] hover:text-[#FF4D4D]"><Trash2 className="h-3 w-3" /></button></div>
+            <div className="mb-2 flex items-center justify-between"><div className="flex items-center gap-2"><button onClick={() => toggleStrategy(s)} className={`flex h-4 w-7 items-center rounded-full p-0.5 ${s.active ? 'bg-[#00FF87]/30' : 'bg-[#232738]'}`}><span className={`h-3 w-3 rounded-full ${s.active ? 'translate-x-3 bg-[#00FF87]' : 'bg-[#5a6080]'}`} /></button><span className="font-mono text-xs font-semibold text-[#e0e4f0]">{s.name}</span></div><div className="flex items-center gap-2"><button onClick={() => { setEditingSkillId(s.id); setDraftName(s.name); setDraftBlocks([...asBlockArray(s.conditions), ...asBlockArray(s.actions)]); setDraftPreset(null); setDraftSources(Array.isArray(s.data_sources) ? s.data_sources : []); setDraftFamily(s.strategy_family || null); setDraftObservationOnly(s.observation_only !== false); setDraftDiscoveryEnabled(s.discovery_enabled === true); setDraftExecutionEnabled(s.observation_only === false); }} className="text-[#8a90b0] hover:text-[#00F0FF]"><Pencil className="h-3 w-3" /></button><button onClick={() => removeStrategy(s.id)} className="text-[#3a4060] hover:text-[#FF4D4D]"><Trash2 className="h-3 w-3" /></button></div></div>
             <div className="mb-2 flex flex-wrap gap-1">{[...asBlockArray(s.conditions), ...asBlockArray(s.actions)].map((b, i) => <span key={i} className={`rounded border px-1.5 py-0.5 font-mono text-[0.5625rem] ${b.type === 'condition' ? 'border-[#FFB800]/30 text-[#FFB800]' : 'border-[#00F0FF]/30 text-[#00F0FF]'}`}>{b.label}{b.value ? ` ${b.value}${b.unit || ''}` : ''}</span>)}</div>
             {Array.isArray(s.data_sources) && s.data_sources.length > 0 && <div className="mb-2 font-mono text-[0.55rem] uppercase tracking-wider text-[#5a6080]">DATA: {s.data_sources.join(' · ')} · {s.discovery_enabled ? 'DISCOVERY' : 'STRATEGY'}</div>}
             <div className="flex items-center justify-between"><div className="font-mono text-[0.625rem] text-[#5a6080]">{s.backtest ? <>WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Trades: {s.backtest.trades} · Net PnL: <span className={s.backtest.pnl >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.pnl).toFixed(2)}</span></> : 'No backtest yet'}</div><button onClick={() => runSkillBacktest(s)} disabled={loading} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40"><FlaskConical className="h-3 w-3" />Backtest</button></div>
+            {editingSkillId === s.id && <div className="mb-2 flex items-center gap-1 font-mono text-[0.55rem] uppercase tracking-wider text-[#FFB800]"><X className="h-3 w-3" />Editing this strategy bot</div>}
             {s.backtest?.samples > 0 && <div className="mt-1 font-mono text-[0.5rem] uppercase tracking-wider text-[#3a4060]">REAL DATA · {s.backtest.samples} observations · {s.backtest.data_scope || 'historical feed'} · {s.backtest.first_observation ? new Date(s.backtest.first_observation).toLocaleString() : '—'} → {s.backtest.last_observation ? new Date(s.backtest.last_observation).toLocaleString() : '—'}</div>}
           </div>)}
           {!strategies.length && <p className="font-mono text-[0.65rem] text-[#3a4060]">No saved skills yet.</p>}
