@@ -29,6 +29,38 @@ async function authorized(req: Request) {
   return !!data && token === data
 }
 
+async function confirmBroadcastAttempt(attemptId: string, txHash: string) {
+  const token = (await supabase.rpc('get_bot_cron_token')).data
+  const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/arbivault-execution-confirm`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-arbivault-cron-token': String(token || ''),
+    },
+    body: JSON.stringify({ execution_attempt_id: attemptId, tx_hash: txHash }),
+  })
+  const body = await response.json().catch(() => ({}))
+  return { ok: response.ok, status: response.status, ...body }
+}
+
+async function settleExistingBroadcasts() {
+  const { data: attempts, error } = await supabase
+    .from('execution_attempts')
+    .select('id,tx_hash,status')
+    .eq('execution_mode', 'on_chain')
+    .eq('status', 'broadcast')
+    .not('tx_hash', 'is', null)
+    .order('broadcast_at', { ascending: true })
+    .limit(20)
+  if (error) throw error
+  const results = []
+  for (const attempt of attempts || []) {
+    if (!attempt.tx_hash) continue
+    results.push({ execution_attempt_id: attempt.id, ...(await confirmBroadcastAttempt(attempt.id, attempt.tx_hash)) })
+  }
+  return results
+}
+
 async function invokeAuthorizedSigners() {
   const { data: requests, error } = await supabase
     .from('signing_requests')
@@ -532,6 +564,11 @@ export default {
       }
     }
 
+    const settledBroadcasts = await settleExistingBroadcasts().catch((error) => [{
+      invoked: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }])
+
     const signerInvocations = await invokeAuthorizedSigners().catch((error) => [{
       invoked: false,
       reason: error instanceof Error ? error.message : String(error),
@@ -540,6 +577,7 @@ export default {
     return Response.json({
       ok: true,
       worker: 'execution',
+      settled_broadcasts: settledBroadcasts,
       signer_invocations: signerInvocations,
       priority: 'early_bird',
       live_execution_policy: executionWindowActive ? String(policy?.mode || 'configured') : 'policy_blocked',
