@@ -72,3 +72,52 @@ $$;
 
 revoke all on function public.create_strategy_bot_for_skill(text,text,jsonb,jsonb,jsonb,integer,text,jsonb,boolean,boolean) from public;
 grant execute on function public.create_strategy_bot_for_skill(text,text,jsonb,jsonb,jsonb,integer,text,jsonb,boolean,boolean) to authenticated;
+
+-- Keep the linked strategy bot aligned when the skill's editable settings change.
+create or replace function public.sync_strategy_bot_for_skill(p_skill_id uuid)
+returns public.arbivault_strategy_bots
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  skill public.bot_skills;
+  bot public.arbivault_strategy_bots;
+begin
+  if uid is null then raise exception 'authentication required'; end if;
+  select * into skill from public.bot_skills where id=p_skill_id and owner_id=uid;
+  if skill.id is null or skill.strategy_bot_id is null then raise exception 'strategy bot not found'; end if;
+  update public.arbivault_strategy_bots
+  set enabled=skill.active,
+      execution_enabled=not skill.observation_only,
+      updated_at=now()
+  where id=skill.strategy_bot_id and owner_id=uid
+  returning * into bot;
+  if bot.id is null then raise exception 'strategy bot not found'; end if;
+  return bot;
+end;
+$$;
+revoke all on function public.sync_strategy_bot_for_skill(uuid) from public;
+grant execute on function public.sync_strategy_bot_for_skill(uuid) to authenticated;
+
+create or replace function public.delete_strategy_bot_for_skill(p_skill_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  uid uuid := auth.uid();
+  bot_id uuid;
+begin
+  if uid is null then raise exception 'authentication required'; end if;
+  select strategy_bot_id into bot_id from public.bot_skills where id=p_skill_id and owner_id=uid;
+  delete from public.bot_skills where id=p_skill_id and owner_id=uid;
+  if bot_id is not null then
+    delete from public.arbivault_strategy_bots where id=bot_id and owner_id=uid;
+  end if;
+end;
+$$;
+revoke all on function public.delete_strategy_bot_for_skill(uuid) from public;
+grant execute on function public.delete_strategy_bot_for_skill(uuid) to authenticated;
