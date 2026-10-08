@@ -309,163 +309,67 @@ export default {
 
         if (wallets.error) throw wallets.error
 
-        for (const pair of PAIRS.filter((candidate) => chains.includes(candidate.chain))) {
-          const quote = await spreadFor(pair)
-          if (!quote?.qualifying) continue
+        // Execution consumes only explicitly executable strategy routes.
+        // Research/observer observations are never an execution trigger.
+        const executionCandidates = (routes || []).filter((candidate: any) =>
+          chains.includes(candidate.chain) &&
+          candidate.enabled === true &&
+          candidate.strategy_bot_id &&
+          candidate.builder_enabled === true &&
+          !!candidate.transaction_builder &&
+          candidate.discovery_only !== true &&
+          ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
+        )
 
-          // The market observer route and the executable route are distinct.
-          // The observer is the market/CEX route that was actually seen; the
-          // execution route is the strategy route that has a real transaction builder.
-          const observedRoute = (routes || [])
-            .filter((candidate: any) =>
-              candidate.chain === quote.chain &&
-              candidate.pair === quote.pair &&
-              candidate.enabled === true &&
-              candidate.route_type === 'orderbook' &&
-              candidate.strategy_bot_id
-            )[0] || null
-
-          const executionRoute = (routes || [])
-            .filter((candidate: any) =>
-              candidate.chain === quote.chain &&
-              candidate.pair === quote.pair &&
-              candidate.enabled === true &&
-              candidate.strategy_bot_id &&
-              candidate.builder_enabled === true &&
-              !!candidate.transaction_builder &&
-              ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
-            )
-            .sort((a: any, b: any) => {
-              const aBuilder = a.builder_enabled === true && !!a.transaction_builder ? 1 : 0
-              const bBuilder = b.builder_enabled === true && !!b.transaction_builder ? 1 : 0
-              return bBuilder - aBuilder
-            })[0] || null
-
-          const route = executionRoute || observedRoute
-
-          const strategyBot = (executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id)
-            ? (strategyBots || []).find((candidate: any) =>
-                candidate.id === (executionRoute?.strategy_bot_id || observedRoute?.strategy_bot_id)
-              )
-            : null
-
-          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === quote.chain) || null
+        for (const executionRoute of executionCandidates) {
+          const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
+          if (!pair) continue
+          const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
+          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
           const research: any = {
-            ...quote,
-            observed_route_id: observedRoute?.id || null,
-            execution_route_id: executionRoute?.id || null,
-            route_id: executionRoute?.id || observedRoute?.id || null,
-            strategy_bot_id: strategyBot?.id || null,
-            strategy: strategyBot?.strategy || executionRoute?.strategy || observedRoute?.strategy || null,
-            research_layer: 'A Deep Mind',
-            builder: route?.transaction_builder || null,
+            chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
+            strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
+            research_layer: null, builder: executionRoute.transaction_builder, execution_source: 'explicit_execution_route',
           }
-
           let dexPreflight: any = null
           let builderError: string | null = null
-
-          if (
-            executionRoute?.builder_enabled === true &&
-            executionRoute?.transaction_builder &&
-            wallet
-          ) {
+          if (wallet) {
             try {
-              dexPreflight = await buildDexPreflight(
-                executionRoute,
-                wallet.id,
-                wallet.address,
-                pair.probe,
-              )
+              dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
               research.dex_preflight = dexPreflight
             } catch (e) {
               builderError = e instanceof Error ? e.message : String(e)
               research.dex_preflight_error = builderError
             }
           }
-
-          const observationInsert = await supabase
-            .from('strategy_observations')
-            .insert({
-              owner_id: bot.owner_id,
-              bot_skill_id: null,
-              source_key: 'crypto_exchanges',
-              domain: 'execution_scout',
-              symbol: quote.pair,
-              metric: 'spread_pct',
-              value: quote.spread_pct,
-              observed_at: now.toISOString(),
-              metadata: research,
-              observed_route_id: observedRoute?.id || null,
-              execution_route_id: executionRoute?.id || null,
-              strategy_bot_id: strategyBot?.id || null,
-              execution_bot_config_id: bot.id,
-              qualifying: quote.qualifying === true,
-            })
-            .select('id')
-            .single()
-
-          opportunities.push({
-            ...research,
-            observation_saved: !observationInsert.error,
-          })
-
           const cexExecutionAdapterConfigured = false
-          const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash &&
-            !!dexPreflight?.buy?.transaction_payload_hash
+          const transactionBuilt = !!dexPreflight?.sell?.transaction_payload_hash && !!dexPreflight?.buy?.transaction_payload_hash
+          const executionGate = !zeroCapitalWindow ? 'zero_capital_policy_not_active'
+            : !strategyBot ? 'strategy_bot_not_linked'
+            : executionRoute.discovery_only ? 'strategy_route_discovery_only'
+            : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
+            : builderError ? 'transaction_builder_preflight_failed'
+            : !['dex_cex', 'cyclic', 'multi_venue'].includes(executionRoute.route_type) ? 'route_requires_atomic_multileg_builder'
+            : !transactionBuilt ? 'transaction_builder_incomplete'
+            : !cexExecutionAdapterConfigured ? 'cex_execution_adapter_missing'
+            : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
+          const payloadHash = await sha256(JSON.stringify(research))
+          const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash || dexPreflight?.buy?.transaction_payload_hash || null
+          await supabase.from('execution_attempts').insert({
+            owner_id: bot.owner_id, adapter_id: null, strategy_bot_id: strategyBot?.id || null, observation_id: null,
+            observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain, execution_mode: 'cex',
+            status: executionGate === 'eligible' ? 'validated' : 'blocked', opportunity_payload_hash: payloadHash,
+            transaction_payload_hash: txPayloadHash, capital_used: 0, failure_reason: executionGate === 'eligible' ? null : executionGate,
+            validated_at: now.toISOString(),
+          })
+          opportunities.push({ ...research, execution_gate: executionGate, execution_route_id: executionRoute.id, observation_saved: false })
 
-          const executionGate = !zeroCapitalWindow
-            ? 'zero_capital_policy_not_active'
-            : !strategyBot
-              ? 'strategy_bot_not_linked'
-              : !observedRoute
-                ? 'observed_route_not_linked'
-                : !executionRoute
-                  ? 'execution_route_not_linked'
-                  : executionRoute.discovery_only
-                    ? 'strategy_route_discovery_only'
-                    : !executionRoute.builder_enabled || !executionRoute.transaction_builder
-                      ? 'transaction_builder_not_configured'
-                      : builderError
-                        ? 'transaction_builder_preflight_failed'
-                        : !['dex_cex', 'cyclic', 'multi_venue'].includes(executionRoute.route_type)
-                          ? 'route_requires_atomic_multileg_builder'
-                          : !transactionBuilt
-                          ? 'transaction_builder_incomplete'
-                          : !cexExecutionAdapterConfigured
-                            ? 'cex_execution_adapter_missing'
-                            : !signerAdapters.length
-                              ? 'internal_signer_unavailable'
-                              : 'eligible'
-
-          if (executionGate !== 'eligible') {
-            const payloadHash = await sha256(JSON.stringify(research))
-            const txPayloadHash = dexPreflight?.sell?.transaction_payload_hash ||
-              dexPreflight?.buy?.transaction_payload_hash ||
-              null
-
-            await supabase.from('execution_attempts').insert({
-              owner_id: bot.owner_id,
-              adapter_id: null,
-              strategy_bot_id: strategyBot?.id || null,
-              observation_id: observationInsert.data?.[0]?.id || null,
-              observed_route_id: observedRoute?.id || null,
-              execution_route_id: executionRoute?.id || null,
-              chain: quote.chain,
-              execution_mode: 'cex',
-              status: 'blocked',
-              opportunity_payload_hash: payloadHash,
-              transaction_payload_hash: txPayloadHash,
-              capital_used: 0,
-              failure_reason: executionGate,
-              validated_at: now.toISOString(),
-            })
-          }
         }
 
         const output = {
           ok: true,
           execution_mode: zeroCapitalWindow ? 'builder_preflighted' : 'blocked_policy',
-          research_layer: 'A Deep Mind',
+          research_layer: null,
           opportunities,
           controls: {
             withdrawal_path_available_to_bot: false,
@@ -494,9 +398,7 @@ export default {
           .update({
             last_run_at: new Date().toISOString(),
             last_success_at: new Date().toISOString(),
-            last_error: opportunities.some((item) => item.route_id)
-              ? null
-              : 'no_qualifying_research_route',
+            last_error: opportunities.length ? null : 'no_explicit_execution_route',
           })
           .eq('id', bot.id)
 
@@ -530,7 +432,7 @@ export default {
       ok: true,
       worker: 'execution',
       priority: 'early_bird',
-      research_layer: 'A Deep Mind',
+      research_layer: null,
       live_execution_policy: zeroCapitalWindow ? 'zero_capital_for_initial_24h' : 'policy_blocked',
       actual_broadcasts: 0,
       confirmed_profits: 0,
