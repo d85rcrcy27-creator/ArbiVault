@@ -44,7 +44,9 @@ async function coinbaseDaily(product: string) {
     }
     cursor = windowEnd + 1;
   }
-  return out;
+  const unique = new Map<string, { ts: number; close: number; volume: number }>();
+  for (const row of out) unique.set(dayKey(row.ts), row);
+  return [...unique.values()].sort((a, b) => a.ts - b.ts);
 }
 
 async function krakenDaily(pair: string) {
@@ -65,7 +67,9 @@ async function krakenDaily(pair: string) {
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return out;
+  const unique = new Map<string, { ts: number; close: number; volume: number }>();
+  for (const row of out) unique.set(dayKey(row.ts), row);
+  return [...unique.values()].sort((a, b) => a.ts - b.ts);
 }
 
 function dayKey(ts: number) {
