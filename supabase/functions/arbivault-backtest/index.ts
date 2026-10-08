@@ -29,24 +29,41 @@ Deno.serve(async (req) => {
     }
 
     const since = new Date(Date.now() - days * 86400000).toISOString();
-    let query = admin
+    const baseQuery = () => admin
       .from("strategy_observations")
-      .select("id,bot_skill_id,value,observed_at,metadata")
+      .select("id,bot_skill_id,source_key,domain,symbol,metric,value,observed_at,metadata")
       .eq("owner_id", userData.user.id)
       .eq("metric", "spread_pct")
       .gte("observed_at", since)
       .order("observed_at", { ascending: true })
       .limit(10000);
 
-    if (skillId) query = query.eq("bot_skill_id", skillId);
+    // Live scout observations are intentionally stored without a skill linkage.
+    // A skill-specific backtest therefore uses linked samples when they exist,
+    // otherwise it falls back to the owner's real historical market observations.
+    let { data: observations, error } = skillId
+      ? await baseQuery().eq("bot_skill_id", skillId)
+      : await baseQuery();
 
-    const { data: observations, error } = await query;
     if (error) return json({ error: error.message }, 500);
+
+    let dataScope = skillId ? "skill_linked_observations" : "owner_market_observations";
+    let fallbackUsed = false;
+
+    if (skillId && !(observations || []).length) {
+      const fallback = await baseQuery();
+      if (fallback.error) return json({ error: fallback.error.message }, 500);
+      observations = fallback.data || [];
+      dataScope = "owner_market_observations_fallback";
+      fallbackUsed = true;
+    }
 
     const samples = (observations || [])
       .map((row: any) => ({
         spread: Number(row.value),
         observed_at: row.observed_at,
+        source_key: row.source_key || row.metadata?.source_key || null,
+        symbol: row.symbol || row.metadata?.symbol || null,
         metadata: row.metadata || {},
       }))
       .filter((row: any) => Number.isFinite(row.spread));
@@ -63,6 +80,9 @@ Deno.serve(async (req) => {
     return json({
       ok: true,
       source: "historical_strategy_observations",
+      data_scope: dataScope,
+      fallback_used: fallbackUsed,
+      source_keys: [...new Set(samples.map((row: any) => row.metadata?.source_key || row.source_key).filter(Boolean))],
       skill_id: skillId || null,
       days,
       threshold_pct: threshold,
