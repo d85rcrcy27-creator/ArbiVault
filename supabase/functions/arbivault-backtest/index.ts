@@ -119,13 +119,15 @@ Deno.serve(async (req) => {
       : null;
 
     const riskThreshold = Number(skill?.risk_limits?.min_profit_threshold);
-    const threshold = Number.isFinite(requestedThreshold)
-      ? requestedThreshold
-      : Number.isFinite(spreadThreshold)
-        ? spreadThreshold
-        : Number.isFinite(riskThreshold)
-          ? riskThreshold
-          : null;
+    // The skill's persisted execution criteria are authoritative when a skill_id is provided.
+    // Client-supplied threshold is only a fallback for ad-hoc backtests without a skill.
+    const threshold = skillId
+      ? (Number.isFinite(spreadThreshold)
+          ? spreadThreshold
+          : Number.isFinite(riskThreshold)
+            ? riskThreshold
+            : null)
+      : (Number.isFinite(requestedThreshold) ? requestedThreshold : null);
 
     const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
     const FEE_PCT = 0.10;
