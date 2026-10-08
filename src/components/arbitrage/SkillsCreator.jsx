@@ -235,9 +235,13 @@ export default function SkillsCreator({ routes = [], onExecute }) {
     const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
     try {
       setError('')
-      const backtest = await runBacktest({ skillId: skill.id, threshold, days: 30 })
-      const saved = await updateBotSkill(skill.id, { backtest: { ...backtest, ranAt: new Date().toISOString() } })
-      setStrategies((prev) => prev.map((s) => s.id === skill.id ? saved : s))
+      const backtest = await runBacktest({ threshold, days: 30 })
+      // Backtest is research-only and does not require authentication or persist
+      // results to the private strategy record. Keep the result local to the UI.
+      setStrategies((prev) => prev.map((s) => s.id === skill.id
+        ? { ...s, backtest: { ...backtest, ranAt: new Date().toISOString() } }
+        : s
+      ))
     } catch (e) { setError(e.message || 'Unable to save backtest') }
   }
 
