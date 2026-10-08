@@ -24,7 +24,7 @@ const ACTION_BLOCKS = [
 // silently discard the strategies that existed in the original app.
 const LEGACY_STRATEGY_PRESETS = [
   { id: 'legacy_cross_chain_latency', name: 'Cross-Chain Latency', description: 'Exploit measurable cross-chain price/latency dislocations with bounded inventory and timing checks.' },
-  { id: 'legacy_liquidity_fragmentation', name: 'Liquidity Fragmentation', description: 'Compare fragmented liquidity across venues and route qualifying spreads.' },
+  { id: 'legacy_liquidity_fragmentation', name: 'Liquidity Fragmentation', description: 'Compare fragmented liquidity across venues and route executable spreads.' },
   { id: 'legacy_mempool_sandwich', name: 'Mempool Sandwich', description: 'Detect mempool ordering opportunities subject to strict MEV and risk controls.' },
   { id: 'legacy_flash_swap', name: 'Flash Swap', description: 'Atomic flash-swap route with repayment and profitability checks.' },
   { id: 'legacy_flash_loan', name: 'Flash Loan', description: 'Atomic borrow → arbitrage → repay strategy with profitability and gas checks.' },
