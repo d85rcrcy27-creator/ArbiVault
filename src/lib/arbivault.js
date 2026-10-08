@@ -45,10 +45,11 @@ export async function createBotSkill({ name, description = '', conditions = [], 
 export async function updateBotSkill(id, updates) {
   const { data, error } = await supabase.from('bot_skills').update(updates).eq('id', id).select().single()
   if (error) throw error
+  await supabase.rpc('sync_strategy_bot_for_skill', { p_skill_id: id })
   return data
 }
 export async function deleteBotSkill(id) {
-  const { error } = await supabase.from('bot_skills').delete().eq('id', id)
+  const { error } = await supabase.rpc('delete_strategy_bot_for_skill', { p_skill_id: id })
   if (error) throw error
 }
 export async function listBotSkills() {
