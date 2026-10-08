@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { listTrades } from '@/lib/arbivault'
+import { supabase } from '@/lib/supabase'
 
 const EMPTY_ROUTES = []
 const TICK_MS = 1000
@@ -45,12 +46,30 @@ export function useLiveMarketData() {
     return () => { active = false }
   }, [])
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      setStatus((current) => current === 'live' ? current : 'live')
-    }, TICK_MS)
-    return () => clearInterval(id)
+  const loadMarket = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('arbivault-market-scout', { body: {} })
+      if (error) throw error
+      const nextRoutes = Array.isArray(data?.routes) ? data.routes : []
+      setRoutes(nextRoutes)
+      setConnected({
+        binance: Array.isArray(data?.feeds) && data.feeds.includes('binance'),
+        bybit: Array.isArray(data?.feeds) && data.feeds.includes('bybit'),
+        okx: Array.isArray(data?.feeds) && data.feeds.includes('okx'),
+      })
+      setStatus('live')
+    } catch {
+      setConnected({ binance: false, bybit: false, okx: false })
+      setStatus('degraded')
+    }
   }, [])
+
+  useEffect(() => {
+    loadMarket()
+    const id = setInterval(loadMarket, 5000)
+    return () => clearInterval(id)
+  }, [loadMarket])
+
 
   // No browser-generated prices, spreads, volumes, latency, P/L, or fake fills.
   // Live opportunities must come from the server-side market/RPC adapters.
