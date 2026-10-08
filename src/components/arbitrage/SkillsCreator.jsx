@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2, ArrowRight, FlaskConical, GripVertical } from 'lucide-react'
-import { createBotSkill, deleteBotSkill, listBotSkills, updateBotSkill } from '@/lib/arbivault'
+import { createBotSkill, deleteBotSkill, listBotSkills, updateBotSkill, runBacktest } from '@/lib/arbivault'
 import { supabase } from '@/lib/supabase'
 
 const CONDITION_BLOCKS = [
