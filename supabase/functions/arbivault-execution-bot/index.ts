@@ -360,6 +360,16 @@ export default {
 
     if (adapterError) return Response.json({ error: adapterError.message }, { status: 500 })
 
+    // Public market adapters are valid execution venues only when their catalog
+    // explicitly says they are NOT read-only. public_api alone means discovery/quotes;
+    // private_auth_required alone does not grant order-placement capability.
+    const { data: marketAdapters, error: marketAdapterError } = await supabase
+      .from('arbivault_market_adapters')
+      .select('id,name,venue_type,base_url,public_api,private_auth_required,enabled,read_only,chains')
+      .eq('enabled', true)
+
+    if (marketAdapterError) return Response.json({ error: marketAdapterError.message }, { status: 500 })
+
     // These adapters are signing/broadcast boundaries, not exchange trading venues.
     const signerAdapters = (adapters || []).filter((adapter: any) =>
       adapter.health_status === 'healthy' &&
@@ -375,7 +385,19 @@ export default {
       adapter.read_only === false &&
       ['cex','exchange_execution'].includes(String(adapter.adapter_type || '').toLowerCase())
     )
-    const cexExecutionConfigured = cexExecutionAdapters.length > 0
+
+    // A public API can be an order-placement API; do not blanket-require private
+    // credentials. However, the adapter must explicitly be non-read-only before
+    // the execution bot may treat it as an executable CEX venue.
+    const publicCexExecutionAdapters = (marketAdapters || []).filter((adapter: any) =>
+      adapter.enabled === true &&
+      adapter.public_api === true &&
+      adapter.read_only === false &&
+      ['cex','exchange'].includes(String(adapter.venue_type || '').toLowerCase())
+    )
+
+    const cexExecutionConfigured =
+      cexExecutionAdapters.length > 0 || publicCexExecutionAdapters.length > 0
 
 
     const results: any[] = []
@@ -431,7 +453,15 @@ export default {
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
-            builder: executionRoute.transaction_builder, execution_source: 'explicit_execution_route',
+            builder: executionRoute.transaction_builder,
+            execution_source: 'explicit_execution_route',
+            cex_execution: executionRoute.route_type === 'dex_cex'
+              ? {
+                  private_adapter_available: cexExecutionAdapters.length > 0,
+                  public_order_adapter_available: publicCexExecutionAdapters.length > 0,
+                  available: cexExecutionConfigured,
+                }
+              : null,
           }
           let dexPreflight: any = null
           let builderError: string | null = null
@@ -463,12 +493,13 @@ export default {
           // A DEX/CEX arbitrage is two execution legs. A single DEX swap is never
           // sufficient to claim an arbitrage execution or realized PnL.
           const twoLegExecutionReady = transactionBuilt && cexExecutionConfigured
+          const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
           const executionGate = !executionWindowActive ? 'execution_policy_not_active'
             : !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
             : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
-            : executionRoute.route_type === 'dex_cex' && !cexExecutionConfigured ? 'cex_execution_adapter_required'
+            : executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable ? 'cex_order_execution_unavailable'
             : builderError ? 'transaction_builder_preflight_failed'
             : executionRoute.route_type === 'dex_cex' && !twoLegExecutionReady ? 'two_leg_execution_not_ready'
             : !transactionBuilt ? 'transaction_builder_incomplete'
