@@ -502,31 +502,63 @@ Deno.serve(async (req) => {
     const feeds = [...new Set(successfulQuotes.map((quote) => quote.exchange))]
     const { data: signerAdapters } = await admin
       .from('execution_adapters')
-      .select('id,signer_provider,health_status,configured,can_broadcast,can_withdraw,automatic_signing,read_only,allowed_wallet_id')
+      .select('id,chain,signer_provider,health_status,configured,can_broadcast,can_withdraw,automatic_signing,read_only,allowed_wallet_id,signer_key_ref,signing_boundary,allowed_contracts')
       .eq('signer_provider', 'internal_vault')
 
     const { data: signerWallets } = await admin
       .from('wallets')
-      .select('id,chain,status,is_hot,wallet_role')
+      .select('id,chain,status,is_hot,wallet_role,address,secret_ref')
       .eq('status', 'active')
       .eq('is_hot', true)
       .eq('wallet_role', 'trading_hot')
 
     const signer_health = ['bitcoin', 'ethereum', 'bnb', 'solana'].map((chain) => {
-      const walletIds = new Set((signerWallets || []).filter((wallet: any) => wallet.chain === chain).map((wallet: any) => wallet.id))
-      const matches = (signerAdapters || []).filter((adapter: any) =>
-        walletIds.has(adapter.allowed_wallet_id) &&
-        adapter.configured === true &&
-        adapter.health_status === 'healthy' &&
-        adapter.read_only === false &&
-        adapter.can_broadcast === true
+      const activeWallets = (signerWallets || []).filter((wallet: any) =>
+        wallet.chain === chain &&
+        wallet.status === 'active' &&
+        wallet.is_hot === true &&
+        wallet.wallet_role === 'trading_hot'
       )
+      const walletsWithStoredSecrets = activeWallets.filter((wallet: any) =>
+        typeof wallet.secret_ref === 'string' && wallet.secret_ref.length > 0
+      )
+      const mappedAdapters = (signerAdapters || []).filter((adapter: any) =>
+        adapter.chain === chain &&
+        walletsWithStoredSecrets.some((wallet: any) =>
+          wallet.id === adapter.allowed_wallet_id &&
+          String(wallet.address || '').toLowerCase() === String(adapter.signer_key_ref || '').toLowerCase()
+        )
+      )
+      const matches = mappedAdapters.filter((adapter: any) => {
+        const contracts = Array.isArray(adapter.allowed_contracts)
+          ? adapter.allowed_contracts.map((value: unknown) => String(value).toLowerCase())
+          : []
+        const expectedRouter = chain === 'ethereum'
+          ? '0x7a250d5630b4cf539739df2c5dacb4c659f2488d'
+          : chain === 'bnb' ? '0x10ed43c718714eb63d5aa57b78b54704e256024e' : null
+        const routePolicyReady = !expectedRouter || contracts.includes(expectedRouter)
+        return adapter.configured === true &&
+          adapter.health_status === 'healthy' &&
+          adapter.read_only === false &&
+          adapter.can_broadcast === true &&
+          adapter.automatic_signing === true &&
+          adapter.signing_boundary === 'internal_vault' &&
+          routePolicyReady
+      })
+      const reason = matches.length > 0 ? 'ready'
+        : activeWallets.length === 0 ? 'no_active_trading_hot_wallet'
+        : walletsWithStoredSecrets.length === 0 ? 'active_wallet_secret_not_registered'
+        : mappedAdapters.length === 0 ? 'signer_not_bound_to_active_wallet'
+        : 'signer_adapter_policy_or_health_failed'
       return {
         chain,
         configured: matches.length > 0,
         healthy: matches.length > 0,
-        broadcast_capable: matches.length > 0,
+        broadcast_capable: matches.some((adapter: any) => adapter.can_broadcast === true),
         automatic_signing: matches.some((adapter: any) => adapter.automatic_signing === true),
+        active_wallet_count: activeWallets.length,
+        wallet_with_secret_count: walletsWithStoredSecrets.length,
+        reason,
       }
     })
 
