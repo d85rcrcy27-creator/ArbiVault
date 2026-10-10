@@ -6,6 +6,8 @@ import { ECPairFactory } from 'npm:ecpair@3.0.0'
 import { Keypair } from 'npm:@solana/web3.js@1.98.4'
 import { Wallet as XrplWallet } from 'npm:xrpl@4.2.5'
 const ECPair=ECPairFactory(ecc)
+const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E"
+const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D"
 const url=Deno.env.get('SUPABASE_URL')!, serviceKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const admin=createClient(url,serviceKey)
 const auth=(req:Request)=>createClient(url,Deno.env.get('SUPABASE_ANON_KEY')!,{global:{headers:{Authorization:req.headers.get('Authorization')??''}}})
@@ -61,9 +63,17 @@ async function ensureBindings(userId:string,wallets:any[]){
   // Ethereum is not supported by the deployed signer and must not create a stale blocker row.
   if(!['ethereum','bnb','solana','bitcoin'].includes(chain)) continue
   const {data:adapter}=await admin.from('execution_adapters').select('id').eq('chain',chain).eq('allowed_wallet_id',w.id).eq('signer_provider','internal_vault').maybeSingle()
-  const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v1',last_error:null,updated_at:new Date().toISOString()}
-  if(adapter)await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
-  else await admin.from('execution_adapters').insert({...patch,name:'ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer',adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_contracts:[],allowed_programs:[]})
+  const allowedContracts = chain === 'ethereum'
+   ? [ETH_UNISWAP_V2_ROUTER]
+   : chain === 'bnb' ? [BSC_PANCAKE_V2_ROUTER] : []
+  const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v2',last_error:null,allowed_contracts:allowedContracts,updated_at:new Date().toISOString()}
+  if(adapter){
+   const {error:updateError}=await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
+   if(updateError)throw new Error('signer_adapter_refresh_failed')
+  }else{
+   const {error:insertError}=await admin.from('execution_adapters').insert({...patch,name:'ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer',adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_programs:[]})
+   if(insertError)throw new Error('signer_adapter_create_failed')
+  }
  }
 
  const walletByChain=new Map(wallets.map((w:any)=>[w.chain,w]))
