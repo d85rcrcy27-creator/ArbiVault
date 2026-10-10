@@ -288,9 +288,10 @@ async function rpcHealth() {
       chainPayload.rpc_url = check.endpoint
     }
     try {
+      const chainAliases = check.chain === 'ethereum' ? ['ethereum', 'evm'] : [check.chain]
       await admin.from('arbivault_chain_rpc')
         .update(chainPayload)
-        .eq('chain', check.chain)
+        .in('chain', chainAliases)
         .eq('enabled', true)
     } catch {
       // Status persistence must not fail the live health response.
