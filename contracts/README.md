@@ -36,7 +36,7 @@ Run `forge test -vvv`. Tests use mocked Aave, ERC-20 tokens, and routers. They v
 ## Required before any live deployment
 
 1. Deploy a chain-specific instance only after reviewing and independently auditing this source.
-2. Initialize with the active approved ArbiVault hot-wallet address as `hotWallet`, the correct Aave V3 Pool, the intended loan asset, and reviewed router/token allowlists for that chain.
+2. Initialize with the exact active ArbiVault-generated `trading_hot` wallet address as `hotWallet`, the correct chain-specific Aave V3 Pool, the intended loan asset, and reviewed router/token allowlists for that chain. Deploy a separate executor for each chain and generated hot wallet. The executor's `HOT_WALLET()` getter must match the selected source wallet address byte-for-byte (case-insensitive for EVM addresses).
 3. Verify deployed source and runtime bytecode (including constructor arguments) using Sourcify or the chain explorer.
 4. Record the deployment address, chain, bytecode hash, constructor configuration, and immutable hot-wallet recipient in ArbiVault.
 5. Run a non-broadcast `eth_call` preflight with a real quote path, then get the existing transaction approval/passkey flow for any actual broadcast.
