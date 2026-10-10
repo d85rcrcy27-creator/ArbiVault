@@ -40,6 +40,180 @@ Deno.serve(async (req) => {
       skill = data;
     }
 
+    // Latency/volume skills must backtest recorded observations from the actual
+    // public market scout. They must not be forced through the unrelated daily-close
+    // spread-training dataset, and this path never starts execution.
+    const skillConditions = Array.isArray(skill?.conditions)
+      ? skill.conditions
+      : (skill?.conditions && typeof skill.conditions === "object" ? [skill.conditions] : []);
+    const hasLatencyOrVolumeCondition = skillId && skillConditions.some((condition: any) =>
+      /latency|volume/i.test(String(condition?.label || ""))
+    );
+
+    if (hasLatencyOrVolumeCondition) {
+      const endAt = new Date();
+      const startAt = new Date(endAt.getTime() - days * 86400000);
+      const { data: liveRows, error: liveRowsError } = await admin
+        .from("strategy_observations")
+        .select("id,symbol,metric,value,observed_at,metadata")
+        .eq("owner_id", skill.owner_id)
+        .eq("source_key", "public_exchange_order_books")
+        .eq("domain", "execution_scout")
+        .eq("metric", "spread_pct")
+        .gte("observed_at", startAt.toISOString())
+        .lte("observed_at", endAt.toISOString())
+        .order("observed_at", { ascending: true })
+        .limit(10000);
+      if (liveRowsError) return json({ error: "live_observation_lookup_failed", detail: liveRowsError.message }, 500);
+
+      const bases = [...new Set((liveRows || []).map((row: any) => String(row.symbol || "").split("/")[0]).filter(Boolean))];
+      const volumeSymbols = bases.map((symbol) => symbol + "/USD");
+      const { data: volumeRows, error: volumeRowsError } = volumeSymbols.length
+        ? await admin
+            .from("strategy_observations")
+            .select("symbol,value,observed_at,metadata")
+            .eq("owner_id", skill.owner_id)
+            .eq("source_key", "coingecko")
+            .eq("metric", "public_market_price")
+            .in("symbol", volumeSymbols)
+            .gte("observed_at", startAt.toISOString())
+            .lte("observed_at", endAt.toISOString())
+            .order("observed_at", { ascending: true })
+            .limit(10000)
+        : { data: [], error: null };
+      if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
+
+      const volumeHistory = new Map<string, any[]>();
+      for (const row of volumeRows || []) {
+        const key = String(row.symbol || "").toUpperCase();
+        const list = volumeHistory.get(key) || [];
+        const volume = Number(row.metadata?.volume24h);
+        if (Number.isFinite(volume) && volume >= 0) list.push({
+          at: new Date(row.observed_at).getTime(),
+          volume24hUsd: volume,
+        });
+        volumeHistory.set(key, list);
+      }
+
+      const nearestVolume = (symbol: string, observedAt: string) => {
+        const list = volumeHistory.get((symbol.split("/")[0] + "/USD").toUpperCase()) || [];
+        if (!list.length) return null;
+        const target = new Date(observedAt).getTime();
+        let lo = 0;
+        let hi = list.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (list[mid].at < target) lo = mid + 1;
+          else hi = mid;
+        }
+        const candidates = [list[lo - 1], list[lo]].filter(Boolean);
+        if (!candidates.length) return null;
+        const chosen = candidates.reduce((best, item) =>
+          Math.abs(item.at - target) < Math.abs(best.at - target) ? item : best
+        );
+        return Math.abs(chosen.at - target) <= 10 * 60 * 1000 ? chosen.volume24hUsd : null;
+      };
+
+      const notional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 1000);
+      const feePct = body.round_trip_fee_pct == null ? 0.20 : Number(body.round_trip_fee_pct);
+      const slippagePct = body.slippage_pct == null ? 0.10 : Number(body.slippage_pct);
+      const costPct = feePct + slippagePct;
+      const builtSamples = (liveRows || []).map((row: any) => {
+        const metadata = row.metadata || {};
+        const quotes = Array.isArray(metadata.quotes) ? metadata.quotes : [];
+        const buyExchange = String(metadata.buy_exchange || "");
+        const sellExchange = String(metadata.sell_exchange || "");
+        const buyQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === buyExchange.toLowerCase());
+        const sellQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === sellExchange.toLowerCase());
+        const quoteLatencies = [buyQuote?.latencyMs, sellQuote?.latencyMs]
+          .map(Number)
+          .filter((value: number) => Number.isFinite(value) && value >= 0);
+        const latencyMs = quoteLatencies.length === 2 ? Math.max(...quoteLatencies) : null;
+        const spreadPct = Number(row.value);
+        const volume24hUsd = nearestVolume(String(row.symbol || ""), row.observed_at);
+        const estimatedNetProfitUsd = notional * (spreadPct - costPct) / 100;
+        return {
+          id: row.id,
+          symbol: row.symbol,
+          observed_at: row.observed_at,
+          spreadPct,
+          latencyMs,
+          volume24hUsd,
+          estimatedNetProfitUsd,
+        };
+      }).filter((sample: any) => Number.isFinite(sample.spreadPct));
+
+      if (!builtSamples.length) {
+        return json({
+          ok: false, supported: false, reason: "no_recorded_live_market_observations",
+          skill_id: skillId, strategy: skill?.name || null, samples: 0, trades: 0,
+          pnl: null, pnl_is_realized: false, live_market_observations_only: true,
+        }, 409);
+      }
+
+      const conditionPasses = (condition: any, sample: any) => {
+        const label = String(condition?.label || "").toLowerCase();
+        const threshold = Number.parseFloat(String(condition?.value ?? ""));
+        if (!Number.isFinite(threshold)) return false;
+        if (label.includes("latency")) return sample.latencyMs != null && sample.latencyMs < threshold;
+        if (label.includes("volume")) return sample.volume24hUsd != null && sample.volume24hUsd > threshold;
+        if (label.includes("spread")) return sample.spreadPct > threshold;
+        if (label.includes("profit")) return sample.estimatedNetProfitUsd > threshold;
+        return false;
+      };
+      const qualifying = builtSamples.filter((sample: any) =>
+        skillConditions.every((condition: any) => conditionPasses(condition, sample))
+      );
+      const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
+      const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
+      const observedTimes = builtSamples.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
+      const observedSpanDays = observedTimes.length
+        ? Math.max(0, (Math.max(...observedTimes) - Math.min(...observedTimes)) / 86400000)
+        : 0;
+      const result: any = {
+        ok: true,
+        supported: true,
+        source: "recorded_live_market_observations",
+        data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
+        data_methodology: "Recorded live order-book snapshots with selected buy/sell venue latency; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes.",
+        live_market_observations_only: true,
+        pnl_is_realized: false,
+        pnl_is_executable: false,
+        execution_triggered: false,
+        warning: "Backtest results never initiate live trades. Live trades independently require fresh quotes, positive estimated net profit, an executable route, active execution policy, and signer authorization.",
+        skill_id: skillId,
+        strategy: skill.name,
+        requested_days: days,
+        observed_span_days: Number(observedSpanDays.toFixed(3)),
+        window_start: startAt.toISOString(),
+        window_end: endAt.toISOString(),
+        notional_usd: notional,
+        round_trip_fee_pct: feePct,
+        slippage_pct: slippagePct,
+        total_cost_assumption_pct: costPct,
+        samples: builtSamples.length,
+        samples_with_latency: builtSamples.filter((sample: any) => sample.latencyMs != null).length,
+        samples_with_volume: builtSamples.filter((sample: any) => sample.volume24hUsd != null).length,
+        trades: qualifying.length,
+        wins: wins.length,
+        losses: Math.max(0, qualifying.length - wins.length),
+        winRate: qualifying.length ? Math.round(wins.length / qualifying.length * 100) : 0,
+        pnl: Number(netPnl.toFixed(2)),
+        gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
+        estimated_net_pnl: Number(netPnl.toFixed(2)),
+        historical_max_spread_pct: Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)),
+        historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
+        reason: qualifying.length ? "live_observation_conditions_matched" : "no_recorded_observations_matched_all_skill_conditions",
+        first_observation: builtSamples[0]?.observed_at || null,
+        last_observation: builtSamples[builtSamples.length - 1]?.observed_at || null,
+      };
+      if (skillId) {
+        const { error: saveError } = await admin.from("bot_skills").update({ backtest: result }).eq("id", skillId).eq("owner_id", skill.owner_id);
+        if (saveError) return json({ error: "backtest_result_save_failed", detail: saveError.message }, 500);
+      }
+      return json(result);
+    }
+
     const { data: dataset, error: datasetError } = await admin
       .from("strategy_training_datasets")
       .select("id,dataset_key,start_date,end_date,last_ingested_at")
