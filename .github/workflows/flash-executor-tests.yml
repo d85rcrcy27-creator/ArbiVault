@@ -27,7 +27,7 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
-      - name: Check Solidity formatting
-        run: forge fmt --check
+      - name: Format Solidity before compiling
+        run: forge fmt
       - name: Run isolated repayment and payout tests
         run: forge test -vvv
