@@ -9,7 +9,10 @@ const supabase = createClient(
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
-const BSC_AAVE_POOL = (Deno.env.get("ARBIVAULT_BSC_AAVE_POOL") || "").trim();
+// Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
+// Pool proxy upgrades are picked up without manually rotating an env var.
+const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
+const AAVE_PROVIDER_ABI = parseAbi(["function getPool() view returns (address)"]);
 
 const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
@@ -164,6 +167,23 @@ async function buildJupiter(
   };
 }
 
+async function resolveBscAavePool(): Promise<string> {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(BSC_AAVE_PROVIDER)) {
+    throw new Error("invalid_aave_provider_config");
+  }
+  const callData = encodeFunctionData({ abi: AAVE_PROVIDER_ABI, functionName: "getPool" });
+  const raw = await rpc("eth_call", [{ to: BSC_AAVE_PROVIDER, data: callData }, "latest"]);
+  const pool = decodeFunctionResult({
+    abi: AAVE_PROVIDER_ABI,
+    functionName: "getPool",
+    data: raw as `0x${string}`,
+  }) as string;
+  if (!/^0x[a-fA-F0-9]{40}$/.test(pool) || /^0x0{40}$/i.test(pool)) {
+    throw new Error("aave_pool_resolution_failed");
+  }
+  return pool;
+}
+
 async function buildAtomicFlashLoan(
   owner: string,
   asset: string,
@@ -173,9 +193,9 @@ async function buildAtomicFlashLoan(
   valuesRaw: string[],
   data: string[],
 ) {
-  if (!BSC_FLASH_EXECUTOR || !BSC_AAVE_POOL) throw new Error("atomic_executor_not_configured");
+  if (!BSC_FLASH_EXECUTOR || !/^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR)) throw new Error("atomic_executor_not_configured");
+  const aavePool = await resolveBscAavePool();
   if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
-  if (!/^0x[a-fA-F0-9]{40}$/.test(BSC_AAVE_POOL)) throw new Error("invalid_aave_pool_config");
   if (!targets.length || targets.length !== valuesRaw.length || targets.length !== data.length) throw new Error("atomic_leg_shape_invalid");
   for (const target of targets) {
     if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !ATOMIC_ALLOWED_TARGETS.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
@@ -202,7 +222,7 @@ async function buildAtomicFlashLoan(
   const serializedPayload = JSON.stringify(transaction);
   return {
     builder: "aave_v3_atomic_flash_loan_v1", chain: "bnb", source: owner,
-    executor: BSC_FLASH_EXECUTOR, flash_loan_pool: BSC_AAVE_POOL,
+    executor: BSC_FLASH_EXECUTOR, flash_loan_pool: aavePool,
     flash_loan_asset: asset, flash_loan_amount: amount.toString(),
     minimum_profit: minProfit.toString(), targets, values: valuesRaw,
     leg_count: targets.length, transaction: serializedPayload,
