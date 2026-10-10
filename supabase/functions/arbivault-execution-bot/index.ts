@@ -315,6 +315,22 @@ async function buildDexQuotePreflight(
   probe: { sell: string; buy: string },
 ) {
   if (!route?.transaction_builder) return null;
+
+  // Jupiter's v2 order endpoint constructs an unsigned swap transaction rather
+  // than a quote-only response. Do not call it in discovery/preflight mode:
+  // it can fail on balances and is not needed to display current market routes.
+  // Live spreads/latency are supplied by arbivault-market-scout. Actual Jupiter
+  // transaction construction only occurs in the explicitly executable path.
+  if (route.transaction_builder === 'jupiter_swap_v2') {
+    return {
+      wallet: walletAddress,
+      builder: route.transaction_builder,
+      quote_only: true,
+      quoted: false,
+      executable_unsigned: false,
+      reason: 'live_market_quote_from_scout; transaction_build_skipped_in_quote_only_mode',
+    };
+  }
   const sell = await callTransactionBuilder({
     mode: 'quote',
     route_id: route.id,
