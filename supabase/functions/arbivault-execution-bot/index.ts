@@ -557,7 +557,7 @@ export default {
 
         const output = {
           ok: true,
-          execution_mode: executionWindowActive ? (policy?.mode === 'live' ? 'live_preflighted' : 'builder_preflighted') : 'blocked_policy',
+          execution_mode: executionWindowActive ? 'live_preflighted' : 'blocked_policy',
           opportunities,
           controls: {
             withdrawal_path_available_to_bot: false,
