@@ -23,6 +23,7 @@ const AAVE_PROVIDER_ABI = parseAbi(["function getPool() view returns (address)"]
 const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
+const BISWAP_ROUTER_V2 = "0x3a6d8ca21d1cf76f653a67577fa0d27453350dd8";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -41,12 +42,14 @@ const ERC20_ABI = parseAbi([
 const FLASH_EXECUTOR_ABI = parseAbi([
   "function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)",
 ]);
+const FLASH_PREMIUM_ABI = parseAbi(["function FLASHLOAN_PREMIUM_TOTAL() view returns (uint128)"]);
 const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
 ]);
 
 const ATOMIC_ALLOWED_TARGETS = new Set([
   PANCAKE_V2_ROUTER.toLowerCase(),
+  BISWAP_ROUTER_V2.toLowerCase(),
 ]);
 
 const MAX_SLIPPAGE_BPS = 100;
@@ -467,6 +470,154 @@ async function diagnoseFlashExecutor() {
   return result;
 }
 
+async function quoteFlashRouter(router: string, amountIn: bigint, path: string[]) {
+  const calldata = encodeFunctionData({
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    args: [amountIn, path as `0x${string}`[]],
+  });
+  const encoded = await rpc("eth_call", [{ to: router, data: calldata }, "latest"]);
+  const amounts = decodeFunctionResult({
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    data: encoded as `0x${string}`,
+  }) as readonly bigint[];
+  if (amounts.length !== path.length || amounts[amounts.length - 1] <= 0n) {
+    throw new Error("flash_quote_no_liquidity");
+  }
+  return amounts[amounts.length - 1];
+}
+
+async function buildFlashOpportunityQuote(
+  asset: string,
+  amountRaw: string,
+  slippageBps: number,
+) {
+  const normalizedAsset = asset.toLowerCase();
+  if (normalizedAsset !== WBNB.toLowerCase() && normalizedAsset !== BSC_USDT.toLowerCase()) {
+    throw new Error("flash_asset_not_allowlisted");
+  }
+  if (!/^\\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+    throw new Error("flash_amount_invalid");
+  }
+  if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS) {
+    throw new Error("slippage_out_of_bounds");
+  }
+
+  const routers = [PANCAKE_V2_ROUTER, BISWAP_ROUTER_V2];
+  const codes = await Promise.all(routers.map((router) => rpc("eth_getCode", [router, "latest"])));
+  if (codes.some((code) => typeof code !== "string" || String(code).length <= 2)) {
+    throw new Error("flash_router_bytecode_missing");
+  }
+  const pool = await resolveBscAavePool();
+  const premiumCall = encodeFunctionData({ abi: FLASH_PREMIUM_ABI, functionName: "FLASHLOAN_PREMIUM_TOTAL" });
+  const premiumRaw = await rpc("eth_call", [{ to: pool, data: premiumCall }, "latest"]);
+  const premiumBps = BigInt(decodeFunctionResult({
+    abi: FLASH_PREMIUM_ABI,
+    functionName: "FLASHLOAN_PREMIUM_TOTAL",
+    data: premiumRaw as `0x${string}`,
+  }) as bigint);
+  const amount = BigInt(amountRaw);
+  const premium = (amount * premiumBps + 9999n) / 10000n;
+  const gasPrice = BigInt(String(await rpc("eth_gasPrice", [])));
+  // Conservative pre-deployment estimate for the flash callback plus two router swaps.
+  const gasCostWbnb = 550000n * gasPrice;
+  const intermediate = normalizedAsset === WBNB.toLowerCase() ? BSC_USDT : WBNB;
+  const pathOut = [normalizedAsset === WBNB.toLowerCase() ? WBNB : BSC_USDT, intermediate];
+  const pathBack = [intermediate, normalizedAsset === WBNB.toLowerCase() ? WBNB : BSC_USDT];
+  let gasCostAsset = gasCostWbnb;
+  if (normalizedAsset === BSC_USDT.toLowerCase()) {
+    gasCostAsset = await quoteFlashRouter(PANCAKE_V2_ROUTER, gasCostWbnb, [WBNB, BSC_USDT]);
+  }
+
+  const candidates: any[] = [];
+  for (const firstRouter of routers) {
+    const secondRouter = routers.find((router) => router.toLowerCase() !== firstRouter.toLowerCase())!;
+    try {
+      const firstOut = await quoteFlashRouter(firstRouter, amount, pathOut);
+      const finalOut = await quoteFlashRouter(secondRouter, firstOut, pathBack);
+      const minimumFirstOut = firstOut * BigInt(10000 - slippageBps) / 10000n;
+      const minimumFinalOut = finalOut * BigInt(10000 - slippageBps) / 10000n;
+      const grossProfit = finalOut - amount;
+      const netProfit = finalOut - amount - premium - gasCostAsset;
+      const minProfitRaw = gasCostAsset + 1n;
+      const executorConfigured = /^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR);
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 30);
+      let callData: string[] = [];
+      if (executorConfigured) {
+        callData = [
+          encodeFunctionData({
+            abi: ROUTER_ABI,
+            functionName: "swapExactTokensForTokens",
+            args: [amount, minimumFirstOut, pathOut as `0x${string}`[], BSC_FLASH_EXECUTOR as `0x${string}`, deadline],
+          }),
+          encodeFunctionData({
+            abi: ROUTER_ABI,
+            functionName: "swapExactTokensForTokens",
+            args: [firstOut, minimumFinalOut, pathBack as `0x${string}`[], BSC_FLASH_EXECUTOR as `0x${string}`, deadline],
+          }),
+        ];
+      }
+      candidates.push({
+        asset: normalizedAsset,
+        amount_raw: amount.toString(),
+        first_router: firstRouter,
+        second_router: secondRouter,
+        targets: [firstRouter, secondRouter],
+        values_raw: ["0", "0"],
+        data: callData,
+        first_output_raw: firstOut.toString(),
+        minimum_first_output_raw: minimumFirstOut.toString(),
+        final_output_raw: finalOut.toString(),
+        minimum_final_output_raw: minimumFinalOut.toString(),
+        gross_profit_raw: grossProfit.toString(),
+        flash_premium_bps: premiumBps.toString(),
+        flash_premium_raw: premium.toString(),
+        estimated_gas_cost_raw: gasCostAsset.toString(),
+        min_profit_raw: minProfitRaw.toString(),
+        estimated_net_profit_raw: netProfit.toString(),
+        profitable_after_flash_premium_and_gas: netProfit > 0n,
+        executor_configured: executorConfigured,
+        slippage_bps_per_leg: slippageBps,
+        deadline: deadline.toString(),
+      });
+    } catch (error) {
+      candidates.push({
+        asset: normalizedAsset,
+        first_router: firstRouter,
+        second_router: secondRouter,
+        profitable_after_flash_premium_and_gas: false,
+        quote_error: error instanceof Error ? error.message : "flash_quote_failed",
+      });
+    }
+  }
+  const priced = candidates.filter((candidate) => candidate.estimated_net_profit_raw !== undefined);
+  priced.sort((a, b) => {
+    const av = BigInt(a.estimated_net_profit_raw);
+    const bv = BigInt(b.estimated_net_profit_raw);
+    return av > bv ? -1 : av < bv ? 1 : 0;
+  });
+  const best = priced[0] || null;
+  return {
+    ok: true,
+    source: "live_bsc_router_quotes",
+    quoted_at: new Date().toISOString(),
+    chain: "bnb",
+    pair: "BNB/USDT",
+    flash_loan_pool: pool,
+    premium_bps: premiumBps.toString(),
+    estimated_gas_price_wei: gasPrice.toString(),
+    gas_estimate_units: "550000",
+    gas_estimate_method: "conservative_pre-deployment_estimate",
+    candidate_count: candidates.length,
+    candidates,
+    best,
+    profitable: best?.profitable_after_flash_premium_and_gas === true,
+    executable_unsigned: !!best && best.profitable_after_flash_premium_and_gas === true && best.executor_configured === true && Array.isArray(best.data) && best.data.length === 2,
+    executor_configured: /^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR),
+  };
+}
+
 async function buildAtomicFlashLoan(
   owner: string,
   asset: string,
@@ -498,7 +649,7 @@ async function buildAtomicFlashLoan(
   }
   const aavePool = await resolveBscAavePool();
   if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
-  if (!targets.length || targets.length !== valuesRaw.length || targets.length !== data.length) throw new Error("atomic_leg_shape_invalid");
+  if (targets.length !== 2 || targets.length !== valuesRaw.length || targets.length !== data.length || targets[0].toLowerCase() === targets[1].toLowerCase()) throw new Error("atomic_leg_shape_invalid");
   for (const target of targets) {
     if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !ATOMIC_ALLOWED_TARGETS.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
   }
@@ -732,6 +883,18 @@ Deno.serve(async (req) => {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
     }
     if (wallet.chain !== route.chain) return json({ error: "wallet_route_chain_mismatch" }, 403);
+
+    if (body.mode === "flash_quote") {
+      if (!isAtomicFlashRoute || route.chain !== "bnb" || route.pair !== "BNB/USDT") {
+        return json({ error: "flash_quote_route_not_supported" }, 409);
+      }
+      const quote = await buildFlashOpportunityQuote(
+        String(body.flash_loan_asset || BSC_USDT),
+        amountRaw,
+        slippageBps,
+      );
+      return json({ route_id: route.id, source_wallet: wallet.address, mode: "flash_quote", ...quote });
+    }
 
     const built = route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
       ? await buildAtomicFlashLoan(
