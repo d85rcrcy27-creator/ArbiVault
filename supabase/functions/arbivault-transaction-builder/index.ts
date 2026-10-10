@@ -9,6 +9,9 @@ const supabase = createClient(
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+// Fail closed until the deployed executor contract source and live bytecode prove that
+// realized profits are paid to the calling ArbiVault trading hot wallet.
+const FLASH_EXECUTOR_PAYOUT_AUDITED = false;
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
@@ -193,6 +196,9 @@ async function buildAtomicFlashLoan(
   valuesRaw: string[],
   data: string[],
 ) {
+  if (!FLASH_EXECUTOR_PAYOUT_AUDITED) {
+    throw new Error("flash_executor_payout_unverified");
+  }
   if (!BSC_FLASH_EXECUTOR || !/^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR)) throw new Error("atomic_executor_not_configured");
   const aavePool = await resolveBscAavePool();
   if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
@@ -481,8 +487,7 @@ Deno.serve(async (req) => {
       ...built,
     });
   } catch (error) {
-    return json({
-      error: error instanceof Error ? error.message : "transaction_builder_error",
-    }, 500);
+    const message = error instanceof Error ? error.message : "transaction_builder_error";
+    return json({ error: message }, message === "flash_executor_payout_unverified" ? 409 : 500);
   }
 });
