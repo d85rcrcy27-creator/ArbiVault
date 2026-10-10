@@ -418,7 +418,8 @@ export default {
           input: {
             role: 'execution',
             priority: 'early_bird',
-            capital_policy: policy?.mode || 'unconfigured',
+            execution_policy_mode: policy?.mode || 'unconfigured',
+            capital_allowance_used_as_trade_limit: false,
           },
         })
         .select('id')
@@ -563,10 +564,14 @@ export default {
               if (strategyBot?.flash_loan_enabled !== true) {
                 throw new Error('flash_loan_strategy_disabled')
               }
-              const notionalUsd = Number(strategyBot?.max_trade_size || policy?.capital_allowance || 0)
-              if (!(notionalUsd > 0) || !Number.isFinite(notionalUsd)) {
-                throw new Error('flash_notional_not_configured')
-              }
+              // capital_allowance is not a trade-size setting and must never suppress
+              // market discovery. Use a strategy-specific amount when configured; otherwise
+              // use a quote-size default for screening. Wallet gas balance, signer auth,
+              // active policy, executor verification, and positive net profit remain separate checks.
+              const configuredNotional = Number(strategyBot?.max_trade_size)
+              const notionalUsd = Number.isFinite(configuredNotional) && configuredNotional > 0
+                ? configuredNotional
+                : 100
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
               // BNB Chain USDT has 18 decimals. Use the configured strategy size or the
               // existing policy allowance as the quote notional, and only live router state.
