@@ -445,22 +445,39 @@ export default {
           )
           .map((candidate: any) => {
             const diagnostic: any = flashExecutorDiagnostic || {}
+            const networkDiagnostic: any = candidate.chain === 'ethereum'
+              ? diagnostic.ethereum
+              : diagnostic.bnb
+            const executor: any = networkDiagnostic?.executor || {}
             let blocker = 'flash_executor_payout_unverified'
-            if (candidate.chain === 'ethereum') {
-              blocker = !diagnostic.ethereum_flash_executor_configured
+
+            if (!networkDiagnostic?.rpc_chain_ok) {
+              blocker = candidate.chain === 'ethereum'
+                ? 'ethereum_rpc_unhealthy'
+                : 'bsc_rpc_unhealthy'
+            } else if (!networkDiagnostic?.aave_pool_resolved) {
+              blocker = candidate.chain === 'ethereum'
+                ? 'ethereum_aave_pool_unresolved'
+                : 'bsc_aave_pool_unresolved'
+            } else if (!executor.configured) {
+              blocker = candidate.chain === 'ethereum'
                 ? 'ethereum_flash_executor_not_configured'
-                : !candidate.transaction_builder || candidate.builder_enabled !== true
-                  ? 'ethereum_flash_builder_not_configured'
-                  : 'ethereum_flash_payout_unverified'
-            } else if (!diagnostic.executor_configured) {
-              blocker = 'flash_executor_not_configured'
-            } else if (!diagnostic.executor_code_deployed) {
+                : 'flash_executor_not_configured'
+            } else if (!executor.code_deployed) {
               blocker = 'flash_executor_bytecode_missing'
-            } else if (diagnostic.source_verification?.verified !== true) {
+            } else if (!executor.payout_recipient_address) {
+              blocker = 'flash_executor_payout_recipient_unreadable'
+            } else if (!executor.payout_recipient_matches_generated_hot_wallet) {
+              blocker = 'flash_executor_payout_wallet_not_generated_hot_wallet'
+            } else if (executor.source_verification?.verified !== true) {
               blocker = 'flash_executor_source_unverified'
-            } else if (diagnostic.payout_behavior_verified !== true) {
-              blocker = 'flash_executor_payout_unverified'
-            } else if (diagnostic.ready_for_flash_transaction_test !== true) {
+            } else if (!candidate.transaction_builder || candidate.builder_enabled !== true) {
+              blocker = candidate.chain === 'ethereum'
+                ? 'ethereum_flash_builder_not_configured'
+                : 'flash_executor_builder_not_configured'
+            } else if (networkDiagnostic?.payout_behavior_verified !== true) {
+              blocker = 'flash_executor_payout_not_end_to_end_verified'
+            } else if (networkDiagnostic?.ready_for_flash_transaction_test !== true) {
               blocker = 'flash_executor_preflight_not_ready'
             } else {
               blocker = 'ready_for_explicit_preflight'
@@ -471,6 +488,9 @@ export default {
               pair: candidate.pair,
               builder: candidate.transaction_builder,
               builder_enabled: candidate.builder_enabled === true,
+              payout_recipient_address: executor.payout_recipient_address || null,
+              payout_recipient_matches_generated_hot_wallet: executor.payout_recipient_matches_generated_hot_wallet === true,
+              matched_generated_wallet_id: executor.matched_generated_wallet_id || null,
               ready_for_transaction_test: blocker === 'ready_for_explicit_preflight',
               blocker,
             }
