@@ -72,12 +72,15 @@ export async function listTrades(limit = 100) {
 }
 
 
-export async function runBacktest({ threshold = 0, days = 30, skillId = null } = {}) {
-  const { data, error } = await supabase.functions.invoke('arbivault-backtest', {
-    body: { threshold, days, skill_id: skillId },
-  })
+export async function runBacktest({ threshold, days = 30, skillId = null, notional, roundTripFeePct, slippagePct } = {}) {
+  const body = { days, skill_id: skillId }
+  if (threshold !== undefined && threshold !== null && threshold !== '') body.threshold = threshold
+  if (notional !== undefined && notional !== null) body.notional = notional
+  if (roundTripFeePct !== undefined && roundTripFeePct !== null) body.round_trip_fee_pct = roundTripFeePct
+  if (slippagePct !== undefined && slippagePct !== null) body.slippage_pct = slippagePct
+  const { data, error } = await supabase.functions.invoke('arbivault-backtest', { body })
   if (error) throw error
-  if (!data?.ok) throw new Error(data?.error || 'Unable to run backtest')
+  if (!data?.ok) throw new Error(data?.reason || data?.error || 'Unable to run backtest')
   return data
 }
 
