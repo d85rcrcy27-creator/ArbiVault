@@ -14,7 +14,7 @@ const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 // Fail closed until the deployed executor contract source and live bytecode prove that
 // realized profits are paid to the calling ArbiVault trading hot wallet.
-const FLASH_EXECUTOR_PAYOUT_AUDITED = false;
+const FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
