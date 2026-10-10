@@ -61,20 +61,37 @@ async function authorized(req: Request) {
 }
 
 async function rpc(method: string, params: unknown[]) {
-  const response = await fetch(BSC_RPC, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: Date.now(),
-      method,
-      params,
-    }),
-  });
-  if (!response.ok) throw new Error(`bsc_rpc_http_${response.status}`);
-  const body = await response.json();
-  if (body.error) throw new Error(`bsc_rpc_${body.error.code}`);
-  return body.result;
+  const endpoints = [...new Set([
+    BSC_RPC,
+    "https://bsc-dataseed.binance.org",
+    "https://ethereum-rpc.publicnode.com", // never used for BSC after chain-id validation by callers
+    "https://bsc-rpc.publicnode.com",
+    "https://bsc-dataseed1.defibit.io",
+    "https://bsc-dataseed-public.bnbchain.org",
+  ].filter(Boolean))].filter((url) => !url.includes("ethereum-rpc.publicnode.com"));
+  let lastError: unknown = null;
+  for (const endpoint of endpoints) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+      });
+      if (!response.ok) throw new Error(`bsc_rpc_http_${response.status}`);
+      const body = await response.json();
+      if (body.error) throw new Error(`bsc_rpc_${body.error.code ?? "error"}`);
+      if (body.result === undefined || body.result === null) throw new Error("bsc_rpc_result_missing");
+      return body.result;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(lastError instanceof Error ? lastError.message : "bsc_rpc_all_providers_failed");
 }
 
 function toBigInt(value: string) {
@@ -185,6 +202,96 @@ async function resolveBscAavePool(): Promise<string> {
     throw new Error("aave_pool_resolution_failed");
   }
   return pool;
+}
+
+async function lookupSourcifyVerification(chainId: string, address: string) {
+  try {
+    const response = await fetch(
+      `https://sourcify.dev/server/v2/contract/${chainId}/${address}`,
+      { signal: AbortSignal.timeout(2500), headers: { accept: "application/json" } },
+    );
+    if (!response.ok) return { checked: true, verified: false, match: null, runtime_match: null, http_status: response.status };
+    const body = await response.json();
+    return {
+      checked: true,
+      verified: body?.match === "exact_match" && body?.runtimeMatch === "exact_match",
+      match: body?.match || null,
+      runtime_match: body?.runtimeMatch || null,
+      verified_at: body?.verifiedAt || null,
+      contract_url: `https://repo.sourcify.dev/${chainId}/${address}`,
+    };
+  } catch (error) {
+    return {
+      checked: true,
+      verified: false,
+      match: null,
+      runtime_match: null,
+      error: error instanceof Error ? error.message.slice(0, 160) : "sourcify_lookup_failed",
+    };
+  }
+}
+
+async function diagnoseFlashExecutor() {
+  const result: Record<string, unknown> = {
+    diagnostic_only: true,
+    network: "BNB Smart Chain mainnet",
+    expected_chain_id: 56,
+    payout_behavior_verified: false,
+    payout_audit_reason: "A deployed executor's exact verified source and payout path must be manually audited before enabling transaction building.",
+    transaction_building_enabled: FLASH_EXECUTOR_PAYOUT_AUDITED,
+  };
+  try {
+    const rawChainId = String(await rpc("eth_chainId", [])).toLowerCase();
+    result.rpc_chain_id = rawChainId;
+    result.rpc_chain_ok = rawChainId === "0x38";
+  } catch (error) {
+    result.rpc_chain_ok = false;
+    result.rpc_error = error instanceof Error ? error.message : "bsc_rpc_probe_failed";
+  }
+  try {
+    result.aave_provider_address = BSC_AAVE_PROVIDER;
+    result.aave_pool_address = await resolveBscAavePool();
+    result.aave_pool_resolved = true;
+  } catch (error) {
+    result.aave_pool_resolved = false;
+    result.aave_pool_error = error instanceof Error ? error.message : "aave_pool_resolution_failed";
+  }
+
+  const executor = BSC_FLASH_EXECUTOR;
+  result.executor_address = /^0x[a-fA-F0-9]{40}$/.test(executor) ? executor : null;
+  result.executor_configured = /^0x[a-fA-F0-9]{40}$/.test(executor);
+  result.executor_code_deployed = false;
+  result.executor_bytecode_hash = null;
+  result.executor_bytecode_size_bytes = 0;
+  result.source_verification = { checked: false, verified: false, match: null, runtime_match: null };
+
+  if (result.executor_configured) {
+    try {
+      const code = String(await rpc("eth_getCode", [executor, "latest"]));
+      result.executor_code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
+      result.executor_bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
+      result.executor_bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
+      if (result.executor_code_deployed) {
+        result.source_verification = await lookupSourcifyVerification("56", executor);
+      }
+    } catch (error) {
+      result.executor_code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
+    }
+  }
+
+  const ethExecutor = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
+  result.ethereum_flash_executor_configured = /^0x[a-fA-F0-9]{40}$/.test(ethExecutor);
+  result.ethereum_flash_executor_address = result.ethereum_flash_executor_configured ? ethExecutor : null;
+  result.ethereum_payout_behavior_verified = false;
+  result.ready_for_flash_transaction_test =
+    result.rpc_chain_ok === true &&
+    result.aave_pool_resolved === true &&
+    result.executor_configured === true &&
+    result.executor_code_deployed === true &&
+    (result.source_verification as any)?.verified === true &&
+    FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+
+  return result;
 }
 
 async function buildAtomicFlashLoan(
@@ -378,6 +485,9 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
+    if (body?.mode === "diagnostic") {
+      return json(await diagnoseFlashExecutor());
+    }
     const routeId = String(body.route_id || "");
     const sourceWalletId = String(body.source_wallet_id || "");
     const side = String(body.side || "sell").toLowerCase();
