@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { decodeFunctionData, parseAbi } from "npm:viem@2.39.0";
+import { decodeFunctionData, decodeFunctionResult, parseAbi } from "npm:viem@2.39.0";
 import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
@@ -43,6 +43,9 @@ const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.s
 const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const BSC_WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
+const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
+const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const BSC_PANCAKE_V2_ABI = parseAbi([
   "function swapExactETHForTokens(uint256 amountOutMin,address[] path,address to,uint256 deadline)",
   "function swapExactTokensForETH(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)",
@@ -269,71 +272,86 @@ Deno.serve(async (req) => {
       if (!allowed.length || !allowed.includes(to.toLowerCase())) {
         return json({ error: "destination_contract_not_allowlisted" }, 403);
       }
-      if (to.toLowerCase() !== BSC_PANCAKE_V2_ROUTER.toLowerCase()) {
-        return json({ error: "evm_destination_has_no_approved_method_policy" }, 403);
-      }
-
       const data = String(candidate.data || "");
       if (!/^0x(?:[0-9a-fA-F]{2}){4,}$/.test(data)) {
         return json({ error: "evm_calldata_invalid" }, 400);
       }
-
-      let decoded: any;
-      try {
-        decoded = decodeFunctionData({
-          abi: BSC_PANCAKE_V2_ABI,
-          data: data as `0x${string}`,
-        });
-      } catch {
-        return json({ error: "evm_method_not_allowlisted" }, 403);
-      }
-
-      const args = decoded.args as readonly unknown[];
       const value = strictBigInt("value", candidate.value);
-      const deadline = strictBigInt(
-        "deadline",
-        decoded.functionName === "swapExactETHForTokens" ? args[3] : args[4],
-      );
       const nowSec = BigInt(Math.floor(Date.now() / 1000));
-      if (deadline <= nowSec || deadline > nowSec + 600n) {
-        return json({ error: "swap_deadline_invalid_or_stale" }, 409);
-      }
 
-      const recipient = String(
-        decoded.functionName === "swapExactETHForTokens" ? args[2] : args[3],
-      ).toLowerCase();
-      if (recipient !== wallet.address.toLowerCase()) {
-        return json({ error: "swap_recipient_must_be_source_hot_wallet" }, 403);
-      }
-
-      if (decoded.functionName === "swapExactETHForTokens") {
-        const amountOutMin = strictBigInt("amount_out_min", args[0]);
-        const path = args[1] as readonly string[];
-        if (
-          amountOutMin <= 0n ||
-          value <= 0n ||
-          path.length !== 2 ||
-          String(path[0]).toLowerCase() !== BSC_WBNB.toLowerCase() ||
-          String(path[1]).toLowerCase() !== BSC_USDT.toLowerCase()
-        ) {
-          return json({ error: "bnb_usdt_buy_path_invalid" }, 403);
+      if (BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
+        if (value !== 0n) return json({ error: "flash_executor_native_value_forbidden" }, 403);
+        let flash: any;
+        try {
+          flash = decodeFunctionData({ abi: FLASH_EXECUTOR_ABI, data: data as `0x${string}` });
+        } catch {
+          return json({ error: "flash_executor_method_not_allowlisted" }, 403);
         }
-      } else if (decoded.functionName === "swapExactTokensForETH") {
-        const amountIn = strictBigInt("amount_in", args[0]);
-        const amountOutMin = strictBigInt("amount_out_min", args[1]);
-        const path = args[2] as readonly string[];
-        if (
-          amountIn <= 0n ||
-          amountOutMin <= 0n ||
-          value !== 0n ||
-          path.length !== 2 ||
-          String(path[0]).toLowerCase() !== BSC_USDT.toLowerCase() ||
-          String(path[1]).toLowerCase() !== BSC_WBNB.toLowerCase()
-        ) {
-          return json({ error: "usdt_bnb_sell_path_invalid" }, 403);
+        if (flash.functionName !== "executeFlashLoan") return json({ error: "flash_executor_method_not_allowlisted" }, 403);
+        const [asset, amount, minProfit, targets, values, calls] = flash.args as readonly [string,bigint,bigint,readonly string[],readonly bigint[],readonly string[]];
+        if (![BSC_WBNB.toLowerCase(), BSC_USDT.toLowerCase()].includes(String(asset).toLowerCase()) ||
+            amount <= 0n || minProfit <= 0n || targets.length < 2 || targets.length > 4 ||
+            targets.length !== values.length || targets.length !== calls.length ||
+            targets.some((target) => target.toLowerCase() !== BSC_PANCAKE_V2_ROUTER.toLowerCase()) ||
+            values.some((v) => v !== 0n)) {
+          return json({ error: "flash_executor_parameters_not_allowlisted" }, 403);
         }
+        const deadlineMax = nowSec + 600n;
+        let sawForward = false;
+        let sawReturn = false;
+        for (const callData of calls) {
+          let leg: any;
+          try { leg = decodeFunctionData({ abi: BSC_FLASH_ROUTER_ABI, data: callData as `0x${string}` }); }
+          catch { return json({ error: "flash_leg_method_not_allowlisted" }, 403); }
+          if (leg.functionName !== "swapExactTokensForTokens") return json({ error: "flash_leg_method_not_allowlisted" }, 403);
+          const [amountIn, amountOutMin, path, recipient, deadline] = leg.args as readonly [bigint,bigint,readonly string[],string,bigint];
+          if (amountIn <= 0n || amountOutMin <= 0n || path.length !== 2 ||
+              recipient.toLowerCase() !== BSC_FLASH_EXECUTOR.toLowerCase() ||
+              deadline <= nowSec || deadline > deadlineMax) {
+            return json({ error: "flash_leg_parameters_invalid" }, 403);
+          }
+          const a = String(path[0]).toLowerCase(), z = String(path[1]).toLowerCase();
+          if (a === BSC_USDT.toLowerCase() && z === BSC_WBNB.toLowerCase()) sawForward = true;
+          if (a === BSC_WBNB.toLowerCase() && z === BSC_USDT.toLowerCase()) sawReturn = true;
+          if (!((a === BSC_USDT.toLowerCase() && z === BSC_WBNB.toLowerCase()) ||
+                (a === BSC_WBNB.toLowerCase() && z === BSC_USDT.toLowerCase()))) {
+            return json({ error: "flash_leg_path_not_allowlisted" }, 403);
+          }
+        }
+        if (!sawForward || !sawReturn) return json({ error: "flash_round_trip_incomplete" }, 403);
+        const getter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
+        const payoutRaw = String(await rpc(BSC_RPC, "eth_call", [{ to: BSC_FLASH_EXECUTOR, data: getter }, "latest"]));
+        const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
+        if (payout.toLowerCase() !== wallet.address.toLowerCase()) return json({ error: "flash_executor_payout_wallet_mismatch" }, 403);
       } else {
-        return json({ error: "evm_method_not_allowlisted" }, 403);
+        if (to.toLowerCase() !== BSC_PANCAKE_V2_ROUTER.toLowerCase()) {
+          return json({ error: "evm_destination_has_no_approved_method_policy" }, 403);
+        }
+        let decoded: any;
+        try {
+          decoded = decodeFunctionData({ abi: BSC_PANCAKE_V2_ABI, data: data as `0x${string}` });
+        } catch {
+          return json({ error: "evm_method_not_allowlisted" }, 403);
+        }
+        const args = decoded.args as readonly unknown[];
+        const deadline = strictBigInt("deadline", decoded.functionName === "swapExactETHForTokens" ? args[3] : args[4]);
+        if (deadline <= nowSec || deadline > nowSec + 600n) return json({ error: "swap_deadline_invalid_or_stale" }, 409);
+        const recipient = String(decoded.functionName === "swapExactETHForTokens" ? args[2] : args[3]).toLowerCase();
+        if (recipient !== wallet.address.toLowerCase()) return json({ error: "swap_recipient_must_be_source_hot_wallet" }, 403);
+        if (decoded.functionName === "swapExactETHForTokens") {
+          const amountOutMin = strictBigInt("amount_out_min", args[0]);
+          const path = args[1] as readonly string[];
+          if (amountOutMin <= 0n || value <= 0n || path.length !== 2 ||
+              String(path[0]).toLowerCase() !== BSC_WBNB.toLowerCase() ||
+              String(path[1]).toLowerCase() !== BSC_USDT.toLowerCase()) return json({ error: "bnb_usdt_buy_path_invalid" }, 403);
+        } else if (decoded.functionName === "swapExactTokensForETH") {
+          const amountIn = strictBigInt("amount_in", args[0]);
+          const amountOutMin = strictBigInt("amount_out_min", args[1]);
+          const path = args[2] as readonly string[];
+          if (amountIn <= 0n || amountOutMin <= 0n || value !== 0n || path.length !== 2 ||
+              String(path[0]).toLowerCase() !== BSC_USDT.toLowerCase() ||
+              String(path[1]).toLowerCase() !== BSC_WBNB.toLowerCase()) return json({ error: "usdt_bnb_sell_path_invalid" }, 403);
+        } else return json({ error: "evm_method_not_allowlisted" }, 403);
       }
 
       let nonce: bigint;
