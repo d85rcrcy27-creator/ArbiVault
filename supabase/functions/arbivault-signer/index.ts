@@ -299,6 +299,8 @@ Deno.serve(async (req) => {
         const deadlineMax = nowSec + 600n;
         let sawForward = false;
         let sawReturn = false;
+        let firstInput: string | null = null;
+        let finalOutput: string | null = null;
         for (const callData of calls) {
           let leg: any;
           try { leg = decodeFunctionData({ abi: BSC_FLASH_ROUTER_ABI, data: callData as `0x${string}` }); }
@@ -311,6 +313,8 @@ Deno.serve(async (req) => {
             return json({ error: "flash_leg_parameters_invalid" }, 403);
           }
           const a = String(path[0]).toLowerCase(), z = String(path[1]).toLowerCase();
+          if (firstInput === null) firstInput = a;
+          finalOutput = z;
           if (a === BSC_USDT.toLowerCase() && z === BSC_WBNB.toLowerCase()) sawForward = true;
           if (a === BSC_WBNB.toLowerCase() && z === BSC_USDT.toLowerCase()) sawReturn = true;
           if (!((a === BSC_USDT.toLowerCase() && z === BSC_WBNB.toLowerCase()) ||
@@ -318,7 +322,9 @@ Deno.serve(async (req) => {
             return json({ error: "flash_leg_path_not_allowlisted" }, 403);
           }
         }
-        if (!sawForward || !sawReturn) return json({ error: "flash_round_trip_incomplete" }, 403);
+        if (!sawForward || !sawReturn || !firstInput || !finalOutput || firstInput !== String(asset).toLowerCase() || finalOutput !== String(asset).toLowerCase()) {
+          return json({ error: "flash_round_trip_incomplete_or_asset_mismatch" }, 403);
+        }
         const getter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
         const payoutRaw = String(await rpc(BSC_RPC, "eth_call", [{ to: BSC_FLASH_EXECUTOR, data: getter }, "latest"]));
         const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
