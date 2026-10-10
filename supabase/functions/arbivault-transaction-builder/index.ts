@@ -24,6 +24,9 @@ const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
 const BISWAP_ROUTER_V2 = "0x3a6d8ca21d1cf76f653a67577fa0d27453350dd8";
+const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
+const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+const ETH_USDC = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const SOL_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -686,6 +689,130 @@ async function buildAtomicFlashLoan(
     reference: "Aave V3 flashLoanSimple + dedicated ArbiVault atomic executor",
   };
 }
+async function buildUniswap(
+  taker: string,
+  pair: string,
+  side: string,
+  amountRaw: string,
+  slippageBps: number,
+  quoteOnly = false,
+) {
+  if (pair !== "ETH/USDC" || !["buy", "sell"].includes(side)) {
+    throw new Error("pair_not_allowlisted_for_uniswap_v2");
+  }
+  const amountIn = BigInt(amountRaw);
+  if (amountIn <= 0n) throw new Error("invalid_amount_raw");
+  const path = side === "sell" ? [ETH_WETH, ETH_USDC] : [ETH_USDC, ETH_WETH];
+  const quoteData = encodeFunctionData({
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    args: [amountIn, path as `0x${string}`[]],
+  });
+  const quoteEncoded = await ethereumRpc("eth_call", [
+    { to: ETH_UNISWAP_V2_ROUTER, data: quoteData },
+    "latest",
+  ]);
+  const amounts = decodeFunctionResult({
+    abi: ROUTER_ABI,
+    functionName: "getAmountsOut",
+    data: quoteEncoded as `0x${string}`,
+  }) as readonly bigint[];
+  const expectedOut = amounts[amounts.length - 1];
+  if (expectedOut <= 0n) throw new Error("uniswap_quote_no_liquidity");
+  const minOut = expectedOut * BigInt(10000 - slippageBps) / 10000n;
+
+  if (quoteOnly) {
+    return {
+      builder: "uniswap_v2",
+      chain: "ethereum",
+      pair,
+      side,
+      source: taker,
+      transaction: null,
+      transaction_format: "evm_json",
+      transaction_payload_hash: null,
+      expected_out: expectedOut.toString(),
+      minimum_out: minOut.toString(),
+      input_amount: amountRaw,
+      slippage_bps: slippageBps,
+      router: ETH_UNISWAP_V2_ROUTER,
+      executable: false,
+      quoted: true,
+      broadcast_by_builder: false,
+      reference: "Uniswap V2 router",
+    };
+  }
+
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 30);
+  let data: string;
+  let value = 0n;
+  if (side === "sell") {
+    data = encodeFunctionData({
+      abi: ROUTER_ABI,
+      functionName: "swapExactETHForTokens",
+      args: [minOut, path as `0x${string}`[], taker as `0x${string}`, deadline],
+    });
+    value = amountIn;
+  } else {
+    const allowanceData = encodeFunctionData({
+      abi: ERC20_ABI,
+      functionName: "allowance",
+      args: [taker as `0x${string}`, ETH_UNISWAP_V2_ROUTER as `0x${string}`],
+    });
+    const allowanceRaw = await ethereumRpc("eth_call", [
+      { to: ETH_USDC, data: allowanceData },
+      "latest",
+    ]);
+    if (BigInt(String(allowanceRaw)) < amountIn) {
+      throw new Error("uniswap_router_allowance_insufficient_for_usdc_input");
+    }
+    data = encodeFunctionData({
+      abi: ROUTER_ABI,
+      functionName: "swapExactTokensForETH",
+      args: [amountIn, minOut, path as `0x${string}`[], taker as `0x${string}`, deadline],
+    });
+  }
+
+  const nonce = BigInt(String(await ethereumRpc("eth_getTransactionCount", [taker, "pending"])));
+  const gasPrice = BigInt(String(await ethereumRpc("eth_gasPrice", [])));
+  const gas = BigInt(String(await ethereumRpc("eth_estimateGas", [{
+    from: taker,
+    to: ETH_UNISWAP_V2_ROUTER,
+    data,
+    value: toHex(value),
+  }])));
+  if (gas <= 0n || gasPrice <= 0n) throw new Error("uniswap_fee_fields_invalid");
+  const transaction = {
+    chainId: 1,
+    nonce: toHex(nonce),
+    to: ETH_UNISWAP_V2_ROUTER,
+    value: toHex(value),
+    data,
+    gas: toHex(gas),
+    gasPrice: toHex(gasPrice),
+    from: taker,
+  };
+  const serializedPayload = JSON.stringify(transaction);
+  return {
+    builder: "uniswap_v2",
+    chain: "ethereum",
+    pair,
+    side,
+    source: taker,
+    transaction: serializedPayload,
+    transaction_format: "evm_json",
+    transaction_payload_hash: await sha256(serializedPayload),
+    expected_out: expectedOut.toString(),
+    minimum_out: minOut.toString(),
+    input_amount: amountRaw,
+    slippage_bps: slippageBps,
+    router: ETH_UNISWAP_V2_ROUTER,
+    executable: true,
+    broadcast_by_builder: false,
+    reference: "Uniswap V2 router",
+  };
+}
+
 async function buildPancake(
   taker: string,
   pair: string,
@@ -910,7 +1037,9 @@ Deno.serve(async (req) => {
         ? await buildJupiter(wallet.address, route.pair, side, amountRaw, slippageBps)
         : route.transaction_builder === "pancakeswap_v2"
           ? await buildPancake(wallet.address, route.pair, side, amountRaw, slippageBps, mode === "quote")
-          : null;
+          : route.transaction_builder === "uniswap_v2"
+            ? await buildUniswap(wallet.address, route.pair, side, amountRaw, slippageBps, mode === "quote")
+            : null;
 
     if (!built) return json({ error: "unsupported_transaction_builder" }, 409);
 
