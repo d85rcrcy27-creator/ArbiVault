@@ -358,7 +358,7 @@ async function buildRoute(pair: typeof PAIRS[number]) {
       buyPrice: bestBuy.ask,
       sellPrice: bestSell.bid,
       spreadPct,
-      latency: snapshot.latency,
+      latency: Math.max(Number(bestBuy.latencyMs || 0), Number(bestSell.latencyMs || 0)),
       history: [{ t: Date.now(), v: spreadPct }],
       quotes,
     },
@@ -429,11 +429,23 @@ Deno.serve(async (req) => {
         candidate.strategy_bot_id &&
         strategyBotIds.has(candidate.strategy_bot_id)
       ) || null
-
-
+      const assetSymbol = String(route.pair || '').split('/')[0]
+      const liveAssetMetrics = publicApis.coingecko.find((item: any) => item.symbol === assetSymbol) || null
+      const volume24hUsd = Number(liveAssetMetrics?.volume24h)
+      const selectedQuotes = [route.buyExchange, route.sellExchange]
+        .map((exchange: string) => (route.quotes || []).find((quote: any) => quote.exchange === exchange))
+        .filter(Boolean)
+      const routeLatencyMs = selectedQuotes.length === 2
+        ? Math.max(...selectedQuotes.map((quote: any) => Number(quote.latencyMs || 0)))
+        : Number(route.latency || 0)
 
       return {
         ...route,
+        latency: routeLatencyMs,
+        volume: Number.isFinite(volume24hUsd) ? volume24hUsd : null,
+        volume24hUsd: Number.isFinite(volume24hUsd) ? volume24hUsd : null,
+        live_metrics_at: liveAssetMetrics ? new Date().toISOString() : null,
+        live_metrics_source: liveAssetMetrics ? 'coingecko_24h_volume' : null,
         observed_route_id: observedRoute?.id || null,
         execution_route_id: null,
         strategy_bot_id: observedRoute?.strategy_bot_id || null,
