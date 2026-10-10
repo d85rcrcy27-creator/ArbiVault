@@ -304,7 +304,8 @@ Deno.serve(async (req) => {
         let sawReturn = false;
         let firstInput: string | null = null;
         let finalOutput: string | null = null;
-        for (const callData of calls) {
+        for (let i = 0; i < calls.length; i++) {
+          const callData = calls[i];
           let leg: any;
           try { leg = decodeFunctionData({ abi: BSC_FLASH_ROUTER_ABI, data: callData as `0x${string}` }); }
           catch { return json({ error: "flash_leg_method_not_allowlisted" }, 403); }
