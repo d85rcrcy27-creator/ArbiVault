@@ -142,55 +142,169 @@ async function quote(exchange: string, pair: typeof PAIRS[number]) {
   }
 }
 
-async function rpcHealth() {
-  const checks = await Promise.all([
-    (async () => {
-      const started = performance.now()
-      try {
-        const response = await fetch('https://cloudflare-eth.com', {
+async function timedFetchJson(url: string, body?: unknown, timeoutMs = 2200) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, body === undefined
+      ? { signal: controller.signal, headers: { accept: 'application/json' } }
+      : {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'eth_blockNumber', params: [] }),
-        })
-        const j = await response.json()
-        return { chain: 'ethereum', ok: response.ok && typeof j?.result === 'string', latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
-      } catch { return { chain: 'ethereum', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
-    })(),
-    (async () => {
-      const started = performance.now()
-      try {
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 1800)
-        const response = await fetch('https://bsc-dataseed.binance.org', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'eth_blockNumber', params: [] }),
           signal: controller.signal,
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(body),
         })
-        clearTimeout(timer)
-        const j = await response.json()
-        return { chain: 'bnb', ok: response.ok && !!j?.result, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
-      } catch { return { chain: 'bnb', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
-    })(),
-    (async () => {
-      const started = performance.now()
-      try {
-        const j = await fetch('https://api.mainnet-beta.solana.com', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'getLatestBlockhash', params: [] }),
-        }).then((r) => r.json())
-        return { chain: 'solana', ok: !!j?.result?.value?.blockhash, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' }
-      } catch { return { chain: 'solana', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc' } }
-    })(),
-    (async () => {
-      const started = performance.now()
-      try {
-        const response = await fetch('https://mempool.space/api/blocks/tip/height')
-        return { chain: 'bitcoin', ok: response.ok, latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc' }
-      } catch { return { chain: 'bitcoin', ok: false, latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc' } }
-    })(),
+    if (!response.ok) throw new Error(`http_${response.status}`)
+    return await response.json()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function probeJsonRpc(endpoint: string, method: string, params: unknown[] = []) {
+  const result = await timedFetchJson(endpoint, {
+    jsonrpc: '2.0',
+    id: crypto.randomUUID(),
+    method,
+    params,
+  })
+  if (result?.error) throw new Error(`rpc_${String(result.error.code ?? 'error')}`)
+  if (result?.result === undefined || result?.result === null) throw new Error('rpc_result_missing')
+  return result.result
+}
+
+async function probeEvmEndpoint(provider: string, endpoint: string, expectedChainId: string, chain: string) {
+  const started = performance.now()
+  try {
+    const chainId = String(await probeJsonRpc(endpoint, 'eth_chainId')).toLowerCase()
+    if (chainId !== expectedChainId) throw new Error('wrong_chain_id')
+    const blockNumber = String(await probeJsonRpc(endpoint, 'eth_blockNumber'))
+    if (!/^0x[0-9a-f]+$/i.test(blockNumber)) throw new Error('invalid_block_number')
+    return { chain, provider, endpoint, ok: true, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc', error: null }
+  } catch (error) {
+    return {
+      chain, provider, endpoint, ok: false,
+      latencyMs: Math.round(performance.now() - started), transport: 'json-rpc',
+      error: error instanceof Error ? error.message.slice(0, 160) : 'rpc_probe_failed',
+    }
+  }
+}
+
+async function probeSolanaEndpoint(provider: string, endpoint: string) {
+  const started = performance.now()
+  try {
+    const result = await probeJsonRpc(endpoint, 'getLatestBlockhash', [{ commitment: 'confirmed' }])
+    if (!result?.value?.blockhash) throw new Error('blockhash_missing')
+    return { chain: 'solana', provider, endpoint, ok: true, latencyMs: Math.round(performance.now() - started), transport: 'json-rpc', error: null }
+  } catch (error) {
+    return {
+      chain: 'solana', provider, endpoint, ok: false,
+      latencyMs: Math.round(performance.now() - started), transport: 'json-rpc',
+      error: error instanceof Error ? error.message.slice(0, 160) : 'rpc_probe_failed',
+    }
+  }
+}
+
+async function probeBitcoinEndpoint(provider: string, endpoint: string) {
+  const started = performance.now()
+  try {
+    const response = await fetch(endpoint, { signal: AbortSignal.timeout(2200), headers: { accept: 'text/plain,application/json' } })
+    if (!response.ok) throw new Error(`http_${response.status}`)
+    const body = (await response.text()).trim()
+    if (!/^\d+$/.test(body)) throw new Error('block_height_invalid')
+    return { chain: 'bitcoin', provider, endpoint, ok: true, latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc', error: null }
+  } catch (error) {
+    return {
+      chain: 'bitcoin', provider, endpoint, ok: false,
+      latencyMs: Math.round(performance.now() - started), transport: 'rest-rpc',
+      error: error instanceof Error ? error.message.slice(0, 160) : 'rpc_probe_failed',
+    }
+  }
+}
+
+async function rpcHealth() {
+  // The Home screen polls this response directly. Probe multiple mainnet endpoints
+  // in parallel so a single provider outage no longer paints Ethereum as DOWN.
+  const ethereumProviders = [
+    { provider: 'Ethereum PublicNode', endpoint: 'https://ethereum-rpc.publicnode.com' },
+    { provider: 'Ethereum Cloudflare', endpoint: 'https://cloudflare-eth.com' },
+    { provider: 'Ethereum LlamaRPC', endpoint: 'https://eth.llamarpc.com' },
+  ]
+  const bnbProviders = [
+    { provider: 'BNB Official RPC', endpoint: 'https://bsc-dataseed.binance.org' },
+    { provider: 'BNB Public RPC 2', endpoint: 'https://bsc-dataseed1.defibit.io' },
+    { provider: 'BNB Public RPC 3', endpoint: 'https://bsc-dataseed-public.bnbchain.org' },
+  ]
+  const solanaProviders = [
+    { provider: 'Solana Mainnet', endpoint: 'https://api.mainnet-beta.solana.com' },
+    { provider: 'Solana PublicNode', endpoint: 'https://solana-rpc.publicnode.com' },
+  ]
+  const bitcoinProviders = [
+    { provider: 'Mempool.space', endpoint: 'https://mempool.space/api/blocks/tip/height' },
+    { provider: 'Blockstream', endpoint: 'https://blockstream.info/api/blocks/tip/height' },
+  ]
+
+  const [ethResults, bnbResults, solResults, btcResults] = await Promise.all([
+    Promise.all(ethereumProviders.map(p => probeEvmEndpoint(p.provider, p.endpoint, '0x1', 'ethereum'))),
+    Promise.all(bnbProviders.map(p => probeEvmEndpoint(p.provider, p.endpoint, '0x38', 'bnb'))),
+    Promise.all(solanaProviders.map(p => probeSolanaEndpoint(p.provider, p.endpoint))),
+    Promise.all(bitcoinProviders.map(p => probeBitcoinEndpoint(p.provider, p.endpoint))),
   ])
+
+  const summarize = (chain: string, results: any[]) => {
+    const successful = results.filter(item => item.ok).sort((a, b) => a.latencyMs - b.latencyMs)
+    const chosen = successful[0] || results.slice().sort((a, b) => a.latencyMs - b.latencyMs)[0]
+    return {
+      chain,
+      ok: successful.length > 0,
+      latencyMs: chosen?.latencyMs || 0,
+      transport: chosen?.transport || 'rpc',
+      provider: chosen?.provider || null,
+      endpoint: chosen?.ok ? chosen.endpoint : null,
+      providers_checked: results.length,
+      provider_results: results,
+      last_error: successful.length ? null : (chosen?.error || 'all_rpc_providers_failed'),
+    }
+  }
+
+  const checks = [
+    summarize('ethereum', ethResults),
+    summarize('bnb', bnbResults),
+    summarize('solana', solResults),
+    summarize('bitcoin', btcResults),
+  ]
+  const checkedAt = new Date().toISOString()
+
+  // Keep the RPC registry in sync with actual probes. Database writes are best
+  // effort and must never take the live market response down.
+  await Promise.all(checks.map(async (check: any) => {
+    const chainPayload: Record<string, unknown> = {
+      health_status: check.ok ? 'healthy' : 'down',
+      last_health_check_at: checkedAt,
+      last_latency_ms: check.latencyMs,
+      updated_at: checkedAt,
+    }
+    if (check.ok && check.endpoint && ['ethereum', 'bnb', 'solana'].includes(check.chain)) {
+      chainPayload.rpc_url = check.endpoint
+    }
+    await admin.from('arbivault_chain_rpc')
+      .update(chainPayload)
+      .eq('chain', check.chain)
+      .eq('enabled', true)
+      .then(() => undefined)
+      .catch(() => undefined)
+  }))
+
+  const allProviderResults = [...ethResults, ...bnbResults, ...solResults, ...btcResults]
+  await Promise.all(allProviderResults.map(async (item: any) => {
+    await admin.from('arbivault_rpc_endpoints').update({
+      health_status: item.ok ? 'healthy' : 'down',
+      last_health_check_at: checkedAt,
+      last_error: item.ok ? null : item.error,
+      updated_at: checkedAt,
+    }).eq('endpoint', item.endpoint).then(() => undefined).catch(() => undefined)
+  }))
+
   return checks
 }
 
