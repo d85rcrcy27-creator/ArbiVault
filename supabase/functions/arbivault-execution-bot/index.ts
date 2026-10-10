@@ -20,6 +20,20 @@ const PAIRS = [
     okx: 'BNB-USDT',
     probe: { sell: '1000000000000000', buy: '1000000000000000000' }, // 0.001 BNB / 1 USDT
   },
+  {
+    chain: 'solana',
+    pair: 'SOL/USDT',
+    symbol: 'SOLUSDT',
+    okx: 'SOL-USDT',
+    probe: { sell: '10000000', buy: '100000000' }, // 0.01 SOL / 100 USDT (six decimal stablecoin)
+  },
+  {
+    chain: 'ethereum',
+    pair: 'ETH/USDC',
+    symbol: 'ETHUSDC',
+    okx: 'ETH-USDC',
+    probe: { sell: '1000000000000000', buy: '100000000' }, // 0.001 ETH / 100 USDC
+  },
 ]
 
 async function authorized(req: Request) {
@@ -294,6 +308,50 @@ async function buildDexPreflight(
   }
 }
 
+async function buildDexQuotePreflight(
+  route: any,
+  walletId: string,
+  walletAddress: string,
+  probe: { sell: string; buy: string },
+) {
+  if (!route?.transaction_builder) return null;
+  const sell = await callTransactionBuilder({
+    mode: 'quote',
+    route_id: route.id,
+    source_wallet_id: walletId,
+    side: 'sell',
+    amount_raw: probe.sell,
+    slippage_bps: 50,
+    price_impact_pct: 0,
+  });
+  const buy = await callTransactionBuilder({
+    mode: 'quote',
+    route_id: route.id,
+    source_wallet_id: walletId,
+    side: 'buy',
+    amount_raw: probe.buy,
+    slippage_bps: 50,
+    price_impact_pct: 0,
+  });
+  return {
+    wallet: walletAddress,
+    builder: route.transaction_builder,
+    quote_only: true,
+    sell: {
+      price: dexQuotePrice(sell, 'sell'),
+      out_amount: sell?.out_amount || sell?.expected_out || null,
+      transaction_payload_hash: null,
+      executable_unsigned: false,
+    },
+    buy: {
+      price: dexQuotePrice(buy, 'buy'),
+      out_amount: buy?.out_amount || buy?.expected_out || null,
+      transaction_payload_hash: null,
+      executable_unsigned: false,
+    },
+  };
+}
+
 async function sha256(value: string) {
   const bytes = await crypto.subtle.digest(
     'SHA-256',
@@ -546,9 +604,13 @@ export default {
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
             executionRoute.builder_enabled === true &&
             flashExecutorDiagnostic?.ready_for_flash_transaction_test === true
-          if (wallet && executionRoute.route_type === 'dex_cex' && cexExecutionConfigured) {
+          if (wallet && executionRoute.route_type === 'dex_cex') {
             try {
-              dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
+              // Still collect a live DEX-side quote when the CEX order adapter is
+              // unavailable, but mark it quote-only so it cannot qualify for execution.
+              dexPreflight = cexExecutionConfigured
+                ? await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
+                : await buildDexQuotePreflight(executionRoute, wallet.id, wallet.address, pair.probe)
               executionContext.dex_preflight = dexPreflight
             } catch (e) {
               builderError = e instanceof Error ? e.message : String(e)
@@ -573,8 +635,8 @@ export default {
                 ? configuredNotional
                 : 100
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
-              // BNB Chain USDT has 18 decimals. Use the configured strategy size or the
-              // existing policy allowance as the quote notional, and only live router state.
+              // BNB Chain USDT has 18 decimals. Use the configured strategy size or a
+              // quote-only screening default; policy capital allowance never sets notional.
               const amountRaw = (BigInt(Math.round(notionalUsd * 100000000)) * 10000000000n).toString()
               flashQuote = await callTransactionBuilder({
                 mode: 'flash_quote',
