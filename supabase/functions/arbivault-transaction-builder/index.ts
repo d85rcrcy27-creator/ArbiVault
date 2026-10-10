@@ -497,7 +497,7 @@ async function buildFlashOpportunityQuote(
   if (normalizedAsset !== WBNB.toLowerCase() && normalizedAsset !== BSC_USDT.toLowerCase()) {
     throw new Error("flash_asset_not_allowlisted");
   }
-  if (!/^\\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+  if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
     throw new Error("flash_amount_invalid");
   }
   if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS) {
