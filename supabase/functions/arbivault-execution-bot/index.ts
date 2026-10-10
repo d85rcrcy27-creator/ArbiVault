@@ -440,7 +440,6 @@ export default {
 
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
-            chains.includes(candidate.chain) &&
             candidate.enabled === true &&
             candidate.route_type === 'flash_liquidity'
           )
@@ -448,10 +447,10 @@ export default {
             const diagnostic: any = flashExecutorDiagnostic || {}
             let blocker = 'flash_executor_payout_unverified'
             if (candidate.chain === 'ethereum') {
-              blocker = !candidate.transaction_builder || candidate.builder_enabled !== true
-                ? 'ethereum_flash_builder_not_configured'
-                : !diagnostic.ethereum_flash_executor_configured
-                  ? 'ethereum_flash_executor_not_configured'
+              blocker = !diagnostic.ethereum_flash_executor_configured
+                ? 'ethereum_flash_executor_not_configured'
+                : !candidate.transaction_builder || candidate.builder_enabled !== true
+                  ? 'ethereum_flash_builder_not_configured'
                   : 'ethereum_flash_payout_unverified'
             } else if (!diagnostic.executor_configured) {
               blocker = 'flash_executor_not_configured'
@@ -523,8 +522,7 @@ export default {
           const multiLegBuilderConfigured =
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
             executionRoute.builder_enabled === true &&
-            !!Deno.env.get('ARBIVAULT_BSC_FLASH_EXECUTOR') &&
-            !!Deno.env.get('ARBIVAULT_BSC_AAVE_POOL')
+            flashExecutorDiagnostic?.ready_for_flash_transaction_test === true
           if (wallet && executionRoute.route_type === 'dex_cex' && cexExecutionConfigured) {
             try {
               dexPreflight = await buildDexPreflight(executionRoute, wallet.id, wallet.address, pair.probe)
