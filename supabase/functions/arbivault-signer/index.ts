@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { decodeFunctionData, decodeFunctionResult, parseAbi } from "npm:viem@2.39.0";
+import { decodeFunctionData, decodeFunctionResult, encodeFunctionData, parseAbi } from "npm:viem@2.39.0";
 import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
