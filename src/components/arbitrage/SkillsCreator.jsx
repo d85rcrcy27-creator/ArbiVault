@@ -60,7 +60,7 @@ const STRATEGY_PRESETS = [
       { type: 'condition', label: 'IF Latency <', value: '60', unit: 'ms' },
       { type: 'condition', label: 'IF Volume >', value: '10000', unit: 'USD' },
       { type: 'action', label: 'THEN Execute Order' },
-      { type: 'action', label: 'THEN Open Hedge' },
+      { type: 'action', label: 'THEN Send Alert' },
     ],
   },
 ]
@@ -213,9 +213,9 @@ function blockMatches(block, route) {
   const value = Number.parseFloat(block.value)
   if (Number.isNaN(value)) return false
   if (block.label.includes('Spread')) return route.spreadPct > value
-  if (block.label.includes('Latency')) return route.latency < value
-  if (block.label.includes('Volume')) return route.volume > value
-  if (block.label.includes('Profit')) return route.profit > value
+  if (block.label.includes('Latency')) return Number(route.latency) < value
+  if (block.label.includes('Volume')) return Number(route.volume24hUsd ?? route.volume) > value
+  if (block.label.includes('Profit')) return Number(route.estimatedNetProfitUsd ?? route.profit) > value
   return false
 }
 
@@ -351,35 +351,55 @@ export default function SkillsCreator({ routes = [], onExecute }) {
 
   const runSkillBacktest = async (skill) => {
     const blocks = asBlockArray(skill.conditions)
-    const thresholdBlock = blocks.find((b) => b.label?.includes('Spread'))
-    const threshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) || 0 : 0
+    const thresholdBlock = blocks.find((b) => b.label?.toLowerCase().includes('spread'))
+    const parsedThreshold = thresholdBlock ? Number.parseFloat(thresholdBlock.value) : undefined
+    const notional = Number(skill.risk_limits?.maxNotional || skill.risk_limits?.max_trade_size || 1000)
     try {
       setError('')
-      const backtest = await runBacktest({ threshold, days: 730, skillId: skill.id })
-      // Backtest is research-only and does not require authentication or persist
-      // results to the private strategy record. Keep the result local to the UI.
+      const backtest = await runBacktest({
+        ...(Number.isFinite(parsedThreshold) ? { threshold: parsedThreshold } : {}),
+        days: 730,
+        skillId: skill.id,
+        notional,
+      })
+      // The server stores the result on the skill; this view updates from the same
+      // returned result. Backtests remain research-only and never trigger live execution.
       setStrategies((prev) => prev.map((s) => s.id === skill.id
         ? { ...s, backtest: { ...backtest, ranAt: new Date().toISOString() } }
         : s
       ))
-    } catch (e) { setError(e.message || 'Unable to save backtest') }
+    } catch (e) { setError(e.message || 'Unable to run backtest') }
   }
 
   useEffect(() => {
     if (!onExecute) return
     const now = Date.now()
     strategies.forEach((skill) => {
-      if (!skill.active) return
+      if (!skill.active || skill.observation_only === true || skill.discovery_enabled === true) return
       const actions = asBlockArray(skill.actions)
-      if (!actions.some((a) => a.label?.includes('Execute'))) return
+      if (!actions.some((a) => /execute/i.test(a.label || ''))) return
       const conditions = asBlockArray(skill.conditions)
       if (!conditions.length) return
+      const notional = Number(skill.risk_limits?.maxNotional || skill.risk_limits?.max_trade_size || 1000)
       routes.forEach((route) => {
-        if (route.spreadPct <= 0 || !conditions.every((c) => blockMatches(c, route))) return
+        const spreadPct = Number(route.spreadPct)
+        const estimatedNetProfitUsd = notional * (spreadPct - 0.20 - 0.10) / 100
+        const liveRoute = {
+          ...route,
+          volume: Number(route.volume24hUsd ?? route.volume),
+          estimatedNetProfitUsd,
+        }
+        // Live orders only use fresh live-market snapshots and must clear the
+        // configured conservative fee + slippage estimate. Backtest samples never enter here.
+        if (!Number.isFinite(spreadPct) || spreadPct <= 0 || !Number.isFinite(liveRoute.volume) ||
+            !Number.isFinite(Number(liveRoute.latency)) || estimatedNetProfitUsd <= 0 ||
+            !conditions.every((condition) => blockMatches(condition, liveRoute))) return
         const key = `${skill.id}:${route.id}`
         if (now - (cooldownRef.current[key] || 0) < (skill.cooldown_seconds || 30) * 1000) return
         cooldownRef.current[key] = now
-        onExecute(route.id, skill.name, skill.id)
+        Promise.resolve(onExecute(route, skill.name, skill.id)).catch((error) => {
+          setError(error?.message || 'Live execution request failed')
+        })
       })
     })
   }, [routes, strategies, onExecute])
