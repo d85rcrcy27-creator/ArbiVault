@@ -35,7 +35,8 @@ function randomToken() {
 }
 
 function validAddress(chain: string, address: string) {
-  if (chain === "bnb") return /^0x[a-fA-F0-9]{40}$/.test(address);
+  // Ethereum and BNB are both EVM address formats but destinations remain chain-scoped.
+  if (chain === "bnb" || chain === "ethereum") return /^0x[a-fA-F0-9]{40}$/.test(address);
   if (chain === "bitcoin") return /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,90}$/.test(address);
   if (chain === "solana") return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
   return false;
@@ -58,7 +59,7 @@ Deno.serve(async (req) => {
       const label = String(body.label || "").trim() || null;
       const makePrimary = body.make_primary === true;
 
-      if (!["bitcoin", "bnb", "solana"].includes(chain) || !validAddress(chain, address)) {
+      if (!["bitcoin", "bnb", "ethereum", "solana"].includes(chain) || !validAddress(chain, address)) {
         return json({ error: "invalid_destination" }, 400);
       }
 
@@ -173,7 +174,12 @@ Deno.serve(async (req) => {
         return json({ error: "destination_activation_pending", activation_at: destination.activation_at }, 409);
       }
 
-      const normalizedAsset = asset || (wallet.chain === "bitcoin" ? "BTC" : wallet.chain === "solana" ? "SOL" : "BNB");
+      const normalizedAsset = asset || (
+        wallet.chain === "bitcoin" ? "BTC"
+          : wallet.chain === "solana" ? "SOL"
+          : wallet.chain === "ethereum" ? "ETH"
+          : "BNB"
+      );
       const snapshot = {
         source_wallet_id: wallet.id,
         source_address: wallet.address,
