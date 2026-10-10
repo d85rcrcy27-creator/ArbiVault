@@ -287,22 +287,28 @@ async function rpcHealth() {
     if (check.ok && check.endpoint && ['ethereum', 'bnb', 'solana'].includes(check.chain)) {
       chainPayload.rpc_url = check.endpoint
     }
-    await admin.from('arbivault_chain_rpc')
-      .update(chainPayload)
-      .eq('chain', check.chain)
-      .eq('enabled', true)
-      .then(() => undefined)
-      .catch(() => undefined)
+    try {
+      await admin.from('arbivault_chain_rpc')
+        .update(chainPayload)
+        .eq('chain', check.chain)
+        .eq('enabled', true)
+    } catch {
+      // Status persistence must not fail the live health response.
+    }
   }))
 
   const allProviderResults = [...ethResults, ...bnbResults, ...solResults, ...btcResults]
   await Promise.all(allProviderResults.map(async (item: any) => {
-    await admin.from('arbivault_rpc_endpoints').update({
-      health_status: item.ok ? 'healthy' : 'down',
-      last_health_check_at: checkedAt,
-      last_error: item.ok ? null : item.error,
-      updated_at: checkedAt,
-    }).eq('endpoint', item.endpoint).then(() => undefined).catch(() => undefined)
+    try {
+      await admin.from('arbivault_rpc_endpoints').update({
+        health_status: item.ok ? 'healthy' : 'down',
+        last_health_check_at: checkedAt,
+        last_error: item.ok ? null : item.error,
+        updated_at: checkedAt,
+      }).eq('endpoint', item.endpoint)
+    } catch {
+      // Endpoint-level status is supplemental; keep health checks available.
+    }
   }))
 
   return checks
