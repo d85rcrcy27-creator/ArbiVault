@@ -328,6 +328,12 @@ export default {
     // balances, transaction-builder preflight, gas availability, route readiness,
     // and signer authorization remain enforced before any broadcast.
     const executionWindowActive = policyActive
+    const flashExecutorDiagnostic = await callTransactionBuilder({ mode: 'diagnostic' }).catch((error) => ({
+      diagnostic_only: true,
+      ready_for_flash_transaction_test: false,
+      payout_behavior_verified: false,
+      diagnostic_error: error instanceof Error ? error.message : 'flash_executor_diagnostic_failed',
+    }))
 
     const { data: bots, error: botError } = await supabase
       .from('bot_configs')
@@ -431,6 +437,56 @@ export default {
           .eq('wallet_role', 'trading_hot')
 
         if (wallets.error) throw wallets.error
+
+        const flashRouteDiagnostics = (routes || [])
+          .filter((candidate: any) =>
+            chains.includes(candidate.chain) &&
+            candidate.enabled === true &&
+            candidate.route_type === 'flash_liquidity'
+          )
+          .map((candidate: any) => {
+            const diagnostic: any = flashExecutorDiagnostic || {}
+            let blocker = 'flash_executor_payout_unverified'
+            if (candidate.chain === 'ethereum') {
+              blocker = !candidate.transaction_builder || candidate.builder_enabled !== true
+                ? 'ethereum_flash_builder_not_configured'
+                : !diagnostic.ethereum_flash_executor_configured
+                  ? 'ethereum_flash_executor_not_configured'
+                  : 'ethereum_flash_payout_unverified'
+            } else if (!diagnostic.executor_configured) {
+              blocker = 'flash_executor_not_configured'
+            } else if (!diagnostic.executor_code_deployed) {
+              blocker = 'flash_executor_bytecode_missing'
+            } else if (diagnostic.source_verification?.verified !== true) {
+              blocker = 'flash_executor_source_unverified'
+            } else if (diagnostic.payout_behavior_verified !== true) {
+              blocker = 'flash_executor_payout_unverified'
+            } else if (diagnostic.ready_for_flash_transaction_test !== true) {
+              blocker = 'flash_executor_preflight_not_ready'
+            } else {
+              blocker = 'ready_for_explicit_preflight'
+            }
+            return {
+              id: candidate.id,
+              chain: candidate.chain,
+              pair: candidate.pair,
+              builder: candidate.transaction_builder,
+              builder_enabled: candidate.builder_enabled === true,
+              ready_for_transaction_test: blocker === 'ready_for_explicit_preflight',
+              blocker,
+            }
+          })
+
+        // Keep the route catalogue honest without creating fake execution attempts.
+        for (const diagnostic of flashRouteDiagnostics) {
+          const routeRow = (routes || []).find((candidate: any) => candidate.id === diagnostic.id)
+          if (routeRow && routeRow.builder_status !== diagnostic.blocker) {
+            await supabase.from('arbivault_strategy_routes')
+              .update({ builder_status: diagnostic.blocker, updated_at: new Date().toISOString() })
+              .eq('id', diagnostic.id)
+              .eq('builder_status', routeRow.builder_status)
+          }
+        }
 
         // Execution consumes only explicitly executable strategy routes.
         // Research/observer observations are never an execution trigger.
@@ -565,7 +621,9 @@ export default {
             transaction_builder_present: true,
             transaction_builder_preflighted: opportunities.some((item) => item.dex_preflight),
             execution_signer_adapter_present: opportunities.some((item) => item.execution_gate === 'eligible'),
-            atomic_multileg_builder_present: false,
+            atomic_multileg_builder_present: flashExecutorDiagnostic?.ready_for_flash_transaction_test === true,
+            flash_executor_diagnostic: flashExecutorDiagnostic,
+            flash_routes: flashRouteDiagnostics,
             internal_signers_present: signerAdapters.length > 0,
           },
         }
@@ -635,6 +693,7 @@ export default {
       live_execution_policy: executionWindowActive ? String(policy?.mode || 'configured') : 'policy_blocked',
       actual_broadcasts: signerInvocations.filter((item: any) => item.broadcast === true).length,
       confirmed_profits: 0,
+      flash_executor_diagnostic: flashExecutorDiagnostic,
       results,
     })
   },
