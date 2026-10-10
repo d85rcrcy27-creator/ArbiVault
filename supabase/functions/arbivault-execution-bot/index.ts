@@ -324,11 +324,10 @@ export default {
       new Date(policy.starts_at) <= now &&
       (!policy.ends_at || new Date(policy.ends_at) > now)
 
-    const capitalAllowance = policyActive ? Number(policy.capital_allowance || 0) : 0
-    const executionWindowActive = policyActive && (
-      (policy.mode === 'zero_capital' && capitalAllowance === 0) ||
-      (policy.mode === 'live' && capitalAllowance > 0)
-    )
+    // Capital allowance is not an execution eligibility gate. Actual wallet
+    // balances, transaction-builder preflight, gas availability, route readiness,
+    // and signer authorization remain enforced before any broadcast.
+    const executionWindowActive = policyActive
 
     const { data: bots, error: botError } = await supabase
       .from('bot_configs')
