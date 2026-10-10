@@ -173,7 +173,18 @@ contract ArbiVaultFlashExecutorTest {
     function testMinimumProfitIsEnforcedBeforePayout() public {
         routerOne.setRate(10_000);
         routerTwo.setRate(10_000);
-        (address[] memory targets, uint256[] memory values, bytes[] memory calls) = _profitableRoute(address(executor));
+        (address[] memory targets, uint256[] memory values, bytes[] memory calls) =
+            _profitableRoute(address(executor));
+        // The first 1:1 leg outputs 1,000 B, so the second leg must spend 1,000, not
+        // the 1,100 amount used by the profitable-path fixture.
+        calls[1] = abi.encodeWithSelector(
+            IArbiVaultV2Router.swapExactTokensForTokens.selector,
+            LOAN_AMOUNT,
+            1,
+            _path(address(tokenB), address(tokenA)),
+            address(executor),
+            block.timestamp + 60
+        );
 
         vm.expectRevert(ArbiVaultFlashExecutor.InsufficientProfit.selector);
         vm.prank(HOT_WALLET);
