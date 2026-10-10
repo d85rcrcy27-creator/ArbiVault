@@ -4,6 +4,7 @@ import * as bitcoin from 'npm:bitcoinjs-lib@7.0.0'
 import * as ecc from 'npm:tiny-secp256k1@2.2.3'
 import { ECPairFactory } from 'npm:ecpair@3.0.0'
 import { Keypair } from 'npm:@solana/web3.js@1.98.4'
+import { Wallet as XrplWallet } from 'npm:xrpl@4.2.5'
 const ECPair=ECPairFactory(ecc)
 const url=Deno.env.get('SUPABASE_URL')!, serviceKey=Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const admin=createClient(url,serviceKey)
@@ -15,7 +16,7 @@ const corsHeaders={
  'Vary':'Origin'
 }
 const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{...corsHeaders,'cache-control':'no-store'}})
-async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'){
+async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp'){
  const {data:existing}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
  if(existing?.secret_ref)return existing
  if(existing?.id){
@@ -25,6 +26,7 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
  let address='',secret='',derivation_path:string|null=null
  if(chain==='bnb'||chain==='ethereum'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
  else if(chain==='solana'){const kp=Keypair.generate();address=kp.publicKey.toBase58();secret=Array.from(kp.secretKey).map(b=>b.toString(16).padStart(2,'0')).join('');derivation_path='internal-random-ed25519'}
+ else if(chain==='xrp'){const xrplWallet=XrplWallet.generate();address=xrplWallet.address;secret=xrplWallet.seed;derivation_path='internal-random-xrpl-secp256k1'}
  else{const key=ECPair.makeRandom(),payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin});if(!payment.address)throw new Error('bitcoin_address_derivation_failed');address=payment.address;secret=key.toWIF();derivation_path='internal-random-secp256k1-p2wpkh'}
  const {data:wallet,error}=await admin.from('wallets').insert({owner_id:userId,chain,address,label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',status:'active',is_hot:true,custody_type:'server_vault',wallet_role:'trading_hot',verification_source:'arbivault-wallet-bootstrap',data_quality_status:'verified',derivation_path}).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').single()
  if(error||!wallet)throw new Error(error?.message||'wallet_create_failed')
@@ -35,8 +37,8 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
 }
 async function ensureBindings(userId:string,wallets:any[]){
  const botDefaults=[
-  {name:'ArbiVault Execution Bot',strategy:'liquidity_fragmentation',chains:['bnb','solana'],enabled:false,min_profit_threshold:0.50,max_gas_budget:0.01,max_trade_size:10000,slippage_tolerance:0.50,autonomy_enabled:true,autonomy_mode:'observe_only',requires_human_approval:false,max_autonomous_transaction:0,allowed_payment_methods:['crypto','stripe'],bot_role:'execution'},
-  {name:'ArbiVault Sync Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'sync',allowed_payment_methods:['crypto','stripe']},
+  {name:'ArbiVault Execution Bot',strategy:'liquidity_fragmentation',chains:['bnb','solana','xrp'],enabled:false,min_profit_threshold:0.50,max_gas_budget:0.01,max_trade_size:10000,slippage_tolerance:0.50,autonomy_enabled:true,autonomy_mode:'observe_only',requires_human_approval:false,max_autonomous_transaction:0,allowed_payment_methods:['crypto','stripe'],bot_role:'execution'},
+  {name:'ArbiVault Sync Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana','xrp'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'sync',allowed_payment_methods:['crypto','stripe']},
   {name:'ArbiVault Payment Processing Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'payment',allowed_payment_methods:['crypto','stripe']}
  ]
  for(const spec of botDefaults){
@@ -97,4 +99,4 @@ async function ensureBindings(userId:string,wallets:any[]){
  }
  return bot
 }
-Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok',{status:200,headers:corsHeaders});if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin'];const chains=['bnb','solana','ethereum','bitcoin'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
+Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok',{status:200,headers:corsHeaders});if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin','xrp'];const chains=['bnb','solana','ethereum','bitcoin','xrp'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin'|'xrp')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
