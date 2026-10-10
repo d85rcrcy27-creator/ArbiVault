@@ -7,6 +7,9 @@ const supabase = createClient(
 );
 
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
+const ETHEREUM_RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com";
+const ETH_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_ETH_AAVE_PROVIDER") || "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e").trim();
+const ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 // Fail closed until the deployed executor contract source and live bytecode prove that
@@ -92,6 +95,39 @@ async function rpc(method: string, params: unknown[]) {
     }
   }
   throw new Error(lastError instanceof Error ? lastError.message : "bsc_rpc_all_providers_failed");
+}
+
+
+async function ethereumRpc(method: string, params: unknown[]) {
+  const endpoints = [...new Set([
+    ETHEREUM_RPC,
+    "https://ethereum-rpc.publicnode.com",
+    "https://cloudflare-eth.com",
+    "https://eth.llamarpc.com",
+  ].filter(Boolean))];
+  let lastError: unknown = null;
+  for (const endpoint of endpoints) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+      });
+      if (!response.ok) throw new Error(`ethereum_rpc_http_${response.status}`);
+      const body = await response.json();
+      if (body.error) throw new Error(`ethereum_rpc_${body.error.code ?? "error"}`);
+      if (body.result === undefined || body.result === null) throw new Error("ethereum_rpc_result_missing");
+      return body.result;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(lastError instanceof Error ? lastError.message : "ethereum_rpc_all_providers_failed");
 }
 
 function toBigInt(value: string) {
@@ -204,6 +240,23 @@ async function resolveBscAavePool(): Promise<string> {
   return pool;
 }
 
+async function resolveEthereumAavePool(): Promise<string> {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(ETH_AAVE_PROVIDER)) {
+    throw new Error("invalid_ethereum_aave_provider_config");
+  }
+  const callData = encodeFunctionData({ abi: AAVE_PROVIDER_ABI, functionName: "getPool" });
+  const raw = await ethereumRpc("eth_call", [{ to: ETH_AAVE_PROVIDER, data: callData }, "latest"]);
+  const pool = decodeFunctionResult({
+    abi: AAVE_PROVIDER_ABI,
+    functionName: "getPool",
+    data: raw as `0x${string}`,
+  }) as string;
+  if (!/^0x[a-fA-F0-9]{40}$/.test(pool) || /^0x0{40}$/i.test(pool)) {
+    throw new Error("ethereum_aave_pool_resolution_failed");
+  }
+  return pool;
+}
+
 async function lookupSourcifyVerification(chainId: string, address: string) {
   try {
     const response = await fetch(
@@ -231,66 +284,112 @@ async function lookupSourcifyVerification(chainId: string, address: string) {
   }
 }
 
+async function verifyExecutor(chainId: string, executor: string, readCode: (address: string) => Promise<unknown>) {
+  const validAddress = /^0x[a-fA-F0-9]{40}$/.test(executor);
+  const result: Record<string, unknown> = {
+    configured: validAddress,
+    address: validAddress ? executor : null,
+    code_deployed: false,
+    bytecode_hash: null,
+    bytecode_size_bytes: 0,
+    source_verification: { checked: false, verified: false, match: null, runtime_match: null },
+  };
+  if (!validAddress) return result;
+  try {
+    const code = String(await readCode(executor));
+    result.code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
+    result.bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
+    result.bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
+    if (result.code_deployed) result.source_verification = await lookupSourcifyVerification(chainId, executor);
+  } catch (error) {
+    result.code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
+  }
+  return result;
+}
+
 async function diagnoseFlashExecutor() {
   const result: Record<string, unknown> = {
     diagnostic_only: true,
-    network: "BNB Smart Chain mainnet",
-    expected_chain_id: 56,
     payout_behavior_verified: false,
-    payout_audit_reason: "A deployed executor's exact verified source and payout path must be manually audited before enabling transaction building.",
-    transaction_building_enabled: FLASH_EXECUTOR_PAYOUT_AUDITED,
+    payout_audit_reason: "Payout can only be verified after the exact chain-specific deployed executor source, immutable hot-wallet recipient, and runtime bytecode are independently audited. Mock tests alone are not production verification.",
+    transaction_building_enabled: false,
+    bnb: {
+      network: "BNB Smart Chain mainnet",
+      expected_chain_id: 56,
+      aave_provider_address: BSC_AAVE_PROVIDER,
+      payout_behavior_verified: false,
+    },
+    ethereum: {
+      network: "Ethereum mainnet",
+      expected_chain_id: 1,
+      aave_provider_address: ETH_AAVE_PROVIDER,
+      payout_behavior_verified: false,
+    },
   };
+  const bnb: any = result.bnb;
+  const eth: any = result.ethereum;
+
   try {
-    const rawChainId = String(await rpc("eth_chainId", [])).toLowerCase();
-    result.rpc_chain_id = rawChainId;
-    result.rpc_chain_ok = rawChainId === "0x38";
+    const chainId = String(await rpc("eth_chainId", [])).toLowerCase();
+    bnb.rpc_chain_id = chainId;
+    bnb.rpc_chain_ok = chainId === "0x38";
   } catch (error) {
-    result.rpc_chain_ok = false;
-    result.rpc_error = error instanceof Error ? error.message : "bsc_rpc_probe_failed";
+    bnb.rpc_chain_ok = false;
+    bnb.rpc_error = error instanceof Error ? error.message : "bsc_rpc_probe_failed";
   }
   try {
-    result.aave_provider_address = BSC_AAVE_PROVIDER;
-    result.aave_pool_address = await resolveBscAavePool();
-    result.aave_pool_resolved = true;
+    bnb.aave_pool_address = await resolveBscAavePool();
+    bnb.aave_pool_resolved = true;
   } catch (error) {
-    result.aave_pool_resolved = false;
-    result.aave_pool_error = error instanceof Error ? error.message : "aave_pool_resolution_failed";
+    bnb.aave_pool_resolved = false;
+    bnb.aave_pool_error = error instanceof Error ? error.message : "aave_pool_resolution_failed";
   }
-
-  const executor = BSC_FLASH_EXECUTOR;
-  result.executor_address = /^0x[a-fA-F0-9]{40}$/.test(executor) ? executor : null;
-  result.executor_configured = /^0x[a-fA-F0-9]{40}$/.test(executor);
-  result.executor_code_deployed = false;
-  result.executor_bytecode_hash = null;
-  result.executor_bytecode_size_bytes = 0;
-  result.source_verification = { checked: false, verified: false, match: null, runtime_match: null };
-
-  if (result.executor_configured) {
-    try {
-      const code = String(await rpc("eth_getCode", [executor, "latest"]));
-      result.executor_code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
-      result.executor_bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
-      result.executor_bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
-      if (result.executor_code_deployed) {
-        result.source_verification = await lookupSourcifyVerification("56", executor);
-      }
-    } catch (error) {
-      result.executor_code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
-    }
-  }
-
-  const ethExecutor = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
-  result.ethereum_flash_executor_configured = /^0x[a-fA-F0-9]{40}$/.test(ethExecutor);
-  result.ethereum_flash_executor_address = result.ethereum_flash_executor_configured ? ethExecutor : null;
-  result.ethereum_payout_behavior_verified = false;
-  result.ready_for_flash_transaction_test =
-    result.rpc_chain_ok === true &&
-    result.aave_pool_resolved === true &&
-    result.executor_configured === true &&
-    result.executor_code_deployed === true &&
-    (result.source_verification as any)?.verified === true &&
+  bnb.executor = await verifyExecutor("56", BSC_FLASH_EXECUTOR, (address) => rpc("eth_getCode", [address, "latest"]));
+  bnb.ready_for_flash_transaction_test =
+    bnb.rpc_chain_ok === true &&
+    bnb.aave_pool_resolved === true &&
+    (bnb.executor as any).configured === true &&
+    (bnb.executor as any).code_deployed === true &&
+    (bnb.executor as any).source_verification?.verified === true &&
     FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
+  try {
+    const chainId = String(await ethereumRpc("eth_chainId", [])).toLowerCase();
+    eth.rpc_chain_id = chainId;
+    eth.rpc_chain_ok = chainId === "0x1";
+  } catch (error) {
+    eth.rpc_chain_ok = false;
+    eth.rpc_error = error instanceof Error ? error.message : "ethereum_rpc_probe_failed";
+  }
+  try {
+    eth.aave_pool_address = await resolveEthereumAavePool();
+    eth.aave_pool_resolved = true;
+  } catch (error) {
+    eth.aave_pool_resolved = false;
+    eth.aave_pool_error = error instanceof Error ? error.message : "ethereum_aave_pool_resolution_failed";
+  }
+  eth.executor = await verifyExecutor("1", ETH_FLASH_EXECUTOR, (address) => ethereumRpc("eth_getCode", [address, "latest"]));
+  eth.ready_for_flash_transaction_test =
+    eth.rpc_chain_ok === true &&
+    eth.aave_pool_resolved === true &&
+    (eth.executor as any).configured === true &&
+    (eth.executor as any).code_deployed === true &&
+    (eth.executor as any).source_verification?.verified === true &&
+    FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+
+  result.ready_for_flash_transaction_test = bnb.ready_for_flash_transaction_test === true || eth.ready_for_flash_transaction_test === true;
+  result.executor_configured = (bnb.executor as any).configured === true;
+  result.executor_address = (bnb.executor as any).address || null;
+  result.executor_code_deployed = (bnb.executor as any).code_deployed === true;
+  result.executor_bytecode_hash = (bnb.executor as any).bytecode_hash || null;
+  result.source_verification = (bnb.executor as any).source_verification;
+  result.aave_pool_resolved = bnb.aave_pool_resolved === true;
+  result.aave_pool_address = bnb.aave_pool_address || null;
+  result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
+  result.ethereum_flash_executor_address = (eth.executor as any).address || null;
+  result.ethereum_payout_behavior_verified = false;
+  result.ethereum_aave_pool_resolved = eth.aave_pool_resolved === true;
+  result.ethereum_aave_pool_address = eth.aave_pool_address || null;
   return result;
 }
 
