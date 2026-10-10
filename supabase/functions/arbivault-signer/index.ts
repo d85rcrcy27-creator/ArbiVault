@@ -43,6 +43,9 @@ const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.s
 const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const BSC_WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
+const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
+const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+const ETH_USDC = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
@@ -239,12 +242,8 @@ Deno.serve(async (req) => {
     let signed = "";
 
     if (chain === "bnb" || chain === "ethereum") {
-      // No raw signed/serialized EVM transaction fallback: only a structured,
-      // chain-bound payload with a strict destination and method allowlist is signable.
-      if (chain !== "bnb") {
-        return json({ error: "evm_chain_not_allowlisted_for_internal_signer" }, 403);
-      }
-
+      // Only structured, chain-bound EVM payloads are signable; router and
+      // token paths are allowlisted separately for Ethereum mainnet and BNB.
       let candidate: any;
       try {
         candidate = JSON.parse(unsigned);
@@ -262,7 +261,8 @@ Deno.serve(async (req) => {
       if (!candidate.from || String(candidate.from).toLowerCase() !== wallet.address.toLowerCase()) {
         return json({ error: "transaction_sender_mismatch" }, 403);
       }
-      if (Number(candidate.chainId) !== 56) {
+      const expectedChainId = chain === "ethereum" ? 1 : 56;
+      if (Number(candidate.chainId) !== expectedChainId) {
         return json({ error: "transaction_chain_id_mismatch" }, 403);
       }
 
@@ -279,7 +279,7 @@ Deno.serve(async (req) => {
       const value = strictBigInt("value", candidate.value);
       const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
-      if (BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
+      if (chain === "bnb" && BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
         if (value !== 0n) return json({ error: "flash_executor_native_value_forbidden" }, 403);
         let flash: any;
         try {
@@ -330,7 +330,8 @@ Deno.serve(async (req) => {
         const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
         if (payout.toLowerCase() !== wallet.address.toLowerCase()) return json({ error: "flash_executor_payout_wallet_mismatch" }, 403);
       } else {
-        if (to.toLowerCase() !== BSC_PANCAKE_V2_ROUTER.toLowerCase()) {
+        const approvedRouter = chain === "ethereum" ? ETH_UNISWAP_V2_ROUTER : BSC_PANCAKE_V2_ROUTER;
+        if (to.toLowerCase() !== approvedRouter.toLowerCase()) {
           return json({ error: "evm_destination_has_no_approved_method_policy" }, 403);
         }
         let decoded: any;
@@ -344,19 +345,23 @@ Deno.serve(async (req) => {
         if (deadline <= nowSec || deadline > nowSec + 600n) return json({ error: "swap_deadline_invalid_or_stale" }, 409);
         const recipient = String(decoded.functionName === "swapExactETHForTokens" ? args[2] : args[3]).toLowerCase();
         if (recipient !== wallet.address.toLowerCase()) return json({ error: "swap_recipient_must_be_source_hot_wallet" }, 403);
+
+        const tokenIn = chain === "ethereum" ? ETH_USDC : BSC_USDT;
+        const nativeWrapped = chain === "ethereum" ? ETH_WETH : BSC_WBNB;
+        const prefix = chain === "ethereum" ? "eth_usdc" : "bnb_usdt";
         if (decoded.functionName === "swapExactETHForTokens") {
           const amountOutMin = strictBigInt("amount_out_min", args[0]);
           const path = args[1] as readonly string[];
           if (amountOutMin <= 0n || value <= 0n || path.length !== 2 ||
-              String(path[0]).toLowerCase() !== BSC_WBNB.toLowerCase() ||
-              String(path[1]).toLowerCase() !== BSC_USDT.toLowerCase()) return json({ error: "bnb_usdt_buy_path_invalid" }, 403);
+              String(path[0]).toLowerCase() !== nativeWrapped.toLowerCase() ||
+              String(path[1]).toLowerCase() !== tokenIn.toLowerCase()) return json({ error: `${prefix}_buy_path_invalid` }, 403);
         } else if (decoded.functionName === "swapExactTokensForETH") {
           const amountIn = strictBigInt("amount_in", args[0]);
           const amountOutMin = strictBigInt("amount_out_min", args[1]);
           const path = args[2] as readonly string[];
           if (amountIn <= 0n || amountOutMin <= 0n || value !== 0n || path.length !== 2 ||
-              String(path[0]).toLowerCase() !== BSC_USDT.toLowerCase() ||
-              String(path[1]).toLowerCase() !== BSC_WBNB.toLowerCase()) return json({ error: "usdt_bnb_sell_path_invalid" }, 403);
+              String(path[0]).toLowerCase() !== tokenIn.toLowerCase() ||
+              String(path[1]).toLowerCase() !== nativeWrapped.toLowerCase()) return json({ error: `${prefix}_sell_path_invalid` }, 403);
         } else return json({ error: "evm_method_not_allowlisted" }, 403);
       }
 
@@ -379,7 +384,7 @@ Deno.serve(async (req) => {
         return json({ error: "signer_secret_address_mismatch" }, 403);
       }
       const tx = {
-        chainId: 56,
+        chainId: expectedChainId,
         nonce,
         to: to as `0x${string}`,
         value,
