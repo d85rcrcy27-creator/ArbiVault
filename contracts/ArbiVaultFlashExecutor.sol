@@ -91,19 +91,18 @@ contract ArbiVaultFlashExecutor {
         (uint256 minProfit, address[] memory targets, uint256[] memory values, bytes[] memory data) =
             abi.decode(params, (uint256, address[], uint256[], bytes[]));
 
-        for (uint256 i; i < targets.length; ++i) {
-            if (targets[i] != PANCAKE_V2_ROUTER) revert TargetNotAllowed(targets[i]);
-            (bool ok, bytes memory result) = targets[i].call{value: values[i]}(data[i]);
-            if (!ok) revert CallFailed(i, result);
-        }
-
-        // Only the two assets in the configured BNB/USDT route may be approved to
-        // the fixed Pancake router. This enables both legs of an atomic round trip.
+        // Approvals must exist before the router's transferFrom calls in each leg.
         if (!IERC20Flash(WBNB).approve(PANCAKE_V2_ROUTER, type(uint256).max)) {
             revert TokenOperationFailed();
         }
         if (!IERC20Flash(USDT).approve(PANCAKE_V2_ROUTER, type(uint256).max)) {
             revert TokenOperationFailed();
+        }
+
+        for (uint256 i; i < targets.length; ++i) {
+            if (targets[i] != PANCAKE_V2_ROUTER) revert TargetNotAllowed(targets[i]);
+            (bool ok, bytes memory result) = targets[i].call{value: values[i]}(data[i]);
+            if (!ok) revert CallFailed(i, result);
         }
 
         uint256 repayment = amount + premium;
