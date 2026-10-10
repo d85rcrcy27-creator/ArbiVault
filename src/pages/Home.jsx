@@ -106,7 +106,7 @@ export default function Home() {
     <div className="px-4 pt-4"><div className="max-w-xl rounded border border-[#232738] bg-[#0C0E16] p-4">
       <div className="mb-3 flex items-center justify-between">
         <div className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Public Venue Feeds</div>
-        <div className="font-mono text-[0.55rem] uppercase text-[#00FF87]">READ ONLY · SKILL SOURCE</div>
+        <div className="font-mono text-[0.55rem] uppercase text-[#00FF87]">MARKET DATA FEEDS</div>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         {PUBLIC_VENUES.map(([name, kind]) => (
