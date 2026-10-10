@@ -176,7 +176,7 @@ const PNL_STRATEGY_PRESETS = [
     id:'pnl_gain_flash',
     family:'blockchain_execution',
     name:'PnL Gain — Flash',
-    description:'Use historical spread behavior to prioritize atomic flash-liquidity candidates, while live execution remains gated by a real atomic executor and on-chain confirmation.',
+    description:'Route live quote opportunities through the atomic flash-loan execution path. The selected ArbiVault hot wallet must match the executor payout recipient, and trades count only after on-chain confirmation.',
     dataSources:['public_exchange_order_books','historical_training_2024_2025'],
     observationOnly:false,
     discoveryEnabled:false,
