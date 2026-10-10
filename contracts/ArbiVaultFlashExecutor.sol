@@ -26,6 +26,10 @@ contract ArbiVaultFlashExecutor {
 
     address public constant PANCAKE_V2_ROUTER =
         0x10ED43C718714eb63d5aA57B78B54704E256024E;
+    address public constant WBNB =
+        0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
+    address public constant USDT =
+        0x55d398326f99059fF775485246999027B3197955;
 
     error UnauthorizedCaller();
     error InvalidArguments();
@@ -52,7 +56,7 @@ contract ArbiVaultFlashExecutor {
     ) external {
         if (msg.sender != HOT_WALLET) revert UnauthorizedCaller();
         if (
-            asset == address(0) || amount == 0 || targets.length == 0 ||
+            (asset != WBNB && asset != USDT) || amount == 0 || targets.length == 0 ||
             targets.length != values.length || targets.length != data.length ||
             targets.length > 4
         ) revert InvalidArguments();
@@ -91,6 +95,15 @@ contract ArbiVaultFlashExecutor {
             if (targets[i] != PANCAKE_V2_ROUTER) revert TargetNotAllowed(targets[i]);
             (bool ok, bytes memory result) = targets[i].call{value: values[i]}(data[i]);
             if (!ok) revert CallFailed(i, result);
+        }
+
+        // Only the two assets in the configured BNB/USDT route may be approved to
+        // the fixed Pancake router. This enables both legs of an atomic round trip.
+        if (!IERC20Flash(WBNB).approve(PANCAKE_V2_ROUTER, type(uint256).max)) {
+            revert TokenOperationFailed();
+        }
+        if (!IERC20Flash(USDT).approve(PANCAKE_V2_ROUTER, type(uint256).max)) {
+            revert TokenOperationFailed();
         }
 
         uint256 repayment = amount + premium;
