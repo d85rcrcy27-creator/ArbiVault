@@ -23,6 +23,7 @@ interface IERC20Flash {
 contract ArbiVaultFlashExecutor {
     address public immutable HOT_WALLET;
     IAaveV3Pool public immutable POOL;
+    uint256 private preLoanBalance;
 
     address public constant PANCAKE_V2_ROUTER =
         0x10ED43C718714eb63d5aA57B78B54704E256024E;
@@ -68,6 +69,7 @@ contract ArbiVaultFlashExecutor {
             if (values[i] != 0 || data[i].length < 4) revert InvalidArguments();
         }
 
+        preLoanBalance = IERC20Flash(asset).balanceOf(address(this));
         POOL.flashLoanSimple(
             address(this),
             asset,
@@ -75,6 +77,7 @@ contract ArbiVaultFlashExecutor {
             abi.encode(minProfit, targets, values, data),
             0
         );
+        preLoanBalance = 0;
     }
 
     /// @notice Aave V3 callback; callable only by the configured pool for this contract's loan.
@@ -107,10 +110,10 @@ contract ArbiVaultFlashExecutor {
 
         uint256 repayment = amount + premium;
         uint256 balance = IERC20Flash(asset).balanceOf(address(this));
-        uint256 required = repayment + minProfit;
+        uint256 required = preLoanBalance + repayment + minProfit;
         if (balance < required) revert ProfitBelowMinimum(balance, required);
 
-        uint256 profit = balance - repayment;
+        uint256 profit = balance - preLoanBalance - repayment;
         if (profit != 0 && !IERC20Flash(asset).transfer(HOT_WALLET, profit)) {
             revert TokenOperationFailed();
         }
