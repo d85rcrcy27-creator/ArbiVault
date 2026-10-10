@@ -184,7 +184,7 @@ contract ArbiVaultFlashExecutor {
 
             bytes4 selector;
             bytes memory encodedCall = data[i];
-            assembly {
+            assembly ("memory-safe") {
                 selector := mload(add(encodedCall, 32))
             }
             if (selector != SWAP_EXACT_TOKENS_FOR_TOKENS) revert UnsupportedSwapSelector();
