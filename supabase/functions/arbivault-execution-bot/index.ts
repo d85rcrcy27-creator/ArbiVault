@@ -345,7 +345,7 @@ export default {
 
     const { data: strategyBots, error: strategyBotError } = await supabase
       .from('arbivault_strategy_bots')
-      .select('id,strategy,enabled,execution_enabled')
+      .select('id,strategy,enabled,execution_enabled,flash_loan_enabled,max_trade_size,min_profit_threshold,slippage_tolerance,max_gas_budget,cooldown_ms,chains')
       .eq('enabled', true)
       .eq('execution_enabled', true)
 
@@ -538,6 +538,8 @@ export default {
               : null,
           }
           let dexPreflight: any = null
+          let flashQuote: any = null
+          let flashBuild: any = null
           let builderError: string | null = null
           const multiLegBuilderConfigured =
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
@@ -552,6 +554,78 @@ export default {
               executionContext.dex_preflight_error = builderError
             }
           }
+
+          if (executionRoute.route_type === 'flash_liquidity') {
+            try {
+              if (executionRoute.chain !== 'bnb' || executionRoute.pair !== 'BNB/USDT') {
+                throw new Error('flash_live_quote_route_not_supported')
+              }
+              if (strategyBot?.flash_loan_enabled !== true) {
+                throw new Error('flash_loan_strategy_disabled')
+              }
+              const notionalUsd = Number(strategyBot?.max_trade_size || policy?.capital_allowance || 0)
+              if (!(notionalUsd > 0) || !Number.isFinite(notionalUsd)) {
+                throw new Error('flash_notional_not_configured')
+              }
+              const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
+              // BNB Chain USDT has 18 decimals. Use the configured strategy size or the
+              // existing policy allowance as the quote notional, and only live router state.
+              const amountRaw = (BigInt(Math.round(notionalUsd * 100000000)) * 10000000000n).toString()
+              flashQuote = await callTransactionBuilder({
+                mode: 'flash_quote',
+                route_id: executionRoute.id,
+                source_wallet_id: wallet.id,
+                side: 'sell',
+                amount_raw: amountRaw,
+                flash_loan_asset: '0x55d398326f99059fF775485246999027B3197955',
+                slippage_bps: slippageBps,
+                price_impact_pct: 0,
+              })
+              executionContext.flash_live_quote = {
+                source: flashQuote.source || 'live_bsc_router_quotes',
+                quoted_at: flashQuote.quoted_at || null,
+                notional_usd: notionalUsd,
+                profitable: flashQuote.profitable === true,
+                best: flashQuote.best || null,
+                candidate_count: flashQuote.candidate_count || 0,
+                executor_configured: flashQuote.executor_configured === true,
+              }
+
+              if (
+                flashQuote.profitable === true &&
+                flashExecutorDiagnostic?.ready_for_flash_transaction_test === true &&
+                flashQuote.best?.executor_configured === true &&
+                Array.isArray(flashQuote.best?.data) &&
+                flashQuote.best.data.length === 2
+              ) {
+                flashBuild = await callTransactionBuilder({
+                  route_id: executionRoute.id,
+                  source_wallet_id: wallet.id,
+                  side: 'sell',
+                  amount_raw: amountRaw,
+                  flash_loan_asset: flashQuote.best.asset,
+                  min_profit_raw: flashQuote.best.min_profit_raw,
+                  targets: flashQuote.best.targets,
+                  values_raw: flashQuote.best.values_raw,
+                  data: flashQuote.best.data,
+                  slippage_bps: slippageBps,
+                  price_impact_pct: 0,
+                })
+                executionContext.flash_transaction = {
+                  executable: flashBuild?.executable === true,
+                  transaction_payload_hash: flashBuild?.transaction_payload_hash || null,
+                  estimated_net_profit_raw: flashQuote.best.estimated_net_profit_raw || null,
+                }
+                if (flashBuild?.executable !== true || typeof flashBuild?.transaction !== 'string') {
+                  builderError = 'flash_atomic_transaction_builder_incomplete'
+                }
+              }
+            } catch (e) {
+              builderError = e instanceof Error ? e.message : String(e)
+              executionContext.flash_pipeline_error = builderError
+            }
+          }
+
           const executionAdapter = wallet
             ? signerAdapters.find((adapter: any) =>
                 adapter.allowed_wallet_id === wallet.id &&
@@ -562,17 +636,23 @@ export default {
           const executionAdapterConfigured = !!executionAdapter
           const dexSellBuilt = !!dexPreflight?.sell?.transaction_payload_hash && dexPreflight?.sell?.executable_unsigned === true
           const dexBuyBuilt = !!dexPreflight?.buy?.transaction_payload_hash && dexPreflight?.buy?.executable_unsigned === true
-          const transactionBuilt = dexSellBuilt && dexBuyBuilt
+          const transactionBuilt = executionRoute.route_type === 'flash_liquidity'
+            ? flashBuild?.executable === true && typeof flashBuild?.transaction === 'string'
+            : dexSellBuilt && dexBuyBuilt
           // A DEX/CEX arbitrage is two execution legs. A single DEX swap is never
           // sufficient to claim an arbitrage execution or realized PnL.
-          const twoLegExecutionReady = transactionBuilt && cexExecutionConfigured
+          const twoLegExecutionReady = executionRoute.route_type === 'flash_liquidity'
+            ? transactionBuilt
+            : transactionBuilt && cexExecutionConfigured
           const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
-          const executionGate = !executionWindowActive ? 'execution_policy_not_active'
-            : !strategyBot ? 'strategy_bot_not_linked'
+          const executionGate = !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
             : executionRoute.route_type === 'flash_liquidity' && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
-            : executionRoute.route_type === 'flash_liquidity' ? 'flash_atomic_opportunity_payload_not_generated'
+            : executionRoute.route_type === 'flash_liquidity' && builderError ? builderError
+            : executionRoute.route_type === 'flash_liquidity' && flashQuote?.profitable !== true ? 'flash_no_profitable_live_opportunity'
+            : executionRoute.route_type === 'flash_liquidity' && !transactionBuilt ? 'flash_atomic_transaction_not_built'
+            : !executionWindowActive ? 'execution_policy_not_active'
             : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
             : executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable ? 'cex_order_execution_unavailable'
             : builderError ? 'transaction_builder_preflight_failed'
@@ -581,9 +661,9 @@ export default {
             : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
           const opportunityHash = await sha256(JSON.stringify(executionContext))
-          const unsignedTransaction = twoLegExecutionReady
-            ? (dexPreflight?.sell?.transaction || null)
-            : null
+          const unsignedTransaction = executionRoute.route_type === 'flash_liquidity'
+            ? (flashBuild?.transaction || null)
+            : twoLegExecutionReady ? (dexPreflight?.sell?.transaction || null) : null
           const txPayloadHash = unsignedTransaction ? await sha256(String(unsignedTransaction)) : null
           const executionAdapterId = executionAdapter?.id || null
           const { data: attempt, error: attemptError } = await supabase.from('execution_attempts').insert({
