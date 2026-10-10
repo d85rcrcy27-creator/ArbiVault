@@ -460,6 +460,17 @@ Deno.serve(async (req) => {
         builder: route.transaction_builder,
       },
       mode,
+      address_resolution: route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
+        ? {
+            network: "BNB Smart Chain mainnet",
+            chain_id: 56,
+            executor_address: BSC_FLASH_EXECUTOR || null,
+            aave_provider_address: BSC_AAVE_PROVIDER,
+            aave_pool_address: (built as any).flash_loan_pool || null,
+            executor_configured: /^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR),
+            pool_resolved_on_chain: !!(built as any).flash_loan_pool,
+          }
+        : null,
       policy: {
         builder_creates_unsigned_only: true,
         builder_never_signs: true,
