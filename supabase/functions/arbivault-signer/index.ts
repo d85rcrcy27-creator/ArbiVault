@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { parseTransaction } from "npm:viem@2.39.0";
+import { decodeFunctionData, parseAbi } from "npm:viem@2.39.0";
 import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
@@ -27,9 +27,26 @@ async function hash(v: string) {
   return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
+function strictBigInt(name: string, value: unknown): bigint {
+  if (value === undefined || value === null) throw new Error(`evm_${name}_missing`);
+  const s = String(value);
+  if (!/^(?:0x[0-9a-fA-F]+|[0-9]+)$/.test(s)) throw new Error(`evm_${name}_invalid`);
+  return BigInt(s);
+}
+
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
 const ETH_RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://cloudflare-eth.com";
 const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
+
+// Internal signer supports only the explicitly configured BNB PancakeSwap v2 spot path.
+// Flash-executor signing stays disabled until its deployed payout behavior is verified.
+const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
+const BSC_WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
+const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
+const BSC_PANCAKE_V2_ABI = parseAbi([
+  "function swapExactETHForTokens(uint256 amountOutMin,address[] path,address to,uint256 deadline)",
+  "function swapExactTokensForETH(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)",
+]);
 
 async function rpc(url: string, method: string, params: unknown[]) {
   const response = await fetch(url, {
@@ -96,7 +113,11 @@ Deno.serve(async (req) => {
     const signingRequestId = String(b.signing_request_id || "");
     const chain = String(b.chain || "").toLowerCase();
     const unsigned = String(b.unsigned_transaction || "");
-    const mode = b.mode === "transfer" ? "transfer" : "trade";
+    const requestedMode = String(b.mode ?? "trade").toLowerCase();
+    if (!["trade", "transfer"].includes(requestedMode)) {
+      return json({ error: "invalid_signing_mode" }, 400);
+    }
+    const mode = requestedMode;
 
     if (
       !adapterId ||
@@ -159,7 +180,7 @@ Deno.serve(async (req) => {
     const { data: requestRow, error: re } = await supabase
       .from("signing_requests")
       .select(
-        "id,owner_id,execution_attempt_id,chain,source_wallet_id,payload_hash,status,biometric_required,biometric_verified,approval_method,approval_expires_at"
+        "id,owner_id,execution_attempt_id,chain,source_wallet_id,payload_hash,status,biometric_required,biometric_verified,approval_method,expires_at,approval_expires_at"
       )
       .eq("id", signingRequestId)
       .maybeSingle();
@@ -178,92 +199,227 @@ Deno.serve(async (req) => {
     if (requestRow.status !== "authorized") {
       return json({ error: "human_approval_required" }, 403);
     }
-    if (requestRow.biometric_required && requestRow.biometric_verified !== true) {
+    if (requestRow.biometric_required !== true || requestRow.biometric_verified !== true) {
       return json({ error: "biometric_approval_required" }, 403);
     }
-    if (requestRow.approval_expires_at && new Date(requestRow.approval_expires_at) <= new Date()) {
+    const nowForApproval = Date.now();
+    if (!requestRow.approval_expires_at || new Date(requestRow.approval_expires_at).getTime() <= nowForApproval) {
       return json({ error: "signing_approval_expired" }, 410);
+    }
+    if (requestRow.expires_at && new Date(requestRow.expires_at).getTime() <= nowForApproval) {
+      return json({ error: "signing_request_expired" }, 410);
+    }
+
+    if (!requestRow.execution_attempt_id) {
+      return json({ error: "execution_attempt_missing" }, 403);
+    }
+    const { data: attemptRow, error: attemptError } = await supabase
+      .from("execution_attempts")
+      .select("id,owner_id,adapter_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
+      .eq("id", requestRow.execution_attempt_id)
+      .maybeSingle();
+    if (attemptError) return json({ error: "execution_attempt_lookup_failed" }, 500);
+    if (
+      !attemptRow ||
+      attemptRow.owner_id !== wallet.owner_id ||
+      attemptRow.adapter_id !== adapterId ||
+      attemptRow.wallet_id !== walletId ||
+      attemptRow.chain !== chain ||
+      attemptRow.execution_mode !== "on_chain" ||
+      attemptRow.status !== "validated" ||
+      attemptRow.transaction_payload_hash !== payloadHash
+    ) {
+      return json({ error: "execution_attempt_authorization_mismatch" }, 403);
     }
 
     const sv = await getSecret(walletId);
     let signed = "";
 
     if (chain === "bnb" || chain === "ethereum") {
-      const account = privateKeyToAccount(sv as `0x${string}`);
-      const expectedChainId = chain === "ethereum" ? 1 : 56;
-      let tx: any;
-      try {
-        const parsedCandidate = JSON.parse(unsigned);
-        if (!parsedCandidate || typeof parsedCandidate !== "object") throw new Error("evm_json_not_object");
-        const to = String(parsedCandidate.to || "");
-        if (!/^0x[a-fA-F0-9]{40}$/.test(to)) throw new Error("evm_destination_invalid");
-        if (parsedCandidate.from && String(parsedCandidate.from).toLowerCase() !== wallet.address.toLowerCase()) {
-          throw new Error("transaction_sender_mismatch");
-        }
-        const allowed = Array.isArray(adapter.allowed_contracts) ? adapter.allowed_contracts : [];
-        if (
-          allowed.length &&
-          !allowed.some((x: any) => String(x).toLowerCase() === to.toLowerCase())
-        ) {
-          return json({ error: "destination_contract_not_allowlisted" }, 403);
-        }
-        if (parsedCandidate.chainId !== undefined && Number(parsedCandidate.chainId) !== expectedChainId) {
-          throw new Error("transaction_chain_id_mismatch");
-        }
-        const toBigInt = (name: string, value: unknown) => {
-          if (value === undefined || value === null) return undefined;
-          const s = String(value);
-          if (/^0x[0-9a-fA-F]+$/.test(s)) return BigInt(s);
-          if (/^\\d+$/.test(s)) return BigInt(s);
-          throw new Error(`evm_${name}_invalid`);
-        };
-        tx = {
-          chainId: expectedChainId,
-          nonce: toBigInt("nonce", parsedCandidate.nonce),
-          to,
-          value: toBigInt("value", parsedCandidate.value) ?? 0n,
-          data: parsedCandidate.data ? String(parsedCandidate.data) as `0x${string}` : undefined,
-          gas: toBigInt("gas", parsedCandidate.gas),
-          gasPrice: toBigInt("gasPrice", parsedCandidate.gasPrice),
-        };
-        if (tx.nonce === undefined || tx.gas === undefined || tx.gasPrice === undefined) {
-          throw new Error("evm_transaction_fee_fields_missing");
-        }
-        // requestRow.payload_hash already commits to the exact unsigned payload
-        // that was authorized. The builder's JSON is signed without rewriting it.
-      } catch (e) {
-        try {
-          const parsed: any = parseTransaction(unsigned as `0x${string}`);
-          if (!parsed.to) return json({ error: "contract_creation_not_allowed" }, 403);
-          if (parsed.from && parsed.from.toLowerCase() !== wallet.address.toLowerCase()) {
-            return json({ error: "transaction_sender_mismatch" }, 403);
-          }
-          if (parsed.chainId !== undefined && Number(parsed.chainId) !== expectedChainId) {
-            return json({ error: "transaction_chain_id_mismatch" }, 400);
-          }
-          tx = parsed;
-        } catch {
-          return json({ error: e instanceof Error ? e.message : "evm_transaction_decode_failed" }, 400);
-        }
+      // No raw signed/serialized EVM transaction fallback: only a structured,
+      // chain-bound payload with a strict destination and method allowlist is signable.
+      if (chain !== "bnb") {
+        return json({ error: "evm_chain_not_allowlisted_for_internal_signer" }, 403);
       }
+
+      let candidate: any;
+      try {
+        candidate = JSON.parse(unsigned);
+      } catch {
+        return json({ error: "evm_transaction_must_be_structured_json" }, 400);
+      }
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+        return json({ error: "evm_json_not_object" }, 400);
+      }
+
+      const to = String(candidate.to || "");
+      if (!/^0x[a-fA-F0-9]{40}$/.test(to)) {
+        return json({ error: "evm_destination_invalid" }, 400);
+      }
+      if (!candidate.from || String(candidate.from).toLowerCase() !== wallet.address.toLowerCase()) {
+        return json({ error: "transaction_sender_mismatch" }, 403);
+      }
+      if (Number(candidate.chainId) !== 56) {
+        return json({ error: "transaction_chain_id_mismatch" }, 403);
+      }
+
+      const allowed = Array.isArray(adapter.allowed_contracts)
+        ? adapter.allowed_contracts.map((x: unknown) => String(x).toLowerCase())
+        : [];
+      if (!allowed.length || !allowed.includes(to.toLowerCase())) {
+        return json({ error: "destination_contract_not_allowlisted" }, 403);
+      }
+      if (to.toLowerCase() !== BSC_PANCAKE_V2_ROUTER.toLowerCase()) {
+        return json({ error: "evm_destination_has_no_approved_method_policy" }, 403);
+      }
+
+      const data = String(candidate.data || "");
+      if (!/^0x(?:[0-9a-fA-F]{2}){4,}$/.test(data)) {
+        return json({ error: "evm_calldata_invalid" }, 400);
+      }
+
+      let decoded: any;
+      try {
+        decoded = decodeFunctionData({
+          abi: BSC_PANCAKE_V2_ABI,
+          data: data as `0x${string}`,
+        });
+      } catch {
+        return json({ error: "evm_method_not_allowlisted" }, 403);
+      }
+
+      const args = decoded.args as readonly unknown[];
+      const value = strictBigInt("value", candidate.value);
+      const deadline = strictBigInt(
+        "deadline",
+        decoded.functionName === "swapExactETHForTokens" ? args[3] : args[4],
+      );
+      const nowSec = BigInt(Math.floor(Date.now() / 1000));
+      if (deadline <= nowSec || deadline > nowSec + 600n) {
+        return json({ error: "swap_deadline_invalid_or_stale" }, 409);
+      }
+
+      const recipient = String(
+        decoded.functionName === "swapExactETHForTokens" ? args[2] : args[3],
+      ).toLowerCase();
+      if (recipient !== wallet.address.toLowerCase()) {
+        return json({ error: "swap_recipient_must_be_source_hot_wallet" }, 403);
+      }
+
+      if (decoded.functionName === "swapExactETHForTokens") {
+        const amountOutMin = strictBigInt("amount_out_min", args[0]);
+        const path = args[1] as readonly string[];
+        if (
+          amountOutMin <= 0n ||
+          value <= 0n ||
+          path.length !== 2 ||
+          String(path[0]).toLowerCase() !== BSC_WBNB.toLowerCase() ||
+          String(path[1]).toLowerCase() !== BSC_USDT.toLowerCase()
+        ) {
+          return json({ error: "bnb_usdt_buy_path_invalid" }, 403);
+        }
+      } else if (decoded.functionName === "swapExactTokensForETH") {
+        const amountIn = strictBigInt("amount_in", args[0]);
+        const amountOutMin = strictBigInt("amount_out_min", args[1]);
+        const path = args[2] as readonly string[];
+        if (
+          amountIn <= 0n ||
+          amountOutMin <= 0n ||
+          value !== 0n ||
+          path.length !== 2 ||
+          String(path[0]).toLowerCase() !== BSC_USDT.toLowerCase() ||
+          String(path[1]).toLowerCase() !== BSC_WBNB.toLowerCase()
+        ) {
+          return json({ error: "usdt_bnb_sell_path_invalid" }, 403);
+        }
+      } else {
+        return json({ error: "evm_method_not_allowlisted" }, 403);
+      }
+
+      let nonce: bigint;
+      let gas: bigint;
+      let gasPrice: bigint;
+      try {
+        nonce = strictBigInt("nonce", candidate.nonce);
+        gas = strictBigInt("gas", candidate.gas);
+        gasPrice = strictBigInt("gasPrice", candidate.gasPrice);
+      } catch (e) {
+        return json({ error: e instanceof Error ? e.message : "evm_fee_fields_invalid" }, 400);
+      }
+      if (gas <= 0n || gasPrice <= 0n) {
+        return json({ error: "evm_fee_fields_invalid" }, 400);
+      }
+
+      const account = privateKeyToAccount(sv as `0x${string}`);
+      if (account.address.toLowerCase() !== wallet.address.toLowerCase()) {
+        return json({ error: "signer_secret_address_mismatch" }, 403);
+      }
+      const tx = {
+        chainId: 56,
+        nonce,
+        to: to as `0x${string}`,
+        value,
+        data: data as `0x${string}`,
+        gas,
+        gasPrice,
+      };
       signed = await account.signTransaction(tx);
     } else if (chain === "solana") {
       const raw = decode64(unsigned);
-      const kp = Keypair.fromSecretKey(
-        Uint8Array.from((sv.match(/.{1,2}/g) || []).map(x => parseInt(x, 16)))
-      );
-      let tx: any;
-      try {
-        tx = VersionedTransaction.deserialize(raw);
-        tx.sign([kp]);
-      } catch {
-        tx = Transaction.from(raw);
-        tx.partialSign(kp);
+      const secretBytes = Uint8Array.from((sv.match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+      const kp = Keypair.fromSecretKey(secretBytes);
+      if (kp.publicKey.toBase58() !== wallet.address) {
+        return json({ error: "signer_secret_address_mismatch" }, 403);
       }
-      signed = btoa(String.fromCharCode(...tx.serialize()));
+
+      let versioned: VersionedTransaction | null = null;
+      try {
+        versioned = VersionedTransaction.deserialize(raw);
+      } catch {
+        versioned = null;
+      }
+      if (versioned) {
+        const message: any = versioned.message;
+        const required = Number(message?.header?.numRequiredSignatures || 0);
+        const staticKeys: any[] = message?.staticAccountKeys || [];
+        if (
+          required < 1 ||
+          !staticKeys[0]?.equals(kp.publicKey) ||
+          !staticKeys.slice(0, required).some((key: any) => key.equals(kp.publicKey))
+        ) {
+          return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
+        }
+        versioned.sign([kp]);
+        signed = btoa(String.fromCharCode(...versioned.serialize()));
+      } else {
+        let legacy: Transaction;
+        try {
+          legacy = Transaction.from(raw);
+        } catch {
+          return json({ error: "solana_transaction_decode_failed" }, 400);
+        }
+        if (!legacy.feePayer || !legacy.feePayer.equals(kp.publicKey)) {
+          return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
+        }
+        legacy.partialSign(kp);
+        signed = btoa(String.fromCharCode(...legacy.serialize()));
+      }
     } else {
       const psbt = bitcoin.Psbt.fromBase64(unsigned, { network: bitcoin.networks.bitcoin });
       const key = ECPair.fromWIF(sv, bitcoin.networks.bitcoin);
+      const network = bitcoin.networks.bitcoin;
+      const p2wpkh = bitcoin.payments.p2wpkh({ pubkey: key.publicKey, network });
+      const keyAddresses = [
+        bitcoin.payments.p2pkh({ pubkey: key.publicKey, network }).address,
+        p2wpkh.address,
+        bitcoin.payments.p2sh({ redeem: p2wpkh, network }).address,
+      ].filter((address): address is string => typeof address === "string");
+      if (!keyAddresses.includes(wallet.address)) {
+        return json({ error: "signer_secret_address_mismatch" }, 403);
+      }
+      if (psbt.txInputs.length === 0 || psbt.txOutputs.length === 0) {
+        return json({ error: "bitcoin_transaction_shape_invalid" }, 400);
+      }
       psbt.signAllInputs(key);
       if (!psbt.validateSignaturesOfAllInputs()) {
         return json({ error: "bitcoin_signature_validation_failed" }, 500);
