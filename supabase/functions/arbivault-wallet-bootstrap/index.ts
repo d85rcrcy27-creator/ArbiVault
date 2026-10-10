@@ -32,9 +32,17 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
  else{const key=ECPair.makeRandom(),payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin});if(!payment.address)throw new Error('bitcoin_address_derivation_failed');address=payment.address;secret=key.toWIF();derivation_path='internal-random-secp256k1-p2wpkh'}
  const {data:wallet,error}=await admin.from('wallets').insert({owner_id:userId,chain,address,label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',status:'active',is_hot:true,custody_type:'server_vault',wallet_role:'trading_hot',verification_source:'arbivault-wallet-bootstrap',data_quality_status:'verified',derivation_path}).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').single()
  if(error||!wallet)throw new Error(error?.message||'wallet_create_failed')
- const {error:se}=await admin.rpc('store_wallet_secret',{p_wallet_id:wallet.id,p_secret:secret})
- if(se){await admin.from('wallets').delete().eq('id',wallet.id).eq('owner_id',userId);throw new Error('wallet_secret_storage_failed')}
- await admin.rpc('record_reconciliation_event',{p_wallet_id:wallet.id,p_chain:chain,p_tx_hash:null,p_payment_id:null,p_trade_id:null,p_event_type:'wallet_created',p_status:'verified',p_source:'arbivault-wallet-bootstrap',p_details:{custody:'server_vault',wallet_role:'trading_hot'}})
+ const {data:secretRef,error:se}=await admin.rpc('store_wallet_secret',{p_wallet_id:wallet.id,p_secret:secret})
+ if(se||!secretRef){
+  await admin.from('wallets').update({status:'quarantined'}).eq('id',wallet.id).eq('owner_id',userId)
+  throw new Error('wallet_secret_storage_failed')
+ }
+ const {error:refError}=await admin.from('wallets').update({secret_ref:secretRef,updated_at:new Date().toISOString()}).eq('id',wallet.id).eq('owner_id',userId)
+ if(refError){
+  await admin.from('wallets').update({status:'quarantined'}).eq('id',wallet.id).eq('owner_id',userId)
+  throw new Error('wallet_secret_reference_persist_failed')
+ }
+ await admin.rpc('record_reconciliation_event',{p_wallet_id:wallet.id,p_chain:chain,p_tx_hash:null,p_payment_id:null,p_trade_id:null,p_event_type:'wallet_created',p_status:'verified',p_source:'arbivault-wallet-bootstrap',p_details:{custody:'server_vault',wallet_role:'trading_hot',secret_ref_saved:true}})
  return wallet
 }
 async function ensureBindings(userId:string,wallets:any[]){
