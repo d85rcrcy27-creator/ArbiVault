@@ -1,0 +1,33 @@
+name: Flash executor contract tests
+
+on:
+  push:
+    branches:
+      - main
+      - fix/secure-flash-executor-payout
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-tests.yml"
+  pull_request:
+    paths:
+      - "contracts/**"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Check Solidity formatting
+        run: forge fmt --check
+      - name: Run isolated repayment and payout tests
+        run: forge test -vvv
