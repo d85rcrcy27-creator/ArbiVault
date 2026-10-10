@@ -516,7 +516,7 @@ export default {
           candidate.builder_enabled === true &&
           !!candidate.transaction_builder &&
           candidate.discovery_only !== true &&
-          ['dex_cex', 'cyclic', 'multi_venue'].includes(candidate.route_type)
+          ['dex_cex', 'cyclic', 'multi_venue', 'flash_liquidity'].includes(candidate.route_type)
         )
 
         for (const executionRoute of executionCandidates) {
@@ -528,7 +528,7 @@ export default {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
             builder: executionRoute.transaction_builder,
-            execution_source: 'explicit_execution_route',
+            execution_source: executionRoute.route_type === 'flash_liquidity' ? 'flash_skill_to_atomic_execution_pipeline' : 'explicit_execution_route',
             cex_execution: executionRoute.route_type === 'dex_cex'
               ? {
                   private_adapter_available: cexExecutionAdapters.length > 0,
@@ -571,6 +571,8 @@ export default {
             : !strategyBot ? 'strategy_bot_not_linked'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
+            : executionRoute.route_type === 'flash_liquidity' && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
+            : executionRoute.route_type === 'flash_liquidity' ? 'flash_atomic_opportunity_payload_not_generated'
             : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
             : executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable ? 'cex_order_execution_unavailable'
             : builderError ? 'transaction_builder_preflight_failed'
