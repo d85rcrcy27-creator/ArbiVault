@@ -41,6 +41,9 @@ const ERC20_ABI = parseAbi([
 const FLASH_EXECUTOR_ABI = parseAbi([
   "function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)",
 ]);
+const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
+  "function HOT_WALLET() view returns (address)",
+]);
 
 const ATOMIC_ALLOWED_TARGETS = new Set([
   PANCAKE_V2_ROUTER.toLowerCase(),
@@ -284,7 +287,14 @@ async function lookupSourcifyVerification(chainId: string, address: string) {
   }
 }
 
-async function verifyExecutor(chainId: string, executor: string, readCode: (address: string) => Promise<unknown>) {
+async function verifyExecutor(
+  chainId: string,
+  chain: string,
+  executor: string,
+  readCode: (address: string) => Promise<unknown>,
+  readCall: (address: string, data: string) => Promise<unknown>,
+  generatedWallets: Array<{ id: string; owner_id: string; chain: string; address: string }>,
+) {
   const validAddress = /^0x[a-fA-F0-9]{40}$/.test(executor);
   const result: Record<string, unknown> = {
     configured: validAddress,
@@ -292,6 +302,9 @@ async function verifyExecutor(chainId: string, executor: string, readCode: (addr
     code_deployed: false,
     bytecode_hash: null,
     bytecode_size_bytes: 0,
+    payout_recipient_address: null,
+    payout_recipient_matches_generated_hot_wallet: false,
+    matched_generated_wallet_id: null,
     source_verification: { checked: false, verified: false, match: null, runtime_match: null },
   };
   if (!validAddress) return result;
@@ -300,10 +313,34 @@ async function verifyExecutor(chainId: string, executor: string, readCode: (addr
     result.code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
     result.bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
     result.bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
-    if (result.code_deployed) result.source_verification = await lookupSourcifyVerification(chainId, executor);
   } catch (error) {
     result.code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
+    return result;
   }
+  if (result.code_deployed !== true) return result;
+
+  try {
+    const callData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
+    const raw = String(await readCall(executor, callData));
+    const recipient = decodeFunctionResult({
+      abi: FLASH_EXECUTOR_PAYOUT_ABI,
+      functionName: "HOT_WALLET",
+      data: raw as `0x${string}`,
+    }) as string;
+    result.payout_recipient_address = recipient;
+    const match = generatedWallets.find((wallet) =>
+      wallet.chain === chain &&
+      /^0x[a-fA-F0-9]{40}$/.test(wallet.address || "") &&
+      wallet.address.toLowerCase() === recipient.toLowerCase()
+    );
+    result.payout_recipient_matches_generated_hot_wallet = !!match;
+    result.matched_generated_wallet_id = match?.id || null;
+    result.matched_generated_wallet_owner_id = match?.owner_id || null;
+  } catch (error) {
+    result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_payout_getter_failed";
+  }
+
+  result.source_verification = await lookupSourcifyVerification(chainId, executor);
   return result;
 }
 
@@ -311,7 +348,7 @@ async function diagnoseFlashExecutor() {
   const result: Record<string, unknown> = {
     diagnostic_only: true,
     payout_behavior_verified: false,
-    payout_audit_reason: "Payout can only be verified after the exact chain-specific deployed executor source, immutable hot-wallet recipient, and runtime bytecode are independently audited. Mock tests alone are not production verification.",
+    payout_audit_reason: "Payout routing is verified only when the deployed executor's immutable HOT_WALLET getter matches an active ArbiVault-generated trading hot wallet and source/bytecode are verified. End-to-end payout still requires a confirmed on-chain receipt and balance delta.",
     transaction_building_enabled: false,
     bnb: {
       network: "BNB Smart Chain mainnet",
@@ -329,6 +366,21 @@ async function diagnoseFlashExecutor() {
   const bnb: any = result.bnb;
   const eth: any = result.ethereum;
 
+  const { data: generatedWalletRows, error: generatedWalletError } = await supabase
+    .from("wallets")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+    .in("chain", ["bnb", "ethereum"])
+    .eq("status", "active")
+    .eq("is_hot", true)
+    .eq("wallet_role", "trading_hot");
+  const generatedWallets = (generatedWalletRows || []).filter((wallet: any) =>
+    /^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || "")) &&
+    ["bnb", "ethereum"].includes(wallet.chain)
+  );
+  result.generated_hot_wallet_lookup_ok = !generatedWalletError;
+  result.active_generated_hot_wallet_count = generatedWallets.length;
+  if (generatedWalletError) result.generated_hot_wallet_lookup_error = generatedWalletError.message;
+
   try {
     const chainId = String(await rpc("eth_chainId", [])).toLowerCase();
     bnb.rpc_chain_id = chainId;
@@ -344,12 +396,20 @@ async function diagnoseFlashExecutor() {
     bnb.aave_pool_resolved = false;
     bnb.aave_pool_error = error instanceof Error ? error.message : "aave_pool_resolution_failed";
   }
-  bnb.executor = await verifyExecutor("56", BSC_FLASH_EXECUTOR, (address) => rpc("eth_getCode", [address, "latest"]));
+  bnb.executor = await verifyExecutor(
+    "56",
+    "bnb",
+    BSC_FLASH_EXECUTOR,
+    (address) => rpc("eth_getCode", [address, "latest"]),
+    (address, data) => rpc("eth_call", [{ to: address, data }, "latest"]),
+    generatedWallets,
+  );
   bnb.ready_for_flash_transaction_test =
     bnb.rpc_chain_ok === true &&
     bnb.aave_pool_resolved === true &&
     (bnb.executor as any).configured === true &&
     (bnb.executor as any).code_deployed === true &&
+    (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (bnb.executor as any).source_verification?.verified === true &&
     FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
@@ -368,12 +428,20 @@ async function diagnoseFlashExecutor() {
     eth.aave_pool_resolved = false;
     eth.aave_pool_error = error instanceof Error ? error.message : "ethereum_aave_pool_resolution_failed";
   }
-  eth.executor = await verifyExecutor("1", ETH_FLASH_EXECUTOR, (address) => ethereumRpc("eth_getCode", [address, "latest"]));
+  eth.executor = await verifyExecutor(
+    "1",
+    "ethereum",
+    ETH_FLASH_EXECUTOR,
+    (address) => ethereumRpc("eth_getCode", [address, "latest"]),
+    (address, data) => ethereumRpc("eth_call", [{ to: address, data }, "latest"]),
+    generatedWallets,
+  );
   eth.ready_for_flash_transaction_test =
     eth.rpc_chain_ok === true &&
     eth.aave_pool_resolved === true &&
     (eth.executor as any).configured === true &&
     (eth.executor as any).code_deployed === true &&
+    (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (eth.executor as any).source_verification?.verified === true &&
     FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
@@ -383,11 +451,17 @@ async function diagnoseFlashExecutor() {
   result.executor_code_deployed = (bnb.executor as any).code_deployed === true;
   result.executor_bytecode_hash = (bnb.executor as any).bytecode_hash || null;
   result.source_verification = (bnb.executor as any).source_verification;
+  result.payout_recipient_address = (bnb.executor as any).payout_recipient_address || null;
+  result.payout_recipient_matches_generated_hot_wallet = (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true;
+  result.matched_generated_wallet_id = (bnb.executor as any).matched_generated_wallet_id || null;
   result.aave_pool_resolved = bnb.aave_pool_resolved === true;
   result.aave_pool_address = bnb.aave_pool_address || null;
   result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
   result.ethereum_flash_executor_address = (eth.executor as any).address || null;
   result.ethereum_payout_behavior_verified = false;
+  result.ethereum_payout_recipient_address = (eth.executor as any).payout_recipient_address || null;
+  result.ethereum_payout_recipient_matches_generated_hot_wallet = (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true;
+  result.ethereum_matched_generated_wallet_id = (eth.executor as any).matched_generated_wallet_id || null;
   result.ethereum_aave_pool_resolved = eth.aave_pool_resolved === true;
   result.ethereum_aave_pool_address = eth.aave_pool_address || null;
   return result;
@@ -402,10 +476,26 @@ async function buildAtomicFlashLoan(
   valuesRaw: string[],
   data: string[],
 ) {
+  if (!BSC_FLASH_EXECUTOR || !/^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR)) throw new Error("atomic_executor_not_configured");
+  const executorCode = String(await rpc("eth_getCode", [BSC_FLASH_EXECUTOR, "latest"]));
+  if (!/^0x[0-9a-f]+$/i.test(executorCode) || executorCode.length <= 2) {
+    throw new Error("atomic_executor_code_missing");
+  }
+  const payoutGetterData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
+  const payoutRaw = String(await rpc("eth_call", [{ to: BSC_FLASH_EXECUTOR, data: payoutGetterData }, "latest"]));
+  const payoutWallet = decodeFunctionResult({
+    abi: FLASH_EXECUTOR_PAYOUT_ABI,
+    functionName: "HOT_WALLET",
+    data: payoutRaw as `0x${string}`,
+  }) as string;
+  if (payoutWallet.toLowerCase() !== owner.toLowerCase()) {
+    throw new Error("flash_executor_payout_wallet_mismatch");
+  }
+  const payoutVerification = await lookupSourcifyVerification("56", BSC_FLASH_EXECUTOR);
+  if (payoutVerification.verified !== true) throw new Error("flash_executor_source_unverified");
   if (!FLASH_EXECUTOR_PAYOUT_AUDITED) {
     throw new Error("flash_executor_payout_unverified");
   }
-  if (!BSC_FLASH_EXECUTOR || !/^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR)) throw new Error("atomic_executor_not_configured");
   const aavePool = await resolveBscAavePool();
   if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
   if (!targets.length || targets.length !== valuesRaw.length || targets.length !== data.length) throw new Error("atomic_leg_shape_invalid");
