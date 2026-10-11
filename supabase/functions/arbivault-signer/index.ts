@@ -48,6 +48,7 @@ const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
 const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ETH_USDC = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+const FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const BSC_PANCAKE_V2_ABI = parseAbi([
@@ -107,6 +108,36 @@ async function getSecret(id: string) {
 
 function decode64(v: string) {
   return Uint8Array.from(atob(v), c => c.charCodeAt(0));
+}
+
+async function rotateFlaggedWallet(walletId: string) {
+  const token = (await supabase.rpc("get_bot_cron_token")).data;
+  if (!token) return { ok: false, error: "rotation_auth_unavailable" };
+  try {
+    const response = await fetch(
+      `${Deno.env.get("SUPABASE_URL")}/functions/v1/arbivault-wallet-rotation`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-arbivault-cron-token": String(token),
+        },
+        body: JSON.stringify({ wallet_id: walletId, trigger: "signer_contract_code_detection" }),
+        signal: AbortSignal.timeout(15000),
+      },
+    );
+    const body = await response.json().catch(() => ({}));
+    return { ...body, ok: response.ok && body?.ok === true, http_status: response.status };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "wallet_rotation_unreachable",
+    };
+  }
+}
+
+function hasContractCode(code: string) {
+  return /^0x[0-9a-f]*$/i.test(code) && !/^0x0*$/i.test(code);
 }
 
 Deno.serve(async (req) => {
@@ -175,6 +206,25 @@ Deno.serve(async (req) => {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
     }
 
+    if (chain === "bnb" || chain === "ethereum") {
+      const walletCode = String(await rpc(chain === "bnb" ? BSC_RPC : ETH_RPC, "eth_getCode", [wallet.address, "latest"]));
+      if (hasContractCode(walletCode)) {
+        const rotation = await rotateFlaggedWallet(walletId);
+        const replacement = Array.isArray(rotation.rotated_wallets)
+          ? rotation.rotated_wallets.find((item: any) => item.old_wallet_id === walletId) || null
+          : null;
+        return json({
+          error: "source_wallet_is_contract_rotate_required",
+          rotation_triggered: rotation.ok === true && !!replacement,
+          replacement_wallet_id: replacement?.new_wallet_id || null,
+          chain,
+          rotation_error: rotation.ok === true ? null : rotation.error || rotation.errors?.[0]?.error || "wallet_rotation_failed",
+          signing_blocked: true,
+          broadcast_attempted: false,
+        }, 409);
+      }
+    }
+
     if (String(adapter.signer_key_ref || "").toLowerCase() !== String(wallet.address).toLowerCase()) {
       return json({ error: "signer_wallet_mismatch" }, 403);
     }
@@ -239,6 +289,47 @@ Deno.serve(async (req) => {
       return json({ error: "execution_attempt_authorization_mismatch" }, 403);
     }
 
+
+    const { data: executionPolicy, error: executionPolicyError } = await supabase
+      .from("arbivault_execution_policy")
+      .select("enabled,starts_at,ends_at,mode")
+      .eq("policy_key", "primary")
+      .maybeSingle();
+    if (executionPolicyError) return json({ error: "execution_policy_lookup_failed" }, 503);
+    const policyNow = Date.now();
+    if (
+      !executionPolicy ||
+      executionPolicy.enabled !== true ||
+      !executionPolicy.starts_at ||
+      new Date(executionPolicy.starts_at).getTime() > policyNow ||
+      (executionPolicy.ends_at && new Date(executionPolicy.ends_at).getTime() <= policyNow)
+    ) {
+      return json({ error: "execution_policy_not_active", signing_blocked: true, broadcast_attempted: false }, 409);
+    }
+
+    const { data: latestBeforeSigning, error: latestBeforeSigningError } = await supabase
+      .from("signing_requests")
+      .select("status,tx_hash,broadcast_at")
+      .eq("id", requestRow.id)
+      .maybeSingle();
+    if (latestBeforeSigningError) return json({ error: "signing_request_state_lookup_failed" }, 503);
+    if (latestBeforeSigning?.status === "broadcast" && latestBeforeSigning.tx_hash) {
+      return json({
+        ok: true,
+        signing_request_id: requestRow.id,
+        provider: "internal_vault",
+        chain,
+        mode,
+        tx_hash: String(latestBeforeSigning.tx_hash),
+        signed: true,
+        broadcast: true,
+        idempotent_replay: true,
+      });
+    }
+    if (latestBeforeSigning?.status !== "authorized") {
+      return json({ error: "signing_request_already_claimed_or_not_authorized", signing_blocked: true }, 409);
+    }
+
     const sv = await getSecret(walletId);
     let signed = "";
 
@@ -270,7 +361,8 @@ Deno.serve(async (req) => {
       const allowed = Array.isArray(adapter.allowed_contracts)
         ? adapter.allowed_contracts.map((x: unknown) => String(x).toLowerCase())
         : [];
-      if (!allowed.length || !allowed.includes(to.toLowerCase())) {
+      const auditedBnbFlashTarget = chain === "bnb" && !!BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase() && FLASH_EXECUTOR_PAYOUT_AUDITED;
+      if ((!allowed.length || !allowed.includes(to.toLowerCase())) && !auditedBnbFlashTarget) {
         return json({ error: "destination_contract_not_allowlisted" }, 403);
       }
       const data = String(candidate.data || "");
@@ -281,6 +373,9 @@ Deno.serve(async (req) => {
       const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
       if (chain === "bnb" && BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
+        if (!FLASH_EXECUTOR_PAYOUT_AUDITED) return json({ error: "flash_executor_payout_audit_not_enabled" }, 403);
+        const executorCode = String(await rpc(BSC_RPC, "eth_getCode", [BSC_FLASH_EXECUTOR, "latest"]));
+        if (executorCode === "0x" || executorCode === "0x0") return json({ error: "flash_executor_code_not_deployed" }, 403);
         if (value !== 0n) return json({ error: "flash_executor_native_value_forbidden" }, 403);
         let flash: any;
         try {
@@ -474,26 +569,26 @@ Deno.serve(async (req) => {
     }
 
     const now = new Date().toISOString();
-
-    // Idempotency: once a signing request has a broadcast tx hash, return it
-    // instead of attempting to submit the same transaction again.
-    const { data: latestRequest } = await supabase
-      .from("signing_requests")
-      .select("status,tx_hash,broadcast_at")
-      .eq("id", requestRow.id)
-      .maybeSingle();
-    if (latestRequest?.status === "broadcast" && latestRequest.tx_hash) {
-      return json({
-        ok: true,
-        signing_request_id: requestRow.id,
-        provider: "internal_vault",
-        chain,
-        mode,
-        tx_hash: String(latestRequest.tx_hash),
-        signed: true,
-        broadcast: true,
-        idempotent_replay: true,
-      });
+    // Recheck the active EVM wallet immediately before network submission.
+    // If code appeared after preflight, quarantine/rotate and do not broadcast.
+    if (chain === "bnb" || chain === "ethereum") {
+      const endpoint = chain === "bnb" ? BSC_RPC : ETH_RPC;
+      const latestCode = String(await rpc(endpoint, "eth_getCode", [wallet.address, "latest"]));
+      if (hasContractCode(latestCode)) {
+        const rotation = await rotateFlaggedWallet(walletId);
+        const replacement = Array.isArray(rotation.rotated_wallets)
+          ? rotation.rotated_wallets.find((item: any) => item.old_wallet_id === walletId) || null
+          : null;
+        return json({
+          error: "source_wallet_contract_code_detected_before_broadcast",
+          rotation_triggered: rotation.ok === true && !!replacement,
+          replacement_wallet_id: replacement?.new_wallet_id || null,
+          chain,
+          rotation_error: rotation.ok === true ? null : rotation.error || rotation.errors?.[0]?.error || "wallet_rotation_failed",
+          signed: true,
+          broadcast_attempted: false,
+        }, 409);
+      }
     }
 
     const txHash = await broadcastSigned(chain, signed);
