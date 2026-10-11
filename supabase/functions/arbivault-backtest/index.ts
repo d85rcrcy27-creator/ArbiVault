@@ -32,7 +32,7 @@ Deno.serve(async (req) => {
     if (skillId) {
       const { data, error } = await admin
         .from("bot_skills")
-        .select("id,name,conditions,risk_limits,observation_only,discovery_enabled,strategy_bot_id")
+        .select("id,owner_id,name,conditions,risk_limits,observation_only,discovery_enabled,strategy_bot_id")
         .eq("id", skillId)
         .maybeSingle();
       if (error) return json({ error: error.message }, 500);
@@ -262,6 +262,19 @@ Deno.serve(async (req) => {
       }))
       .filter((row: any) => Number.isFinite(row.spread));
 
+    const sortedSpreads = samples.map((row: any) => row.spread).sort((a: number, b: number) => a - b);
+    const percentile = (p: number) => sortedSpreads.length
+      ? sortedSpreads[Math.min(sortedSpreads.length - 1, Math.floor((sortedSpreads.length - 1) * p))]
+      : null;
+    const spreadStats = {
+      available_dataset_samples: samples.length,
+      historical_min_spread_pct: sortedSpreads.length ? Number(sortedSpreads[0].toFixed(6)) : null,
+      historical_median_spread_pct: percentile(0.5) == null ? null : Number(percentile(0.5)!.toFixed(6)),
+      historical_p90_spread_pct: percentile(0.9) == null ? null : Number(percentile(0.9)!.toFixed(6)),
+      historical_max_spread_pct: sortedSpreads.length ? Number(sortedSpreads[sortedSpreads.length - 1].toFixed(6)) : null,
+      observations_above_fee_assumption: samples.filter((row: any) => row.spread > 0.10).length,
+    };
+
     const conditions = Array.isArray(skill?.conditions) ? skill.conditions : [];
     const spreadCondition = conditions.find((item: any) =>
       String(item?.label || "").toLowerCase().includes("spread")
@@ -292,6 +305,10 @@ Deno.serve(async (req) => {
         threshold_pct: null,
         supported: false,
         reason: "strategy_has_no_spread_profit_backtest_criterion",
+        pnl_is_realized: false,
+        pnl_is_executable: false,
+        source_is_historical_observation_data: true,
+        ...spreadStats,
         samples: samples.length,
         trades: 0,
         wins: 0,
@@ -322,10 +339,17 @@ Deno.serve(async (req) => {
       training_window_end: datasetEnd.toISOString(),
       fallback_used: false,
       source_keys: [...new Set(samples.map((row: any) => row.source_key).filter(Boolean))],
+      pnl_is_realized: false,
+      pnl_is_executable: false,
+      source_is_historical_observation_data: true,
+      cost_methodology: "Historical spread observations less the configured 0.10% fee assumption; does not model a synchronized executable bid/ask fill or guarantee slippage.",
+      ...spreadStats,
       skill_id: skillId || null,
       strategy: skill?.name || null,
       days,
       threshold_pct: threshold,
+      threshold_reached: qualifying.length > 0,
+      reason: qualifying.length ? "historical_observations_matched_strategy_threshold" : "historical_max_spread_below_strategy_threshold",
       samples: samples.length,
       trades: qualifying.length,
       wins: profitable.length,
@@ -334,6 +358,7 @@ Deno.serve(async (req) => {
       pnl: Number(netPnl.toFixed(2)),
       gross_pnl: Number(grossPnl.toFixed(2)),
       estimated_net_pnl: Number(netPnl.toFixed(2)),
+      estimated_not_realized: true,
       fee_pct: FEE_PCT,
       notional: NOTIONAL,
       first_observation: samples[0]?.observed_at || null,
