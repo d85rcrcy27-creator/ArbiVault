@@ -57,6 +57,54 @@ async function confirmBroadcastAttempt(attemptId: string, txHash: string) {
   return { ok: response.ok, status: response.status, ...body }
 }
 
+
+async function runWalletRotationSafety() {
+  const token = (await supabase.rpc('get_bot_cron_token')).data
+  if (!token) {
+    return {
+      ok: false,
+      worker: 'wallet-rotation',
+      blocked_chains: ['bnb', 'ethereum'],
+      errors: [{ error: 'cron_token_unavailable' }],
+      rotated_wallets: [],
+    }
+  }
+
+  try {
+    const response = await fetch(
+      `${Deno.env.get('SUPABASE_URL')}/functions/v1/arbivault-wallet-rotation`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-arbivault-cron-token': String(token),
+        },
+        body: JSON.stringify({ trigger: 'execution_bot_preflight' }),
+        signal: AbortSignal.timeout(15000),
+      },
+    )
+    const body = await response.json().catch(() => ({}))
+    let blocked = Array.isArray(body?.blocked_chains)
+      ? body.blocked_chains.map((chain: unknown) => String(chain))
+      : []
+    if (!response.ok && blocked.length === 0) blocked = ['bnb', 'ethereum']
+    return {
+      ...body,
+      ok: response.ok && body?.ok === true,
+      blocked_chains: blocked,
+      http_status: response.status,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      worker: 'wallet-rotation',
+      blocked_chains: ['bnb', 'ethereum'],
+      rotated_wallets: [],
+      errors: [{ error: error instanceof Error ? error.message : 'wallet_rotation_unreachable' }],
+    }
+  }
+}
+
 async function settleExistingBroadcasts() {
   const { data: attempts, error } = await supabase
     .from('execution_attempts')
@@ -75,7 +123,7 @@ async function settleExistingBroadcasts() {
   return results
 }
 
-async function invokeAuthorizedSigners() {
+async function invokeAuthorizedSigners(skipChains: Set<string> = new Set<string>()) {
   const { data: requests, error } = await supabase
     .from('signing_requests')
     .select('id,owner_id,execution_attempt_id,source_wallet_id,chain,unsigned_transaction,execution_authorization_id,approval_expires_at')
@@ -91,6 +139,15 @@ async function invokeAuthorizedSigners() {
   const results = []
 
   for (const request of requests || []) {
+    if (skipChains.has(String(request.chain || ""))) {
+      results.push({
+        signing_request_id: request.id,
+        invoked: false,
+        reason: "wallet_contract_code_check_unavailable",
+      })
+      continue
+    }
+
     const { data: attempt } = await supabase
       .from('execution_attempts')
       .select('id,adapter_id,chain,wallet_id,status')
@@ -384,6 +441,20 @@ export default {
       return Response.json({ error: 'unauthorized' }, { status: 401 })
     }
 
+    // Broadcast settlement and wallet safety take priority over market scanning.
+    // Existing receipts are read-only checks; rotation quarantines unsafe EVM wallets
+    // before the signer queue is invoked.
+    const settledBroadcasts = await settleExistingBroadcasts().catch((error) => [{
+      invoked: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }])
+    const walletRotationSafety = await runWalletRotationSafety()
+    const walletSafetyBlockedChains = new Set<string>(
+      Array.isArray(walletRotationSafety.blocked_chains)
+        ? walletRotationSafety.blocked_chains.map((chain: unknown) => String(chain))
+        : ['bnb', 'ethereum'],
+    )
+
     const { data: policy, error: policyError } = await supabase
       .from('arbivault_execution_policy')
       .select('*')
@@ -402,6 +473,13 @@ export default {
     // balances, transaction-builder preflight, gas availability, route readiness,
     // and signer authorization remain enforced before any broadcast.
     const executionWindowActive = policyActive
+    const signerInvocations = executionWindowActive
+      ? await invokeAuthorizedSigners(walletSafetyBlockedChains).catch((error) => [{
+          invoked: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }])
+      : [{ invoked: false, reason: 'execution_policy_not_active' }]
+
     const flashExecutorDiagnostic = await callTransactionBuilder({ mode: 'diagnostic' }).catch((error) => ({
       diagnostic_only: true,
       ready_for_flash_transaction_test: false,
@@ -729,6 +807,7 @@ export default {
             : transactionBuilt && cexExecutionConfigured
           const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
           const executionGate = !strategyBot ? 'strategy_bot_not_linked'
+            : walletSafetyBlockedChains.has(executionRoute.chain) ? 'wallet_contract_code_check_unavailable'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
             : executionRoute.route_type === 'flash_liquidity' && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
@@ -799,6 +878,7 @@ export default {
           execution_mode: executionWindowActive ? 'live_preflighted' : 'blocked_policy',
           opportunities,
           controls: {
+            wallet_rotation_safety: walletRotationSafety,
             withdrawal_path_available_to_bot: false,
             real_trade_claims_disabled_until_tx_hash: true,
             transaction_builder_present: true,
@@ -857,22 +937,13 @@ export default {
       }
     }
 
-    const settledBroadcasts = await settleExistingBroadcasts().catch((error) => [{
-      invoked: false,
-      reason: error instanceof Error ? error.message : String(error),
-    }])
-
-    const signerInvocations = await invokeAuthorizedSigners().catch((error) => [{
-      invoked: false,
-      reason: error instanceof Error ? error.message : String(error),
-    }])
-
     return Response.json({
       ok: true,
       worker: 'execution',
       settled_broadcasts: settledBroadcasts,
       signer_invocations: signerInvocations,
-      priority: 'early_bird',
+      wallet_rotation_safety: walletRotationSafety,
+      priority: 'broadcast_signing_first',
       live_execution_policy: executionWindowActive ? String(policy?.mode || 'configured') : 'policy_blocked',
       actual_broadcasts: signerInvocations.filter((item: any) => item.broadcast === true).length,
       confirmed_profits: 0,
