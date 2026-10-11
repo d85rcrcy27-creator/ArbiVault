@@ -880,13 +880,35 @@ export default {
             : twoLegExecutionReady ? (dexPreflight?.sell?.transaction || null) : null
           const txPayloadHash = unsignedTransaction ? await sha256(String(unsignedTransaction)) : null
           const executionAdapterId = executionAdapter?.id || null
+          const attemptReady = executionGate === 'eligible' &&
+            !!unsignedTransaction && !!txPayloadHash && !!executionAdapterId && !!wallet?.id
+
+          // A blocked route is a diagnostic, not an execution attempt. Keep it in
+          // bot_execution_runs.output, but reserve execution_attempts for payloads
+          // that actually passed the safety gates and can enter the signing queue.
+          if (!attemptReady) {
+            opportunities.push({
+              ...executionContext,
+              execution_gate: executionGate === 'eligible' ? 'signing_payload_incomplete' : executionGate,
+              execution_route_id: executionRoute.id,
+              execution_attempt_id: null,
+              adapter_id: executionAdapterId,
+              signing_request_id: null,
+              attempt_created: false,
+              signing: 'not_created',
+              broadcast: 'not_attempted',
+              observation_saved: false,
+            })
+            continue
+          }
+
           const { data: attempt, error: attemptError } = await supabase.from('execution_attempts').insert({
             owner_id: bot.owner_id, adapter_id: executionAdapterId, strategy_bot_id: strategyBot?.id || null, observation_id: null,
             observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain,
-            execution_mode: 'on_chain', status: executionGate === 'eligible' ? 'validated' : 'blocked',
+            execution_mode: 'on_chain', status: 'validated',
             opportunity_payload_hash: opportunityHash, transaction_payload_hash: txPayloadHash,
-            capital_used: 0, failure_reason: executionGate === 'eligible' ? null : executionGate,
-            validated_at: now.toISOString(), wallet_id: wallet?.id || null,
+            capital_used: 0, failure_reason: null,
+            validated_at: now.toISOString(), wallet_id: wallet.id,
           }).select('id').single()
           if (attemptError) throw attemptError
 
