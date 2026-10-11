@@ -51,10 +51,14 @@ jobs:
             exit 1
           fi
           deployer="$(cast wallet address --private-key "$BSC_DEPLOYER_PRIVATE_KEY")"
-          balance_wei="$(cast balance "$deployer" --ether --rpc-url "$BSC_RPC_URL")"
+          balance_wei="$(cast balance "$deployer" --rpc-url "$BSC_RPC_URL")"
+          if [[ ! "$balance_wei" =~ ^[0-9]+$ || "$balance_wei" == "0" ]]; then
+            echo "::error::The deployment wallet has no BNB for gas. Fund the deployer wallet before retrying."
+            exit 1
+          fi
           echo "Verified BNB Smart Chain chain id: $chain_id"
           echo "Deployer address: $deployer"
-          echo "Deployer native balance (BNB): $balance_wei"
+          echo "Deployer native balance (wei): $balance_wei"
           echo "Expected payout wallet: $HOT_WALLET"
           echo "deployer=$deployer" >> "$GITHUB_OUTPUT"
 
