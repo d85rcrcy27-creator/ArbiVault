@@ -1,7 +1,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
 
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 const admin = createClient(
-  Deno.env.get("SUPABASE_URL")!,
+  supabaseUrl,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
@@ -19,6 +21,17 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
 
   try {
+    const authorization = req.headers.get("Authorization") || "";
+    if (!authorization.toLowerCase().startsWith("bearer ")) {
+      return json({ error: "authentication_required" }, 401);
+    }
+    const caller = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authorization } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: { user }, error: authError } = await caller.auth.getUser();
+    if (authError || !user) return json({ error: "authentication_required" }, 401);
+
     const body = await req.json().catch(() => ({}));
     const skillId = String(body.skill_id || "");
     const requestedThreshold = Number(body.threshold);
@@ -37,6 +50,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "skill_not_found" }, 404);
+      if (data.owner_id !== user.id) return json({ error: "skill_owner_mismatch" }, 403);
       skill = data;
     }
 
@@ -159,6 +173,18 @@ Deno.serve(async (req) => {
         }, 409);
       }
 
+      const spreadCondition = skillConditions.find((condition: any) =>
+        String(condition?.label || "").toLowerCase().includes("spread")
+      );
+      const spreadThreshold = spreadCondition
+        ? Number.parseFloat(String(spreadCondition.value ?? ""))
+        : null;
+      const conditionThresholds = skillConditions.map((condition: any) => ({
+        label: String(condition?.label || ""),
+        value: condition?.value == null ? null : String(condition.value),
+        unit: condition?.unit == null ? null : String(condition.unit),
+      }));
+
       const conditionPasses = (condition: any, sample: any) => {
         const label = String(condition?.label || "").toLowerCase();
         const threshold = Number.parseFloat(String(condition?.value ?? ""));
@@ -188,6 +214,9 @@ Deno.serve(async (req) => {
         sample_limit: 10000,
         newest_samples_selected: true,
         live_market_observations_only: true,
+        condition_thresholds: conditionThresholds,
+        threshold_pct: Number.isFinite(spreadThreshold) ? spreadThreshold : null,
+        threshold_reached: qualifying.length > 0,
         pnl_is_realized: false,
         pnl_is_executable: false,
         execution_triggered: false,
@@ -214,7 +243,12 @@ Deno.serve(async (req) => {
         estimated_net_pnl: Number(netPnl.toFixed(2)),
         historical_max_spread_pct: Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)),
         historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
-        reason: qualifying.length ? "live_observation_conditions_matched" : "no_recorded_observations_matched_all_skill_conditions",
+        reason: qualifying.length
+          ? "live_observation_conditions_matched"
+          : (Number.isFinite(spreadThreshold) &&
+             Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)) <= spreadThreshold
+              ? "historical_max_spread_below_strategy_threshold"
+              : "no_recorded_observations_matched_all_skill_conditions"),
         first_observation: builtSamples[0]?.observed_at || null,
         last_observation: builtSamples[builtSamples.length - 1]?.observed_at || null,
       };
