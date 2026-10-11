@@ -1,0 +1,28 @@
+name: Flash Executor Solidity CI
+
+on:
+  push:
+    paths:
+      - "contracts/ArbiVaultFlashExecutor.sol"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-ci.yml"
+  pull_request:
+    paths:
+      - "contracts/ArbiVaultFlashExecutor.sol"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Compile BNB flash executor
+        run: forge build --sizes
