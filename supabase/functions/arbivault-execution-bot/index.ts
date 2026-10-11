@@ -675,7 +675,9 @@ export default {
         if (wallets.error) throw wallets.error
 
         const enabledStrategyBots = new Map(
-          (strategyBots || []).map((strategyBot: any) => [strategyBot.id, strategyBot]),
+          (strategyBots || [])
+            .filter((strategyBot: any) => strategyBot.owner_id === bot.owner_id)
+            .map((strategyBot: any) => [strategyBot.id, strategyBot]),
         )
 
         const flashRouteDiagnostics = (routes || [])
@@ -770,7 +772,9 @@ export default {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
-          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
+          const wallet = (wallets.data || []).find((candidate: any) =>
+            candidate.owner_id === bot.owner_id && candidate.chain === executionRoute.chain
+          ) || null
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
@@ -903,6 +907,8 @@ export default {
           const executionGate = !strategyBot ? 'strategy_bot_not_linked'
             : walletSafetyBlockedChains.has(executionRoute.chain) ? 'wallet_contract_code_check_unavailable'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
+            : !strategyBot.execution_enabled ? 'strategy_execution_disabled'
+            : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && strategyBot.flash_loan_enabled !== true ? 'flash_loan_strategy_disabled'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
             : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
             : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && builderError ? builderError
@@ -1025,7 +1031,9 @@ export default {
           .from('bot_configs')
           .update({
             last_run_at: new Date().toISOString(),
-            last_success_at: new Date().toISOString(),
+            last_success_at: opportunities.length && opportunities.some((item: any) => item.execution_gate === 'eligible')
+              ? new Date().toISOString()
+              : bot.last_success_at,
             last_error: opportunities.length ? null : 'no_explicit_execution_route',
           })
           .eq('id', bot.id)
