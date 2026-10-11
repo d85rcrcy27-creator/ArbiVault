@@ -67,7 +67,9 @@ Deno.serve(async (req) => {
     if (hasLatencyOrVolumeCondition) {
       const endAt = new Date();
       const startAt = new Date(endAt.getTime() - days * 86400000);
-      const { data: liveRows, error: liveRowsError, count: liveRowsCount } = await admin
+      const liveSampleLimit = 10000;
+      const queryPageSize = 1000;
+      const { data: firstLivePage, error: liveRowsError, count: liveRowsCount } = await admin
         .from("strategy_observations")
         .select("id,symbol,metric,value,observed_at,metadata", { count: "exact" })
         .eq("owner_id", skill.owner_id)
@@ -77,18 +79,54 @@ Deno.serve(async (req) => {
         .gte("observed_at", startAt.toISOString())
         .lte("observed_at", endAt.toISOString())
         .order("observed_at", { ascending: false })
-        .limit(10000);
+        .range(0, queryPageSize - 1);
       if (liveRowsError) return json({ error: "live_observation_lookup_failed", detail: liveRowsError.message }, 500);
 
-      // The limit applies after ordering: take the newest observations, then put them
-      // back into chronological order for windows, percentiles and matching.
-      const chronologicallyOrderedLiveRows = (liveRows || []).slice().sort(
+      // Supabase REST responses may be capped at 1,000 rows regardless of .limit().
+      // Fetch pages explicitly, up to 10,000 of the newest recorded samples.
+      const liveRows: any[] = [...(firstLivePage || [])];
+      const liveRowsTarget = Math.min(liveSampleLimit, liveRowsCount ?? liveRows.length);
+      for (let offset = liveRows.length; offset < liveRowsTarget; offset += queryPageSize) {
+        const { data: page, error: pageError } = await admin
+          .from("strategy_observations")
+          .select("id,symbol,metric,value,observed_at,metadata")
+          .eq("owner_id", skill.owner_id)
+          .eq("source_key", "public_exchange_order_books")
+          .eq("domain", "execution_scout")
+          .eq("metric", "spread_pct")
+          .gte("observed_at", startAt.toISOString())
+          .lte("observed_at", endAt.toISOString())
+          .order("observed_at", { ascending: false })
+          .range(offset, Math.min(offset + queryPageSize - 1, liveRowsTarget - 1));
+        if (pageError) return json({ error: "live_observation_page_lookup_failed", detail: pageError.message }, 500);
+        if (!page?.length) break;
+        liveRows.push(...page);
+      }
+
+      // Put newest-selected samples back into chronological order for calculations.
+      const chronologicallyOrderedLiveRows = liveRows.slice().sort(
         (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
       );
       const bases = [...new Set(chronologicallyOrderedLiveRows.map((row: any) => String(row.symbol || "").split("/")[0]).filter(Boolean))];
       const volumeSymbols = bases.map((symbol) => symbol + "/USD");
-      const { data: volumeRows, error: volumeRowsError } = volumeSymbols.length
-        ? await admin
+      const volumeRows: any[] = [];
+      if (volumeSymbols.length) {
+        const { data: firstVolumePage, error: volumeRowsError, count: volumeRowsCount } = await admin
+          .from("strategy_observations")
+          .select("symbol,value,observed_at,metadata", { count: "exact" })
+          .eq("owner_id", skill.owner_id)
+          .eq("source_key", "coingecko")
+          .eq("metric", "public_market_price")
+          .in("symbol", volumeSymbols)
+          .gte("observed_at", startAt.toISOString())
+          .lte("observed_at", endAt.toISOString())
+          .order("observed_at", { ascending: false })
+          .range(0, queryPageSize - 1);
+        if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
+        volumeRows.push(...(firstVolumePage || []));
+        const volumeRowsTarget = Math.min(liveSampleLimit, volumeRowsCount ?? volumeRows.length);
+        for (let offset = volumeRows.length; offset < volumeRowsTarget; offset += queryPageSize) {
+          const { data: page, error: pageError } = await admin
             .from("strategy_observations")
             .select("symbol,value,observed_at,metadata")
             .eq("owner_id", skill.owner_id)
@@ -98,12 +136,15 @@ Deno.serve(async (req) => {
             .gte("observed_at", startAt.toISOString())
             .lte("observed_at", endAt.toISOString())
             .order("observed_at", { ascending: false })
-            .limit(10000)
-        : { data: [], error: null };
-      if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
+            .range(offset, Math.min(offset + queryPageSize - 1, volumeRowsTarget - 1));
+          if (pageError) return json({ error: "live_volume_page_lookup_failed", detail: pageError.message }, 500);
+          if (!page?.length) break;
+          volumeRows.push(...page);
+        }
+      }
 
       const volumeHistory = new Map<string, any[]>();
-      const chronologicallyOrderedVolumeRows = (volumeRows || []).slice().sort(
+      const chronologicallyOrderedVolumeRows = volumeRows.slice().sort(
         (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
       );
       for (const row of chronologicallyOrderedVolumeRows) {
@@ -211,7 +252,7 @@ Deno.serve(async (req) => {
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
         data_methodology: "Newest recorded live order-book observations up to the 10,000-sample computation limit, sorted chronologically after retrieval; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes.",
         available_dataset_samples: liveRowsCount ?? builtSamples.length,
-        sample_limit: 10000,
+        sample_limit: liveSampleLimit,
         newest_samples_selected: true,
         live_market_observations_only: true,
         condition_thresholds: conditionThresholds,
