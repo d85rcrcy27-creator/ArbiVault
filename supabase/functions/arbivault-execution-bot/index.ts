@@ -43,6 +43,55 @@ async function authorized(req: Request) {
   return !!data && token === data
 }
 
+
+async function testnetBackendDiagnostic() {
+  const endpoint = Deno.env.get('BSC_TESTNET_RPC_URL') || 'https://bsc-testnet-dataseed.bnbchain.org'
+  const checkedAt = new Date().toISOString()
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'eth_chainId', params: [] }),
+      signal: AbortSignal.timeout(6000),
+    })
+    if (!response.ok) throw new Error(`rpc_http_${response.status}`)
+    const body = await response.json()
+    if (body.error || typeof body.result !== 'string') throw new Error('rpc_chain_id_unavailable')
+    const chainId = String(body.result).toLowerCase()
+    if (chainId !== '0x61') {
+      return {
+        ok: false, network: 'BNB Smart Chain Testnet', expected_chain_id: 97,
+        chain_id_hex: chainId, reason: 'testnet_rpc_wrong_chain', checked_at: checkedAt,
+        transaction_broadcast_tested: false,
+      }
+    }
+    const blockResponse = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: crypto.randomUUID(), method: 'eth_blockNumber', params: [] }),
+      signal: AbortSignal.timeout(6000),
+    })
+    if (!blockResponse.ok) throw new Error(`rpc_block_http_${blockResponse.status}`)
+    const blockBody = await blockResponse.json()
+    if (blockBody.error || typeof blockBody.result !== 'string') throw new Error('rpc_block_number_unavailable')
+    return {
+      ok: true, network: 'BNB Smart Chain Testnet', chain_id: 97, chain_id_hex: chainId,
+      latest_block_number: Number(BigInt(blockBody.result)), checked_at: checkedAt,
+      rpc_source: Deno.env.get('BSC_TESTNET_RPC_URL') ? 'configured_testnet_rpc' : 'public_testnet_rpc',
+      transaction_broadcast_tested: false,
+      live_market_prices_are_separate: true,
+      mainnet_signing_unchanged: true,
+    }
+  } catch (error) {
+    return {
+      ok: false, network: 'BNB Smart Chain Testnet', expected_chain_id: 97,
+      reason: error instanceof Error ? error.message : 'testnet_rpc_check_failed',
+      checked_at: checkedAt, transaction_broadcast_tested: false,
+      mainnet_signing_unchanged: true,
+    }
+  }
+}
+
 async function confirmBroadcastAttempt(attemptId: string, txHash: string) {
   const token = (await supabase.rpc('get_bot_cron_token')).data
   const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/arbivault-execution-confirm`, {
@@ -448,7 +497,10 @@ export default {
       invoked: false,
       reason: error instanceof Error ? error.message : String(error),
     }])
-    const walletRotationSafety = await runWalletRotationSafety()
+    const [walletRotationSafety, testnetBackend] = await Promise.all([
+      runWalletRotationSafety(),
+      testnetBackendDiagnostic(),
+    ])
     const walletSafetyBlockedChains = new Set<string>(
       Array.isArray(walletRotationSafety.blocked_chains)
         ? walletRotationSafety.blocked_chains.map((chain: unknown) => String(chain))
@@ -879,6 +931,7 @@ export default {
           opportunities,
           controls: {
             wallet_rotation_safety: walletRotationSafety,
+            testnet_backend_diagnostic: testnetBackend,
             withdrawal_path_available_to_bot: false,
             real_trade_claims_disabled_until_tx_hash: true,
             transaction_builder_present: true,
@@ -943,6 +996,7 @@ export default {
       settled_broadcasts: settledBroadcasts,
       signer_invocations: signerInvocations,
       wallet_rotation_safety: walletRotationSafety,
+      testnet_backend_diagnostic: testnetBackend,
       priority: 'broadcast_signing_first',
       live_execution_policy: executionWindowActive ? String(policy?.mode || 'configured') : 'policy_blocked',
       actual_broadcasts: signerInvocations.filter((item: any) => item.broadcast === true).length,
