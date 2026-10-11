@@ -59,7 +59,7 @@ export default function BotFleet() {
       <div className="mb-4 flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]"><ShieldCheck className="h-3.5 w-3.5" /> Bot Fleet</div>
-          <p className="mt-1 text-[0.65rem] text-[#5a6080]">Three dedicated workers share the same audited wallet, trade and payment state.</p>
+          <p className="mt-1 text-[0.65rem] text-[#5a6080]">Three dedicated workers share audited state. Flash-loan and flash-swap routes execute only when their strategy bot, chain, builder, executor contract, payout wallet, and signer gates all pass.</p>
         </div>
         <button onClick={load} disabled={authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-50"><RefreshCw className="h-3.5 w-3.5" /></button>
       </div>

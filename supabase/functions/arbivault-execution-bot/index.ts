@@ -643,10 +643,15 @@ export default {
 
         if (wallets.error) throw wallets.error
 
+        const enabledStrategyBots = new Map(
+          (strategyBots || []).map((strategyBot: any) => [strategyBot.id, strategyBot]),
+        )
+
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
             candidate.enabled === true &&
-            candidate.route_type === 'flash_liquidity'
+            enabledStrategyBots.has(candidate.strategy_bot_id) &&
+            ['flash_liquidity', 'flash_swap'].includes(candidate.route_type)
           )
           .map((candidate: any) => {
             const diagnostic: any = flashExecutorDiagnostic || {}
@@ -714,15 +719,21 @@ export default {
 
         // Execution consumes only explicitly executable strategy routes.
         // Research/observer observations are never an execution trigger.
-        const executionCandidates = (routes || []).filter((candidate: any) =>
-          chains.includes(candidate.chain) &&
-          candidate.enabled === true &&
-          candidate.strategy_bot_id &&
-          candidate.builder_enabled === true &&
-          !!candidate.transaction_builder &&
-          candidate.discovery_only !== true &&
-          ['dex_cex', 'cyclic', 'multi_venue', 'flash_liquidity'].includes(candidate.route_type)
-        )
+        const executionCandidates = (routes || []).filter((candidate: any) => {
+          const strategyBot = enabledStrategyBots.get(candidate.strategy_bot_id)
+          const configuredChains = Array.isArray(strategyBot?.chains) && strategyBot.chains.length > 0
+            ? strategyBot.chains
+            : chains
+
+          return configuredChains.includes(candidate.chain) &&
+            chains.includes(candidate.chain) &&
+            candidate.enabled === true &&
+            enabledStrategyBots.has(candidate.strategy_bot_id) &&
+            candidate.builder_enabled === true &&
+            !!candidate.transaction_builder &&
+            candidate.discovery_only !== true &&
+            ['dex_cex', 'cyclic', 'multi_venue', 'flash_liquidity', 'flash_swap'].includes(candidate.route_type)
+        })
 
         for (const executionRoute of executionCandidates) {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
@@ -733,7 +744,7 @@ export default {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
             builder: executionRoute.transaction_builder,
-            execution_source: executionRoute.route_type === 'flash_liquidity' ? 'flash_skill_to_atomic_execution_pipeline' : 'explicit_execution_route',
+            execution_source: ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) ? 'flash_skill_to_atomic_execution_pipeline' : 'explicit_execution_route',
             cex_execution: executionRoute.route_type === 'dex_cex'
               ? {
                   private_adapter_available: cexExecutionAdapters.length > 0,
@@ -764,7 +775,7 @@ export default {
             }
           }
 
-          if (executionRoute.route_type === 'flash_liquidity') {
+          if (['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type)) {
             try {
               if (executionRoute.chain !== 'bnb' || executionRoute.pair !== 'BNB/USDT') {
                 throw new Error('flash_live_quote_route_not_supported')
@@ -849,12 +860,12 @@ export default {
           const executionAdapterConfigured = !!executionAdapter
           const dexSellBuilt = !!dexPreflight?.sell?.transaction_payload_hash && dexPreflight?.sell?.executable_unsigned === true
           const dexBuyBuilt = !!dexPreflight?.buy?.transaction_payload_hash && dexPreflight?.buy?.executable_unsigned === true
-          const transactionBuilt = executionRoute.route_type === 'flash_liquidity'
+          const transactionBuilt = ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type)
             ? flashBuild?.executable === true && typeof flashBuild?.transaction === 'string'
             : dexSellBuilt && dexBuyBuilt
           // A DEX/CEX arbitrage is two execution legs. A single DEX swap is never
           // sufficient to claim an arbitrage execution or realized PnL.
-          const twoLegExecutionReady = executionRoute.route_type === 'flash_liquidity'
+          const twoLegExecutionReady = ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type)
             ? transactionBuilt
             : transactionBuilt && cexExecutionConfigured
           const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
@@ -862,10 +873,10 @@ export default {
             : walletSafetyBlockedChains.has(executionRoute.chain) ? 'wallet_contract_code_check_unavailable'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
-            : executionRoute.route_type === 'flash_liquidity' && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
-            : executionRoute.route_type === 'flash_liquidity' && builderError ? builderError
-            : executionRoute.route_type === 'flash_liquidity' && flashQuote?.profitable !== true ? 'flash_no_profitable_live_opportunity'
-            : executionRoute.route_type === 'flash_liquidity' && !transactionBuilt ? 'flash_atomic_transaction_not_built'
+            : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && flashExecutorDiagnostic?.ready_for_flash_transaction_test !== true ? 'flash_executor_not_ready'
+            : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && builderError ? builderError
+            : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && flashQuote?.profitable !== true ? 'flash_no_profitable_live_opportunity'
+            : ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type) && !transactionBuilt ? 'flash_atomic_transaction_not_built'
             : !executionWindowActive ? 'execution_policy_not_active'
             : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
             : executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable ? 'cex_order_execution_unavailable'
@@ -875,7 +886,7 @@ export default {
             : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
             : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
           const opportunityHash = await sha256(JSON.stringify(executionContext))
-          const unsignedTransaction = executionRoute.route_type === 'flash_liquidity'
+          const unsignedTransaction = ['flash_liquidity', 'flash_swap'].includes(executionRoute.route_type)
             ? (flashBuild?.transaction || null)
             : twoLegExecutionReady ? (dexPreflight?.sell?.transaction || null) : null
           const txPayloadHash = unsignedTransaction ? await sha256(String(unsignedTransaction)) : null

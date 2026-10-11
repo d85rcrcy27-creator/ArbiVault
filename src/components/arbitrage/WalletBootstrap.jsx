@@ -102,7 +102,7 @@ export default function WalletBootstrap() {
   return <div className="rounded border border-[#232738] bg-[#0C0E16] p-4">
     <div className="flex items-start justify-between gap-3">
       <div><div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]"><KeyRound className="h-3.5 w-3.5"/> Trading Wallets</div>
-      <p className="mt-1 text-[0.62rem] text-[#5a6080]">Ensures real BNB, SOL, ETH, BTC and XRP Ledger wallets. Signing material stays server-side in Supabase Vault.</p></div>
+      <p className="mt-1 text-[0.62rem] text-[#5a6080]">These are generated trading hot-wallet addresses. A deployed BSC executor contract belongs in executor configuration, never in this wallet field. Signing material stays server-side in Supabase Vault.</p></div>
       <button onClick={load} disabled={authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-50" title="Refresh"><RefreshCw className="h-3.5 w-3.5"/></button>
     </div>
     {error&&<div className="mt-3 rounded border border-[#FF4D4D]/30 bg-[#FF4D4D]/5 p-2 font-mono text-[0.6rem] text-[#FF4D4D]">{error}</div>}
