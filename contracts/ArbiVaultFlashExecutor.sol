@@ -28,7 +28,7 @@ contract ArbiVaultFlashExecutor {
 
     address public constant AAVE_V3_POOL_BSC = 0x6807dc923806fE8Fd134338EABCA509979a7e0cB;
     address public constant PANCAKE_V2_ROUTER = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
-    address public constant BISWAP_ROUTER_V2 = 0x3a6d8ca21d1cf76f653a67577fa0d27453350dd8;
+    address public constant BISWAP_ROUTER_V2 = 0x3a6d8cA21D1CF76F653A67577FA0D27453350dD8;
     address public constant WBNB = 0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c;
     address public constant USDT = 0x55d398326f99059fF775485246999027B3197955;
 
