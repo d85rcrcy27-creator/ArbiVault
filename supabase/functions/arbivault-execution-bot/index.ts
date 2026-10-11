@@ -549,7 +549,7 @@ export default {
 
     const { data: strategyBots, error: strategyBotError } = await supabase
       .from('arbivault_strategy_bots')
-      .select('id,strategy,enabled,execution_enabled,flash_loan_enabled,max_trade_size,min_profit_threshold,slippage_tolerance,max_gas_budget,cooldown_ms,chains')
+      .select('id,owner_id,strategy,enabled,execution_enabled,flash_loan_enabled,max_trade_size,min_profit_threshold,slippage_tolerance,max_gas_budget,cooldown_ms,chains')
       .eq('enabled', true)
       .eq('execution_enabled', true)
 
@@ -561,6 +561,37 @@ export default {
       .eq('enabled', true)
 
     if (routeError) return Response.json({ error: routeError.message }, { status: 500 })
+
+    const strategyPipelineChecks = (strategyBots || []).map((strategyBot: any) => {
+      const linkedRoutes = (routes || []).filter((route: any) => route.strategy_bot_id === strategyBot.id)
+      const executableRoutes = linkedRoutes.filter((route: any) =>
+        route.enabled === true &&
+        route.discovery_only !== true &&
+        route.builder_enabled === true &&
+        !!route.transaction_builder,
+      )
+      const flashRoutes = linkedRoutes.filter((route: any) =>
+        ['flash_liquidity', 'flash_swap'].includes(route.route_type),
+      )
+      const failures: string[] = []
+      if (!linkedRoutes.length) failures.push('no_strategy_routes')
+      if (!executableRoutes.length) failures.push('no_executable_routes')
+      if (flashRoutes.length && strategyBot.flash_loan_enabled !== true) {
+        failures.push('flash_loan_disabled_for_flash_routes')
+      }
+      return {
+        strategy_bot_id: strategyBot.id,
+        owner_id: strategyBot.owner_id,
+        strategy: strategyBot.strategy,
+        enabled: strategyBot.enabled === true,
+        execution_enabled: strategyBot.execution_enabled === true,
+        linked_route_count: linkedRoutes.length,
+        executable_route_count: executableRoutes.length,
+        flash_route_count: flashRoutes.length,
+        healthy: failures.length === 0,
+        failures,
+      }
+    })
 
     const { data: adapters, error: adapterError } = await supabase
       .from('execution_adapters')
@@ -973,6 +1004,8 @@ export default {
             atomic_multileg_builder_present: flashExecutorDiagnostic?.ready_for_flash_transaction_test === true,
             flash_executor_diagnostic: flashExecutorDiagnostic,
             flash_routes: flashRouteDiagnostics,
+            strategy_pipeline_checks: strategyPipelineChecks,
+            strategy_pipeline_healthy: strategyPipelineChecks.every((check: any) => check.healthy),
             internal_signers_present: signerAdapters.length > 0,
           },
         }
