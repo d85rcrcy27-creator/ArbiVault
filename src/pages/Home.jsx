@@ -35,7 +35,7 @@ const PUBLIC_VENUES = [
 export default function Home() {
   const navigate = useNavigate()
   const isMobile = useIsMobile()
-  const { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
+  const { routes, marketSnapshot, chainRpcHealth, signerHealth, testnetHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket } = useLiveMarketData()
   const [selectedRoute, setSelectedRoute] = useState(null)
   const [mobileTab, setMobileTab] = useState('matrix')
   const toggleEngine = () => setEngineStatus((s) => s === 'ACTIVE' ? 'PAUSED' : 'ACTIVE')
@@ -98,6 +98,16 @@ export default function Home() {
               </div>
             )) : <span className="font-mono text-[0.58rem] text-[#5a6080]">Waiting for signer checks…</span>}
           </div>
+        </div>
+        <div className="rounded border border-[#232738] bg-[#090A0F] p-3">
+          <div className="mb-2 font-mono text-[0.55rem] font-semibold uppercase tracking-wider text-[#5a6080]">Testnet Backend · BSC 97</div>
+          <div className="flex items-center justify-between font-mono text-[0.58rem]">
+            <span className="text-[#8a90b0]">RPC STATUS</span>
+            <span className={testnetHealth?.ok ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>{testnetHealth?.ok ? 'LIVE' : testnetHealth ? 'DOWN' : 'WAITING'}</span>
+          </div>
+          <div className="mt-1 font-mono text-[0.58rem] text-[#e0e4f0]">LATEST BLOCK {Number.isFinite(Number(testnetHealth?.latest_block_number)) ? Number(testnetHealth.latest_block_number).toLocaleString() : '—'}</div>
+          <div className="mt-1 font-mono text-[0.5rem] uppercase text-[#5a6080]">READ-ONLY PROBE · {testnetHealth?.transaction_broadcast_tested ? 'Broadcast tested' : 'No test transaction sent'}</div>
+          <div className="mt-1 font-mono text-[0.5rem] text-[#5a6080]">{testnetHealth?.recorded_at ? new Date(testnetHealth.recorded_at).toLocaleTimeString() : ''}</div>
         </div>
       </div>
     </div>
