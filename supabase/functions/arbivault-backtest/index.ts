@@ -53,20 +53,25 @@ Deno.serve(async (req) => {
     if (hasLatencyOrVolumeCondition) {
       const endAt = new Date();
       const startAt = new Date(endAt.getTime() - days * 86400000);
-      const { data: liveRows, error: liveRowsError } = await admin
+      const { data: liveRows, error: liveRowsError, count: liveRowsCount } = await admin
         .from("strategy_observations")
-        .select("id,symbol,metric,value,observed_at,metadata")
+        .select("id,symbol,metric,value,observed_at,metadata", { count: "exact" })
         .eq("owner_id", skill.owner_id)
         .eq("source_key", "public_exchange_order_books")
         .eq("domain", "execution_scout")
         .eq("metric", "spread_pct")
         .gte("observed_at", startAt.toISOString())
         .lte("observed_at", endAt.toISOString())
-        .order("observed_at", { ascending: true })
+        .order("observed_at", { ascending: false })
         .limit(10000);
       if (liveRowsError) return json({ error: "live_observation_lookup_failed", detail: liveRowsError.message }, 500);
 
-      const bases = [...new Set((liveRows || []).map((row: any) => String(row.symbol || "").split("/")[0]).filter(Boolean))];
+      // The limit applies after ordering: take the newest observations, then put them
+      // back into chronological order for windows, percentiles and matching.
+      const chronologicallyOrderedLiveRows = (liveRows || []).slice().sort(
+        (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
+      );
+      const bases = [...new Set(chronologicallyOrderedLiveRows.map((row: any) => String(row.symbol || "").split("/")[0]).filter(Boolean))];
       const volumeSymbols = bases.map((symbol) => symbol + "/USD");
       const { data: volumeRows, error: volumeRowsError } = volumeSymbols.length
         ? await admin
@@ -78,13 +83,16 @@ Deno.serve(async (req) => {
             .in("symbol", volumeSymbols)
             .gte("observed_at", startAt.toISOString())
             .lte("observed_at", endAt.toISOString())
-            .order("observed_at", { ascending: true })
+            .order("observed_at", { ascending: false })
             .limit(10000)
         : { data: [], error: null };
       if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
 
       const volumeHistory = new Map<string, any[]>();
-      for (const row of volumeRows || []) {
+      const chronologicallyOrderedVolumeRows = (volumeRows || []).slice().sort(
+        (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
+      );
+      for (const row of chronologicallyOrderedVolumeRows) {
         const key = String(row.symbol || "").toUpperCase();
         const list = volumeHistory.get(key) || [];
         const volume = Number(row.metadata?.volume24h);
@@ -118,7 +126,7 @@ Deno.serve(async (req) => {
       const feePct = body.round_trip_fee_pct == null ? 0.20 : Number(body.round_trip_fee_pct);
       const slippagePct = body.slippage_pct == null ? 0.10 : Number(body.slippage_pct);
       const costPct = feePct + slippagePct;
-      const builtSamples = (liveRows || []).map((row: any) => {
+      const builtSamples = chronologicallyOrderedLiveRows.map((row: any) => {
         const metadata = row.metadata || {};
         const quotes = Array.isArray(metadata.quotes) ? metadata.quotes : [];
         const buyExchange = String(metadata.buy_exchange || "");
@@ -175,7 +183,10 @@ Deno.serve(async (req) => {
         supported: true,
         source: "recorded_live_market_observations",
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
-        data_methodology: "Recorded live order-book snapshots with selected buy/sell venue latency; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes.",
+        data_methodology: "Newest recorded live order-book observations up to the 10,000-sample computation limit, sorted chronologically after retrieval; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes.",
+        available_dataset_samples: liveRowsCount ?? builtSamples.length,
+        sample_limit: 10000,
+        newest_samples_selected: true,
         live_market_observations_only: true,
         pnl_is_realized: false,
         pnl_is_executable: false,
