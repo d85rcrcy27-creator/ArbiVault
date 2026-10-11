@@ -55,6 +55,7 @@ export function useLiveMarketData() {
   const [marketSnapshot, setMarketSnapshot] = useState([])
   const [chainRpcHealth, setChainRpcHealth] = useState([])
   const [signerHealth, setSignerHealth] = useState([])
+  const [testnetHealth, setTestnetHealth] = useState(null)
   const [trades, setTrades] = useState([])
   const [engineStatus, setEngineStatus] = useState('ACTIVE')
   const [status, setStatus] = useState('connecting')
@@ -72,6 +73,34 @@ export function useLiveMarketData() {
   useEffect(() => {
     refreshTrades().catch(() => {})
   }, [refreshTrades])
+
+  const loadTestnetHealth = useCallback(async () => {
+    const { data: { user } = {} } = await supabase.auth.getUser()
+    if (!user) {
+      setTestnetHealth(null)
+      return
+    }
+    const { data, error } = await supabase
+      .from('bot_execution_runs')
+      .select('started_at,output')
+      .eq('owner_id', user.id)
+      .eq('workflow', 'execution')
+      .order('started_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) throw error
+    const diagnostic = data?.output?.controls?.testnet_backend_diagnostic
+    setTestnetHealth(diagnostic ? { ...diagnostic, recorded_at: data.started_at } : null)
+  }, [])
+
+  useEffect(() => {
+    const refresh = () => loadTestnetHealth().catch(() => {
+      setTestnetHealth({ ok: false, reason: 'testnet_diagnostic_read_failed' })
+    })
+    refresh()
+    const timer = setInterval(refresh, 15000)
+    return () => clearInterval(timer)
+  }, [loadTestnetHealth])
 
   const setMarketControls = useCallback((updates) => {
     setMarketControlsState((prev) => {
@@ -138,5 +167,5 @@ export function useLiveMarketData() {
     .reduce((sum, trade) => sum + trade.pnl, 0)
     .toFixed(2)
 
-  return { routes, marketSnapshot, chainRpcHealth, signerHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
+  return { routes, marketSnapshot, chainRpcHealth, signerHealth, testnetHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
