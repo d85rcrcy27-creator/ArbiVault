@@ -26,11 +26,11 @@ contract ArbiVaultEthereumFlashExecutor {
     bool private loanActive;
     bool private callbackCompleted;
 
-    address public constant AAVE_V3_POOL_ETH = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fa4E2;
-    address public constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D;
+    address public constant AAVE_V3_POOL_ETH = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
+    address public constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address public constant SUSHISWAP_V2_ROUTER = 0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address public constant USDC = 0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48;
+    address public constant USDC = 0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48;
 
     error UnauthorizedCaller();
     error InvalidArguments();
