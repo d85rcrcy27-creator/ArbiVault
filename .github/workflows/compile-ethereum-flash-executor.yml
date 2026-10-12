@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "contracts/ArbiVaultEthereumFlashExecutor.sol"
+      - "test/ArbiVaultEthereumFlashExecutor.t.sol"
       - "foundry.toml"
       - ".github/workflows/compile-ethereum-flash-executor.yml"
   pull_request:
@@ -26,3 +27,5 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Compile Ethereum executor
         run: forge build --sizes
+      - name: Run Ethereum executor safety tests
+        run: forge test --match-path test/ArbiVaultEthereumFlashExecutor.t.sol -vv
