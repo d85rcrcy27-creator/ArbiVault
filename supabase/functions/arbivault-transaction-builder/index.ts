@@ -14,7 +14,8 @@ const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 // Fail closed until the deployed executor contract source and live bytecode prove that
 // realized profits are paid to the calling ArbiVault trading hot wallet.
-const FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
@@ -50,10 +51,8 @@ const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
 ]);
 
-const ATOMIC_ALLOWED_TARGETS = new Set([
-  PANCAKE_V2_ROUTER.toLowerCase(),
-  BISWAP_ROUTER_V2.toLowerCase(),
-]);
+const BSC_ATOMIC_ALLOWED_TARGETS = new Set([PANCAKE_V2_ROUTER.toLowerCase(), BISWAP_ROUTER_V2.toLowerCase()]);
+const ETH_ATOMIC_ALLOWED_TARGETS = new Set([ETH_UNISWAP_V2_ROUTER.toLowerCase()]);
 
 const MAX_SLIPPAGE_BPS = 100;
 const MAX_PRICE_IMPACT_PCT = 5;
@@ -417,7 +416,7 @@ async function diagnoseFlashExecutor() {
     (bnb.executor as any).code_deployed === true &&
     (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (bnb.executor as any).source_verification?.verified === true &&
-    FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+    BSC_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
   try {
     const chainId = String(await ethereumRpc("eth_chainId", [])).toLowerCase();
@@ -449,10 +448,11 @@ async function diagnoseFlashExecutor() {
     (eth.executor as any).code_deployed === true &&
     (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (eth.executor as any).source_verification?.verified === true &&
-    FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+    ETH_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
   result.ready_for_flash_transaction_test = bnb.ready_for_flash_transaction_test === true || eth.ready_for_flash_transaction_test === true;
   result.executor_configured = (bnb.executor as any).configured === true;
+  result.bsc_flash_executor_payout_audited = BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
   result.executor_address = (bnb.executor as any).address || null;
   result.executor_code_deployed = (bnb.executor as any).code_deployed === true;
   result.executor_bytecode_hash = (bnb.executor as any).bytecode_hash || null;
@@ -463,6 +463,7 @@ async function diagnoseFlashExecutor() {
   result.aave_pool_resolved = bnb.aave_pool_resolved === true;
   result.aave_pool_address = bnb.aave_pool_address || null;
   result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
+  result.ethereum_flash_executor_payout_audited = ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
   result.ethereum_flash_executor_address = (eth.executor as any).address || null;
   result.ethereum_payout_behavior_verified = false;
   result.ethereum_payout_recipient_address = (eth.executor as any).payout_recipient_address || null;
@@ -622,6 +623,7 @@ async function buildFlashOpportunityQuote(
 }
 
 async function buildAtomicFlashLoan(
+  chain: "bnb" | "ethereum",
   owner: string,
   asset: string,
   amountRaw: string,
@@ -630,13 +632,19 @@ async function buildAtomicFlashLoan(
   valuesRaw: string[],
   data: string[],
 ) {
-  if (!BSC_FLASH_EXECUTOR || !/^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR)) throw new Error("atomic_executor_not_configured");
-  const executorCode = String(await rpc("eth_getCode", [BSC_FLASH_EXECUTOR, "latest"]));
+  const executor = chain === "ethereum" ? ETH_FLASH_EXECUTOR : BSC_FLASH_EXECUTOR;
+  const chainId = chain === "ethereum" ? "1" : "56";
+  const expectedChainId = chain === "ethereum" ? 1 : 56;
+  const executorRpc = chain === "ethereum" ? ethereumRpc : rpc;
+  const payoutAudited = chain === "ethereum" ? ETH_FLASH_EXECUTOR_PAYOUT_AUDITED : BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+  const allowedTargets = chain === "ethereum" ? ETH_ATOMIC_ALLOWED_TARGETS : BSC_ATOMIC_ALLOWED_TARGETS;
+  if (!executor || !/^0x[a-fA-F0-9]{40}$/.test(executor)) throw new Error("atomic_executor_not_configured");
+  const executorCode = String(await executorRpc("eth_getCode", [executor, "latest"]));
   if (!/^0x[0-9a-f]+$/i.test(executorCode) || executorCode.length <= 2) {
     throw new Error("atomic_executor_code_missing");
   }
   const payoutGetterData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
-  const payoutRaw = String(await rpc("eth_call", [{ to: BSC_FLASH_EXECUTOR, data: payoutGetterData }, "latest"]));
+  const payoutRaw = String(await executorRpc("eth_call", [{ to: executor, data: payoutGetterData }, "latest"]));
   const payoutWallet = decodeFunctionResult({
     abi: FLASH_EXECUTOR_PAYOUT_ABI,
     functionName: "HOT_WALLET",
@@ -645,16 +653,17 @@ async function buildAtomicFlashLoan(
   if (payoutWallet.toLowerCase() !== owner.toLowerCase()) {
     throw new Error("flash_executor_payout_wallet_mismatch");
   }
-  const payoutVerification = await lookupSourcifyVerification("56", BSC_FLASH_EXECUTOR);
+  const payoutVerification = await lookupSourcifyVerification(chainId, executor);
   if (payoutVerification.verified !== true) throw new Error("flash_executor_source_unverified");
-  if (!FLASH_EXECUTOR_PAYOUT_AUDITED) {
+  if (!payoutAudited) {
     throw new Error("flash_executor_payout_unverified");
   }
-  const aavePool = await resolveBscAavePool();
-  if (!/^0x[a-fA-F0-9]{40}$/.test(asset)) throw new Error("invalid_flash_asset");
-  if (targets.length !== 2 || targets.length !== valuesRaw.length || targets.length !== data.length || targets[0].toLowerCase() === targets[1].toLowerCase()) throw new Error("atomic_leg_shape_invalid");
+  const aavePool = chain === "ethereum" ? await resolveEthereumAavePool() : await resolveBscAavePool();
+  const allowedAssets = chain === "ethereum" ? [ETH_WETH, ETH_USDC] : [WBNB, BSC_USDT];
+  if (!/^0x[a-fA-F0-9]{40}$/.test(asset) || !allowedAssets.some((token) => token.toLowerCase() === asset.toLowerCase())) throw new Error("flash_asset_not_allowlisted_for_chain");
+  if (targets.length !== 2 || targets.length !== valuesRaw.length || targets.length !== data.length || (chain === "bnb" && targets[0].toLowerCase() === targets[1].toLowerCase())) throw new Error("atomic_leg_shape_invalid");
   for (const target of targets) {
-    if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !ATOMIC_ALLOWED_TARGETS.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
+    if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !allowedTargets.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
   }
   for (const value of valuesRaw) if (!/^\d+$/.test(value)) throw new Error("atomic_value_invalid");
   for (const callData of data) {
@@ -668,17 +677,17 @@ async function buildAtomicFlashLoan(
     functionName: "executeFlashLoan",
     args: [asset, amount, minProfit, targets as any, valuesRaw.map((v) => BigInt(v)), data as any],
   });
-  const nonce = toBigInt(await rpc("eth_getTransactionCount", [owner, "pending"]));
-  const gasPrice = toBigInt(await rpc("eth_gasPrice", []));
-  const gas = toBigInt(await rpc("eth_estimateGas", [{ from: owner, to: BSC_FLASH_EXECUTOR, data: encoded, value: "0x0" }]));
+  const nonce = toBigInt(await executorRpc("eth_getTransactionCount", [owner, "pending"]));
+  const gasPrice = toBigInt(await executorRpc("eth_gasPrice", []));
+  const gas = toBigInt(await executorRpc("eth_estimateGas", [{ from: owner, to: executor, data: encoded, value: "0x0" }]));
   const transaction = {
-    chainId: 56, nonce: toHex(nonce), to: BSC_FLASH_EXECUTOR, value: "0x0",
+    chainId: expectedChainId, nonce: toHex(nonce), to: executor, value: "0x0",
     data: encoded, gas: toHex(gas), gasPrice: toHex(gasPrice), from: owner,
   };
   const serializedPayload = JSON.stringify(transaction);
   return {
-    builder: "aave_v3_atomic_flash_loan_v1", chain: "bnb", source: owner,
-    executor: BSC_FLASH_EXECUTOR, flash_loan_pool: aavePool,
+    builder: "aave_v3_atomic_flash_loan_v1", chain, source: owner,
+    executor: executor, flash_loan_pool: aavePool,
     flash_loan_asset: asset, flash_loan_amount: amount.toString(),
     minimum_profit: minProfit.toString(), targets, values: valuesRaw,
     leg_count: targets.length, transaction: serializedPayload,
@@ -686,7 +695,7 @@ async function buildAtomicFlashLoan(
     transaction_payload_hash: await sha256(serializedPayload),
     executable: true, atomic: true, builder_signs: false, builder_broadcasts: false,
     repayment_required_in_same_transaction: true,
-    reference: "Aave V3 flashLoanSimple + dedicated ArbiVault atomic executor",
+    reference: chain === "ethereum" ? "Ethereum Aave V3 flashLoanSimple + Uniswap V2 ArbiVault executor" : "BNB Aave V3 flashLoanSimple + PancakeSwap V2/Biswap V2 ArbiVault executor",
   };
 }
 async function buildUniswap(
@@ -1025,6 +1034,7 @@ Deno.serve(async (req) => {
 
     const built = route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
       ? await buildAtomicFlashLoan(
+          route.chain === "ethereum" ? "ethereum" : "bnb",
           wallet.address,
           String(body.flash_loan_asset || ""),
           amountRaw,
@@ -1059,12 +1069,12 @@ Deno.serve(async (req) => {
       mode,
       address_resolution: route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
         ? {
-            network: "BNB Smart Chain mainnet",
-            chain_id: 56,
-            executor_address: BSC_FLASH_EXECUTOR || null,
-            aave_provider_address: BSC_AAVE_PROVIDER,
+            network: route.chain === "ethereum" ? "Ethereum mainnet" : "BNB Smart Chain mainnet",
+            chain_id: route.chain === "ethereum" ? 1 : 56,
+            executor_address: (route.chain === "ethereum" ? ETH_FLASH_EXECUTOR : BSC_FLASH_EXECUTOR) || null,
+            aave_provider_address: route.chain === "ethereum" ? ETH_AAVE_PROVIDER : BSC_AAVE_PROVIDER,
             aave_pool_address: (built as any).flash_loan_pool || null,
-            executor_configured: /^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR),
+            executor_configured: /^0x[a-fA-F0-9]{40}$/.test(route.chain === "ethereum" ? ETH_FLASH_EXECUTOR : BSC_FLASH_EXECUTOR),
             pool_resolved_on_chain: !!(built as any).flash_loan_pool,
           }
         : null,
