@@ -38,8 +38,8 @@ const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org
 const ETH_RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://cloudflare-eth.com";
 const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL") || "https://api.mainnet-beta.solana.com";
 
-// Internal signer supports only the explicitly configured BNB PancakeSwap v2 spot path.
-// Flash-executor signing stays disabled until its deployed payout behavior is verified.
+// EVM signing uses chain-bound allowlists. Dedicated flash-executor signing remains fail-closed
+// per chain until its deployment, immutable payout wallet, source verification, and payout audit are configured.
 const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const BSC_BISWAP_ROUTER_V2 = "0x3a6d8ca21d1cf76f653a67577fa0d27453350dd8";
 const BSC_WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
