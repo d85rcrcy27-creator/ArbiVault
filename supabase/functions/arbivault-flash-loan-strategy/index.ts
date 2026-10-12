@@ -314,7 +314,9 @@ async function spreadFor(pair: typeof PAIRS[number]) {
 
   let buy: any = quotes[0]
   let sell: any = quotes[0]
-  for (const quote of quotes) {
+  for (const candidate of quotes) {
+    if (!candidate) continue
+    const quote = candidate
     if (quote.ask < buy.ask) buy = quote
     if (quote.bid > sell.bid) sell = quote
   }
@@ -715,6 +717,7 @@ export default {
 
           if (executionRoute.route_type === 'flash_liquidity') {
             try {
+              if (!wallet) throw new Error('flash_source_wallet_unavailable')
               const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
               const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
               if (!isBnbFlash && !isEthereumFlash) {
