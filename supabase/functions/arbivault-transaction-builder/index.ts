@@ -1168,12 +1168,18 @@ Deno.serve(async (req) => {
     if (routeError) return json({ error: routeError.message }, 500);
     if (!route || route.enabled !== true) return json({ error: "route_not_enabled" }, 404);
     if (route.discovery_only === true) return json({ error: "discovery_only_route_cannot_execute" }, 409);
-    if (route.builder_enabled !== true || !route.transaction_builder) {
-      return json({ error: "transaction_builder_not_configured" }, 409);
-    }
     const isAtomicFlashRoute =
       route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
       route.route_type === "flash_liquidity";
+    const quoteOnlyMode = body.mode === "flash_quote";
+    // Pending executor routes may continue read-only quotes while builder_enabled=false.
+    // Every other request still fails closed until the route is explicitly enabled.
+    if (
+      !route.transaction_builder ||
+      (route.builder_enabled !== true && !(quoteOnlyMode && isAtomicFlashRoute))
+    ) {
+      return json({ error: "transaction_builder_not_configured" }, 409);
+    }
     if (!isAtomicFlashRoute && !["dex_cex","cyclic","multi_venue"].includes(route.route_type)) {
       return json({ error: "route_type_not_supported_by_spot_builder" }, 409);
     }
