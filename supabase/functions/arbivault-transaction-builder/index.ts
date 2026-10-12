@@ -36,6 +36,7 @@ const SOL_USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
 const ROUTER_ABI = parseAbi([
   "function getAmountsOut(uint256 amountIn,address[] path) view returns (uint256[] amounts)",
+  "function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)",
   "function swapExactETHForTokens(uint256 amountOutMin,address[] path,address to,uint256 deadline) payable returns (uint256[] amounts)",
   "function swapExactTokensForETH(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)",
 ]);
@@ -814,7 +815,7 @@ async function buildAtomicFlashLoan(
   const aavePool = chain === "ethereum" ? await resolveEthereumAavePool() : await resolveBscAavePool();
   const allowedAssets = chain === "ethereum" ? [ETH_WETH, ETH_USDC] : [WBNB, BSC_USDT];
   if (!/^0x[a-fA-F0-9]{40}$/.test(asset) || !allowedAssets.some((token) => token.toLowerCase() === asset.toLowerCase())) throw new Error("flash_asset_not_allowlisted_for_chain");
-  if (targets.length !== 2 || targets.length !== valuesRaw.length || targets.length !== data.length || (chain === "bnb" && targets[0].toLowerCase() === targets[1].toLowerCase())) throw new Error("atomic_leg_shape_invalid");
+  if (targets.length !== 2 || targets.length !== valuesRaw.length || targets.length !== data.length || targets[0].toLowerCase() === targets[1].toLowerCase()) throw new Error("atomic_leg_shape_invalid");
   for (const target of targets) {
     if (!/^0x[a-fA-F0-9]{40}$/.test(target) || !allowedTargets.has(target.toLowerCase())) throw new Error("atomic_target_not_allowlisted");
   }
