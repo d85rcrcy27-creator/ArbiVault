@@ -23,7 +23,7 @@ Optional: `OPENAI_MODEL` (defaults to `gpt-4o-mini`). Keep both server-side; nei
 
 After review/merge, apply the SQL migration:
 
-`supabase/migrations/20261012091500_add_ai_strategy_proposals.sql`
+`supabase/migrations/20261012070000_add_ai_strategy_proposals.sql`
 
 Deploy the authenticated function:
 
