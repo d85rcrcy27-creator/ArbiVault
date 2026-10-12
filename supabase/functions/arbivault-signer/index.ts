@@ -48,9 +48,12 @@ const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
 const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ETH_USDC = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
-const FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
+const BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
+const ETH_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const BSC_PANCAKE_V2_ABI = parseAbi([
   "function swapExactETHForTokens(uint256 amountOutMin,address[] path,address to,uint256 deadline)",
   "function swapExactTokensForETH(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline)",
@@ -361,8 +364,9 @@ Deno.serve(async (req) => {
       const allowed = Array.isArray(adapter.allowed_contracts)
         ? adapter.allowed_contracts.map((x: unknown) => String(x).toLowerCase())
         : [];
-      const auditedBnbFlashTarget = chain === "bnb" && !!BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase() && FLASH_EXECUTOR_PAYOUT_AUDITED;
-      if ((!allowed.length || !allowed.includes(to.toLowerCase())) && !auditedBnbFlashTarget) {
+      const auditedBnbFlashTarget = chain === "bnb" && !!BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase() && BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+      const auditedEthFlashTarget = chain === "ethereum" && !!ETH_FLASH_EXECUTOR && to.toLowerCase() === ETH_FLASH_EXECUTOR.toLowerCase() && ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+      if ((!allowed.length || !allowed.includes(to.toLowerCase())) && !auditedBnbFlashTarget && !auditedEthFlashTarget) {
         return json({ error: "destination_contract_not_allowlisted" }, 403);
       }
       const data = String(candidate.data || "");
@@ -372,8 +376,51 @@ Deno.serve(async (req) => {
       const value = strictBigInt("value", candidate.value);
       const nowSec = BigInt(Math.floor(Date.now() / 1000));
 
-      if (chain === "bnb" && BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
-        if (!FLASH_EXECUTOR_PAYOUT_AUDITED) return json({ error: "flash_executor_payout_audit_not_enabled" }, 403);
+      if (chain === "ethereum" && ETH_FLASH_EXECUTOR && to.toLowerCase() === ETH_FLASH_EXECUTOR.toLowerCase()) {
+        if (!ETH_FLASH_EXECUTOR_PAYOUT_AUDITED) return json({ error: "ethereum_flash_executor_payout_audit_not_enabled" }, 403);
+        const executorCode = String(await rpc(ETH_RPC, "eth_getCode", [ETH_FLASH_EXECUTOR, "latest"]));
+        if (!hasContractCode(executorCode)) return json({ error: "ethereum_flash_executor_code_not_deployed" }, 403);
+        if (value !== 0n) return json({ error: "ethereum_flash_executor_native_value_forbidden" }, 403);
+        let flash: any;
+        try { flash = decodeFunctionData({ abi: FLASH_EXECUTOR_ABI, data: data as `0x${string}` }); }
+        catch { return json({ error: "ethereum_flash_executor_method_not_allowlisted" }, 403); }
+        if (flash.functionName !== "executeFlashLoan") return json({ error: "ethereum_flash_executor_method_not_allowlisted" }, 403);
+        const [asset, amount, minProfit, targets, values, calls] = flash.args as readonly [string,bigint,bigint,readonly string[],readonly bigint[],readonly string[]];
+        if (![ETH_WETH.toLowerCase(), ETH_USDC.toLowerCase()].includes(String(asset).toLowerCase()) ||
+            amount <= 0n || minProfit <= 0n || targets.length !== 2 ||
+            targets.length !== values.length || targets.length !== calls.length ||
+            targets.some((target) => target.toLowerCase() !== ETH_UNISWAP_V2_ROUTER.toLowerCase()) ||
+            values.some((v) => v !== 0n)) {
+          return json({ error: "ethereum_flash_executor_parameters_not_allowlisted" }, 403);
+        }
+        const nowSec = BigInt(Math.floor(Date.now() / 1000));
+        const deadlineMax = nowSec + 120n;
+        const intermediate = String(asset).toLowerCase() === ETH_WETH.toLowerCase() ? ETH_USDC.toLowerCase() : ETH_WETH.toLowerCase();
+        for (let i = 0; i < calls.length; i++) {
+          let leg: any;
+          try { leg = decodeFunctionData({ abi: ETH_FLASH_ROUTER_ABI, data: calls[i] as `0x${string}` }); }
+          catch { return json({ error: "ethereum_flash_leg_method_not_allowlisted" }, 403); }
+          if (leg.functionName !== "swapExactTokensForTokens") return json({ error: "ethereum_flash_leg_method_not_allowlisted" }, 403);
+          const [amountIn, amountOutMin, path, recipient, deadline] = leg.args as readonly [bigint,bigint,readonly string[],string,bigint];
+          if (amountIn <= 0n || amountOutMin <= 0n || path.length !== 2 ||
+              recipient.toLowerCase() !== ETH_FLASH_EXECUTOR.toLowerCase() ||
+              deadline <= nowSec || deadline > deadlineMax) {
+            return json({ error: "ethereum_flash_leg_parameters_invalid" }, 403);
+          }
+          const a = path[0].toLowerCase(), z = path[1].toLowerCase();
+          if (i === 0 && (a !== String(asset).toLowerCase() || z !== intermediate || amountIn !== amount)) {
+            return json({ error: "ethereum_flash_first_leg_must_spend_borrowed_asset" }, 403);
+          }
+          if (i === 1 && (a !== intermediate || z !== String(asset).toLowerCase())) {
+            return json({ error: "ethereum_flash_second_leg_must_return_borrowed_asset" }, 403);
+          }
+        }
+        const getter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
+        const payoutRaw = String(await rpc(ETH_RPC, "eth_call", [{ to: ETH_FLASH_EXECUTOR, data: getter }, "latest"]));
+        const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
+        if (payout.toLowerCase() !== wallet.address.toLowerCase()) return json({ error: "ethereum_flash_executor_payout_wallet_mismatch" }, 403);
+      } else if (chain === "bnb" && BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
+        if (!BSC_FLASH_EXECUTOR_PAYOUT_AUDITED) return json({ error: "flash_executor_payout_audit_not_enabled" }, 403);
         const executorCode = String(await rpc(BSC_RPC, "eth_getCode", [BSC_FLASH_EXECUTOR, "latest"]));
         if (executorCode === "0x" || executorCode === "0x0") return json({ error: "flash_executor_code_not_deployed" }, 403);
         if (value !== 0n) return json({ error: "flash_executor_native_value_forbidden" }, 403);
