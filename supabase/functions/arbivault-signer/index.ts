@@ -45,6 +45,7 @@ const BSC_BISWAP_ROUTER_V2 = "0x3a6d8ca21d1cf76f653a67577fa0d27453350dd8";
 const BSC_WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
 const BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
 const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
+const ETH_SUSHISWAP_V2_ROUTER = "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F";
 const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ETH_USDC = "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
@@ -386,10 +387,12 @@ Deno.serve(async (req) => {
         catch { return json({ error: "ethereum_flash_executor_method_not_allowlisted" }, 403); }
         if (flash.functionName !== "executeFlashLoan") return json({ error: "ethereum_flash_executor_method_not_allowlisted" }, 403);
         const [asset, amount, minProfit, targets, values, calls] = flash.args as readonly [string,bigint,bigint,readonly string[],readonly bigint[],readonly string[]];
+        const ethFlashRouters = [ETH_UNISWAP_V2_ROUTER.toLowerCase(), ETH_SUSHISWAP_V2_ROUTER.toLowerCase()];
         if (![ETH_WETH.toLowerCase(), ETH_USDC.toLowerCase()].includes(String(asset).toLowerCase()) ||
             amount <= 0n || minProfit <= 0n || targets.length !== 2 ||
             targets.length !== values.length || targets.length !== calls.length ||
-            targets.some((target) => target.toLowerCase() !== ETH_UNISWAP_V2_ROUTER.toLowerCase()) ||
+            targets[0].toLowerCase() === targets[1].toLowerCase() ||
+            targets.some((target) => !ethFlashRouters.includes(target.toLowerCase())) ||
             values.some((v) => v !== 0n)) {
           return json({ error: "ethereum_flash_executor_parameters_not_allowlisted" }, 403);
         }
