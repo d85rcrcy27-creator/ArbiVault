@@ -546,7 +546,7 @@ async function buildFlashOpportunityQuote(
       const minimumFinalOut = finalOut * BigInt(10000 - slippageBps) / 10000n;
       const grossProfit = finalOut - amount;
       const netProfit = finalOut - amount - premium - gasCostAsset;
-      const minProfitRaw = gasCostAsset + 1n;
+      const minProfitRaw = gasCostAsset + 1000000000000000000n; // estimated gas plus at least 1 USDT
       const executorConfigured = /^0x[a-fA-F0-9]{40}$/.test(BSC_FLASH_EXECUTOR);
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 30);
       let callData: string[] = [];
@@ -582,7 +582,7 @@ async function buildFlashOpportunityQuote(
         estimated_gas_cost_raw: gasCostAsset.toString(),
         min_profit_raw: minProfitRaw.toString(),
         estimated_net_profit_raw: netProfit.toString(),
-        profitable_after_flash_premium_and_gas: netProfit > 0n,
+        profitable_after_flash_premium_and_gas: netProfit >= 1000000000000000000n,
         executor_configured: executorConfigured,
         slippage_bps_per_leg: slippageBps,
         deadline: deadline.toString(),
