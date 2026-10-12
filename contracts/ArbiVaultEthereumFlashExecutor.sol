@@ -28,6 +28,7 @@ contract ArbiVaultEthereumFlashExecutor {
 
     address public constant AAVE_V3_POOL_ETH = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fa4E2;
     address public constant UNISWAP_V2_ROUTER = 0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D;
+    address public constant SUSHISWAP_V2_ROUTER = 0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant USDC = 0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48;
 
@@ -44,6 +45,10 @@ contract ArbiVaultEthereumFlashExecutor {
 
     event FlashLoanStarted(address indexed asset,uint256 amount,address indexed hotWallet);
     event FlashLoanSettled(address indexed asset,uint256 amount,uint256 premium,uint256 profitPaid,address indexed hotWallet);
+
+    function isAllowedRouter(address target) public pure returns (bool) {
+        return target == UNISWAP_V2_ROUTER || target == SUSHISWAP_V2_ROUTER;
+    }
 
     constructor(address pool,address hotWallet) {
         if (block.chainid != 1 || pool != AAVE_V3_POOL_ETH || pool.code.length == 0 || hotWallet == address(0)) {
@@ -83,7 +88,7 @@ contract ArbiVaultEthereumFlashExecutor {
         if (msg.sender != HOT_WALLET) revert UnauthorizedCaller();
         if (loanActive || (asset != WETH && asset != USDC) || amount == 0 || minProfit == 0 ||
             targets.length != 2 || values.length != 2 || data.length != 2 ||
-            targets[0] != UNISWAP_V2_ROUTER || targets[1] != UNISWAP_V2_ROUTER ||
+            targets[0] == targets[1] || !isAllowedRouter(targets[0]) || !isAllowedRouter(targets[1]) ||
             values[0] != 0 || values[1] != 0) revert InvalidArguments();
 
         loanActive = true;
@@ -114,7 +119,7 @@ contract ArbiVaultEthereumFlashExecutor {
         (uint256 minProfit,address[] memory targets,uint256[] memory values,bytes[] memory data) =
             abi.decode(params,(uint256,address[],uint256[],bytes[]));
         if (minProfit == 0 || targets.length != 2 || values.length != 2 || data.length != 2 ||
-            targets[0] != UNISWAP_V2_ROUTER || targets[1] != UNISWAP_V2_ROUTER ||
+            targets[0] == targets[1] || !isAllowedRouter(targets[0]) || !isAllowedRouter(targets[1]) ||
             values[0] != 0 || values[1] != 0) revert InvalidArguments();
 
         address intermediate = asset == WETH ? USDC : WETH;
