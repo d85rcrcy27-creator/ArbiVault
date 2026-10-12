@@ -40,7 +40,8 @@ create table if not exists public.strategy_proposals (
       and proof_net_profit_usd > 0
       and proven_at is not null
     )
-  )
+  ),
+  unique (id, owner_id)
 );
 
 create index if not exists strategy_proposals_owner_created_idx
@@ -61,8 +62,9 @@ create policy strategy_proposals_owner_select
 -- checking a mined transaction receipt and an actual asset-balance delta.
 create table if not exists public.strategy_proposal_runs (
   id uuid primary key default gen_random_uuid(),
-  proposal_id uuid not null references public.strategy_proposals(id) on delete cascade,
+  proposal_id uuid not null,
   owner_id uuid not null references auth.users(id) on delete cascade,
+  foreign key (proposal_id, owner_id) references public.strategy_proposals(id, owner_id) on delete cascade,
   chain text not null check (chain in ('ethereum', 'bnb')),
   tx_hash text not null check (char_length(tx_hash) between 16 and 132),
   status text not null default 'pending' check (status in ('pending', 'confirmed', 'reverted')),
