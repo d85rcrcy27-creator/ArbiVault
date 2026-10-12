@@ -544,9 +544,12 @@ Deno.serve(async (req) => {
       if (account.address.toLowerCase() !== wallet.address.toLowerCase()) {
         return json({ error: "signer_secret_address_mismatch" }, 403);
       }
+      if (nonce > BigInt(Number.MAX_SAFE_INTEGER)) {
+        return json({ error: "evm_nonce_out_of_range" }, 400);
+      }
       const tx = {
         chainId: expectedChainId,
-        nonce,
+        nonce: Number(nonce),
         to: to as `0x${string}`,
         value,
         data: data as `0x${string}`,
@@ -611,7 +614,17 @@ Deno.serve(async (req) => {
         return json({ error: "bitcoin_transaction_shape_invalid" }, 400);
       }
       psbt.signAllInputs(key);
-      if (!psbt.validateSignaturesOfAllInputs()) {
+      const signaturesValid = psbt.validateSignaturesOfAllInputs((pubkey, messageHash, signature) => {
+        try {
+          // BIP340/Taproot uses x-only public keys; legacy ECDSA uses compressed keys.
+          return pubkey.length === 32
+            ? ecc.verifySchnorr(messageHash, pubkey, signature)
+            : ecc.verify(messageHash, pubkey, signature);
+        } catch {
+          return false;
+        }
+      });
+      if (!signaturesValid) {
         return json({ error: "bitcoin_signature_validation_failed" }, 500);
       }
       psbt.finalizeAllInputs();
