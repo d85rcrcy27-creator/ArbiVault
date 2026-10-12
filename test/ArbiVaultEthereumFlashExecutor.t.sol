@@ -6,7 +6,7 @@ import "../contracts/ArbiVaultEthereumFlashExecutor.sol";
 interface Vm {
     function chainId(uint256 newChainId) external;
     function etch(address target, bytes calldata newRuntimeBytecode) external;
-    function expectRevert(bytes calldata revertData) external;
+    function expectRevert(bytes4 revertData) external;
 }
 
 contract MockPoolCode {}
