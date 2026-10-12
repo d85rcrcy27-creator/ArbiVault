@@ -671,7 +671,7 @@ async function buildAtomicFlashLoan(
   }
   const amount = BigInt(amountRaw);
   const minProfit = BigInt(minProfitRaw || "0");
-  if (amount <= 0n || minProfit < 0n) throw new Error("invalid_atomic_amounts");
+  if (amount <= 0n || minProfit <= 0n) throw new Error("invalid_atomic_amounts");
   const encoded = encodeFunctionData({
     abi: FLASH_EXECUTOR_ABI,
     functionName: "executeFlashLoan",
