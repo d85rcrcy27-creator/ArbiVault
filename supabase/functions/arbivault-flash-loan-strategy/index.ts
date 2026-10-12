@@ -725,6 +725,9 @@ export default {
               }
               // Screening notional only. This is not permission to spend wallet capital.
               const configuredNotional = Number(strategyBot?.max_trade_size)
+              if (Number.isFinite(configuredNotional) && configuredNotional > 1000) {
+                throw new Error('flash_notional_above_preflight_cap')
+              }
               const notionalUsd = Number.isFinite(configuredNotional) && configuredNotional > 0
                 ? configuredNotional
                 : 100
@@ -944,7 +947,7 @@ export default {
             transaction_builder_present: true,
             transaction_builder_preflighted: opportunities.some((item) => item.dex_preflight),
             execution_signer_adapter_present: opportunities.some((item) => item.execution_gate === 'eligible'),
-            atomic_multileg_builder_present: flashExecutorDiagnostic?.ready_for_flash_transaction_test === true,
+            atomic_multileg_builder_present: flashExecutorDiagnostic?.bnb?.ready_for_flash_transaction_test === true || flashExecutorDiagnostic?.ethereum?.ready_for_flash_transaction_test === true,
             flash_executor_diagnostic: flashExecutorDiagnostic,
             flash_routes: flashRouteDiagnostics,
             internal_signers_present: signerAdapters.length > 0,
