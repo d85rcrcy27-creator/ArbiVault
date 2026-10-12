@@ -186,6 +186,9 @@ async function buildJupiter(
   slippageBps: number,
 ) {
   const assets = routeAssets("solana", pair, side);
+  if (!("inputMint" in assets) || !assets.inputMint || !assets.outputMint) {
+    throw new Error("jupiter_route_assets_invalid");
+  }
   const params = new URLSearchParams({
     inputMint: assets.inputMint,
     outputMint: assets.outputMint,
@@ -829,7 +832,14 @@ async function buildAtomicFlashLoan(
   const encoded = encodeFunctionData({
     abi: FLASH_EXECUTOR_ABI,
     functionName: "executeFlashLoan",
-    args: [asset, amount, minProfit, targets as any, valuesRaw.map((v) => BigInt(v)), data as any],
+    args: [
+      asset as `0x${string}`,
+      amount,
+      minProfit,
+      targets as `0x${string}`[],
+      valuesRaw.map((v) => BigInt(v)),
+      data as `0x${string}`[],
+    ],
   });
   const nonce = toBigInt(await executorRpc("eth_getTransactionCount", [owner, "pending"]));
   const gasPrice = toBigInt(await executorRpc("eth_gasPrice", []));
@@ -985,12 +995,18 @@ async function buildPancake(
   quoteOnly = false,
 ) {
   const assets = routeAssets("bnb", pair, side);
+  if (!("inputToken" in assets) || !assets.inputToken || !assets.outputToken) {
+    throw new Error("pancakeswap_route_assets_invalid");
+  }
+  const inputToken = assets.inputToken as `0x${string}`;
+  const outputToken = assets.outputToken as `0x${string}`;
+  const toAddress = taker as `0x${string}`;
   const amountIn = BigInt(amountRaw);
 
   const quoteData = encodeFunctionData({
     abi: ROUTER_ABI,
     functionName: "getAmountsOut",
-    args: [amountIn, [assets.inputToken, assets.outputToken]],
+    args: [amountIn, [inputToken, outputToken]],
   });
 
   const quoteEncoded = await rpc("eth_call", [
@@ -1040,7 +1056,7 @@ async function buildPancake(
     data = encodeFunctionData({
       abi: ROUTER_ABI,
       functionName: "swapExactETHForTokens",
-      args: [minOut, [WBNB, BSC_USDT], taker, deadline],
+      args: [minOut, [WBNB, BSC_USDT], toAddress, deadline],
     });
     value = amountIn;
   } else {
@@ -1048,7 +1064,7 @@ async function buildPancake(
       const allowanceCall = encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "allowance",
-        args: [taker, PANCAKE_V2_ROUTER],
+        args: [toAddress, PANCAKE_V2_ROUTER],
       });
       const allowanceRaw = await rpc("eth_call", [
         { to: BSC_USDT, data: allowanceCall },
@@ -1062,7 +1078,7 @@ async function buildPancake(
     data = encodeFunctionData({
       abi: ROUTER_ABI,
       functionName: "swapExactTokensForETH",
-      args: [amountIn, minOut, [BSC_USDT, WBNB], taker, deadline],
+      args: [amountIn, minOut, [BSC_USDT, WBNB], toAddress, deadline],
     });
   }
 
