@@ -1,0 +1,28 @@
+name: Ethereum Flash Executor Solidity CI
+
+on:
+  push:
+    paths:
+      - "contracts/ArbiVaultEthereumFlashExecutor.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-flash-executor.yml"
+  pull_request:
+    paths:
+      - "contracts/ArbiVaultEthereumFlashExecutor.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-flash-executor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Compile Ethereum executor
+        run: forge build --sizes
