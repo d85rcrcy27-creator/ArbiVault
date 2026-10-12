@@ -17,7 +17,7 @@ contract ArbiVaultEthereumFlashExecutorTest {
     address private constant AAVE_POOL = 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2;
     address private constant UNISWAP_ROUTER = 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D;
     address private constant SUSHISWAP_ROUTER = 0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F;
-    address private constant USDC = 0xA0b86991c6218b36c1d19d4a2e9Eb0cE3606eB48;
+    address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     function setUp() public {
         vm.chainId(1);
