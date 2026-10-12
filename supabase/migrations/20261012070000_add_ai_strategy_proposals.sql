@@ -130,6 +130,7 @@ begin
       execution_status = case
         when profitable_run_count >= 5 and verified_profit > 0 and p.status <> 'rejected'
           then 'proven'
+        when p.execution_status = 'proven' then 'blocked_pending_adapters'
         else p.execution_status
       end,
       updated_at = now()
