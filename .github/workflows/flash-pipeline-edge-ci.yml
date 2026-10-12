@@ -29,8 +29,8 @@ jobs:
         with:
           deno-version: v2.x
       - name: Type-check builder
-        run: deno check --no-lock supabase/functions/arbivault-transaction-builder/index.ts
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-transaction-builder/index.ts
       - name: Type-check strategy worker
-        run: deno check --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
       - name: Type-check signer
-        run: deno check --no-lock supabase/functions/arbivault-signer/index.ts
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-signer/index.ts
