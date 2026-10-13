@@ -414,7 +414,7 @@ async function verifyExecutor(
     const pool = decodeFunctionResult({
       abi: FLASH_EXECUTOR_PAYOUT_ABI,
       functionName: "POOL",
-      data: poolRaw as \`0x\${string}\`,
+      data: poolRaw as `0x${string}`,
     }) as string;
     result.pool_address = pool;
     result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase();
