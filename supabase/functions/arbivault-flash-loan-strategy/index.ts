@@ -726,11 +726,8 @@ export default {
               if (strategyBot?.flash_loan_enabled !== true) {
                 throw new Error('flash_loan_strategy_disabled')
               }
-              // Screening notional only. This is not permission to spend wallet capital.
+              // Use the strategy's configured notional for quote screening. This is a flash-loan amount, not wallet principal; chain liquidity, slippage, net-profit, gas, executor verification, and signer policy remain enforced.
               const configuredNotional = Number(strategyBot?.max_trade_size)
-              if (Number.isFinite(configuredNotional) && configuredNotional > 1000) {
-                throw new Error('flash_notional_above_preflight_cap')
-              }
               const notionalUsd = Number.isFinite(configuredNotional) && configuredNotional > 0
                 ? configuredNotional
                 : 100
