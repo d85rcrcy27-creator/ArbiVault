@@ -48,11 +48,39 @@ const ETH_UNISWAP_V2_ROUTER = "0x7a250d5630B4cf539739dF2C5dAcb4c659F2488D";
 const ETH_SUSHISWAP_V2_ROUTER = "0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F";
 const ETH_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const ETH_USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
-const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
-const ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
-const BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
-const ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const ENV_BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+let BSC_FLASH_EXECUTOR = ENV_BSC_FLASH_EXECUTOR;
+const ENV_ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
+let ETH_FLASH_EXECUTOR = ENV_ETH_FLASH_EXECUTOR;
+const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+let ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
 const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
+
+async function syncExecutorRegistry() {
+  const { data: rows, error } = await supabase
+    .from("flash_executor_deployments")
+    .select("chain,executor_address,status,source_verified,payout_audited")
+    .in("chain", ["bnb", "ethereum"]);
+  if (error) throw new Error("flash_executor_registry_lookup_failed");
+  const bnb = (rows || []).find((row: any) => row.chain === "bnb") || null;
+  const ethereum = (rows || []).find((row: any) => row.chain === "ethereum") || null;
+  const usableStatuses = ["pending", "deployed_unverified", "verified"];
+  BSC_FLASH_EXECUTOR = bnb
+    ? (usableStatuses.includes(bnb.status) ? String(bnb.executor_address || "").trim() : "")
+    : ENV_BSC_FLASH_EXECUTOR;
+  ETH_FLASH_EXECUTOR = ethereum
+    ? (usableStatuses.includes(ethereum.status) ? String(ethereum.executor_address || "").trim() : "")
+    : ENV_ETH_FLASH_EXECUTOR;
+  BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = bnb
+    ? (bnb.status === "verified" && bnb.source_verified === true && bnb.payout_audited === true)
+    : ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+  ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ethereum
+    ? (ethereum.status === "verified" && ethereum.source_verified === true && ethereum.payout_audited === true)
+    : ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+}
+
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const ETH_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const BSC_PANCAKE_V2_ABI = parseAbi([
@@ -149,6 +177,7 @@ Deno.serve(async (req) => {
   if (!(await authorized(req))) return json({ error: "unauthorized" }, 401);
 
   try {
+    await syncExecutorRegistry();
     const b = await req.json();
     const adapterId = String(b.adapter_id || "");
     const walletId = String(b.source_wallet_id || "");
