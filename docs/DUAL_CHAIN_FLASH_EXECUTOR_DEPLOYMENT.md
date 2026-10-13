@@ -6,22 +6,17 @@ This deployment adds/configures ArbiVault's BNB Smart Chain and Ethereum mainnet
 
 Existing manual deployment workflow: [Deploy ArbiVault BNB Flash Executor](https://github.com/d85rcrcy27-creator/ArbiVault/actions/workflows/deploy-bnb-flash-executor.yml).
 
-Required GitHub repository Actions secrets:
-- `BSC_DEPLOYER_PRIVATE_KEY`: dedicated funded deployment key; never a trading hot-wallet private key.
-- `BSC_RPC_URL`: BSC mainnet RPC (optional in the workflow, which falls back to the public BSC dataseed).
+The workflow requests a GitHub OIDC token and calls the restricted `arbivault-executor-deployer` Supabase Edge Function. The actual deployment private key remains in Supabase Vault and is never present in GitHub Secrets, Actions logs, or repository files. Only the non-secret RPC URL `BSC_RPC_URL` is optionally read from GitHub Actions Secrets; otherwise the workflow uses the public BSC dataseed.
 
-The current workflow pins the intended BNB hot-wallet payout address and refuses to continue unless chain id 56, deployment signer funding, bytecode, and the immutable `HOT_WALLET()` getter check pass. After source verification, the resulting address still must be configured in Supabase.
+The Supabase deployer validates the repository/workflow identity, fixed chain ID, active BNB trading-hot-wallet record, deployment signer funding, gas reserve, Aave pool code, and constructor configuration before signing and broadcasting. It records the deployment transaction and predicted contract address in `public.flash_executor_deployments`, then verifies runtime bytecode and the immutable `HOT_WALLET()` and `POOL()` getters. The signer/builder read the executor registry and stay fail-closed unless exact source/runtime verification and the payout audit succeed.
 
 ## Ethereum mainnet (chain id 1)
 
 Workflow added here: [Deploy ArbiVault Ethereum Flash Executor](https://github.com/d85rcrcy27-creator/ArbiVault/actions/workflows/deploy-ethereum-flash-executor.yml).
 
-Required GitHub repository Actions secrets:
-- `ETHEREUM_DEPLOYER_PRIVATE_KEY`: dedicated funded deployment key; never reuse the trading hot-wallet private key.
-- `ETHEREUM_HOT_WALLET`: exact active ArbiVault-generated Ethereum trading hot wallet to receive profit.
-- `ETHEREUM_RPC_URL`: Ethereum mainnet RPC URL. If omitted, the workflow uses a public RPC fallback.
+The workflow uses the same OIDC-to-Supabase Vault signer path; no Ethereum deployer private key or payout private key is stored in GitHub. Only the non-secret RPC URL `ETHEREUM_RPC_URL` is optionally read from GitHub Actions Secrets and otherwise falls back to a public Ethereum RPC.
 
-Before broadcasting the deployment, run the Foundry build/tests, require exact chain id 1, validate the hot-wallet address and check deployed bytecode exists at Aave V3 Pool, Uniswap V2, SushiSwap V2, WETH and USDC. After deploy, the workflow checks deployed bytecode and immutable `HOT_WALLET()` and `POOL()` getters. It attempts Sourcify source verification but does not declare that verification successful unless the verifier confirms it.
+Before broadcasting, the workflow runs Foundry build/tests, requires chain ID 1, and checks Aave V3 Pool, Uniswap V2, SushiSwap V2, WETH, and USDC runtime bytecode. The restricted Supabase signer checks the active Ethereum trading-hot-wallet row and the deployment secret's available gas, then records the deployment and confirms code plus immutable `HOT_WALLET()` and `POOL()` getters. It requires exact Sourcify source/runtime match before the payout audit can unlock signing.
 
 ## Before turning either route live
 
