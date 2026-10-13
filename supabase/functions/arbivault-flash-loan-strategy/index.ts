@@ -734,7 +734,7 @@ export default {
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
               const flashAsset = isBnbFlash
                 ? '0x55d398326f99059fF775485246999027B3197955'
-                : '0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
+                : '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
               // BNB-chain USDT uses 18 decimals; Ethereum USDC uses 6 decimals.
               const amountRaw = isBnbFlash
                 ? (BigInt(Math.round(notionalUsd * 100000000)) * 10000000000n).toString()
