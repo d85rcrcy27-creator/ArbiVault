@@ -1,0 +1,321 @@
+import { createClient } from "npm:@supabase/supabase-js@2.117.2";
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.0.11";
+import {
+  decodeFunctionResult, encodeAbiParameters, encodeFunctionData, getContractAddress,
+  keccak256, parseAbi, parseAbiParameters,
+  type Address, type Hex,
+} from "npm:viem@2.39.0";
+import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+
+const REPOSITORY = "d85rcrcy27-creator/ArbiVault";
+const REPOSITORY_ID = "1398360252";
+const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const OIDC_AUDIENCE = "arbivault-executor-deployer";
+const JWKS = createRemoteJWKSet(new URL(OIDC_ISSUER + "/.well-known/jwks"));
+
+const BSC = {
+  chain: "bnb", chainId: 56,
+  workflow: REPOSITORY + "/.github/workflows/deploy-bnb-flash-executor.yml@refs/heads/main",
+  confirmPhrase: "DEPLOY_TO_BSC_MAINNET",
+  contractName: "ArbiVaultFlashExecutor",
+  sourceBlobSha: "4ba59361fa0a125db5d1e538707e8b0932d5c453",
+  walletId: "43a50a7d-f018-4d36-9ada-5dd7e02efe47",
+  hotWallet: "0xEa37838f3361b80601756f7B0D770A5F5f38c486",
+  pool: "0x6807dc923806fE8Fd134338EABCA509979a7e0cB",
+  rpc: Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org",
+};
+const ETH = {
+  chain: "ethereum", chainId: 1,
+  workflow: REPOSITORY + "/.github/workflows/deploy-ethereum-flash-executor.yml@refs/heads/main",
+  confirmPhrase: "DEPLOY_TO_ETHEREUM_MAINNET",
+  contractName: "ArbiVaultEthereumFlashExecutor",
+  sourceBlobSha: "276dd92d982054a21dbff756fd8ffbe14f97f3b2",
+  walletId: "9cf84d39-83c3-40ee-aa81-c0ba7ec3ebd3",
+  hotWallet: "0xFfd52F7A182887a0382f2Cef33627af2F6BF0E27",
+  pool: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+  rpc: Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com",
+};
+type ChainConfig = typeof BSC | typeof ETH;
+const CONFIGS = new Map<string, ChainConfig>([["bnb", BSC], ["ethereum", ETH]]);
+const EXECUTOR_ABI = parseAbi([
+  "function HOT_WALLET() view returns (address)",
+  "function POOL() view returns (address)",
+]);
+const json = (body: unknown, status = 200) =>
+  Response.json(body, { status, headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8" } });
+function fail(error: string, status = 400, details: Record<string, unknown> = {}) {
+  return json({ ok: false, error, ...details }, status);
+}
+function normalizeHexBytecode(input: unknown): Hex {
+  if (typeof input !== "string") throw new Error("creation_bytecode_missing");
+  const normalized = input.startsWith("0x") ? input : "0x" + input;
+  if (!/^0x(?:[0-9a-fA-F]{2})+$/.test(normalized) || normalized.length < 1000) throw new Error("creation_bytecode_invalid");
+  if (/__\$[0-9a-fA-F]{34}\$__/.test(normalized)) throw new Error("creation_bytecode_has_unlinked_libraries");
+  return normalized as Hex;
+}
+function buildInitCode(bytecode: Hex, config: ChainConfig): Hex {
+  const args = encodeAbiParameters(parseAbiParameters("address pool, address hotWallet"), [
+    config.pool as Address, config.hotWallet as Address,
+  ]);
+  return (bytecode + args.slice(2)) as Hex;
+}
+async function authorizeGithub(req: Request, expectedWorkflow: string) {
+  const header = req.headers.get("authorization") || "";
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) throw new Error("github_oidc_bearer_required");
+  const verified = await jwtVerify(match[1], JWKS, { issuer: OIDC_ISSUER, audience: OIDC_AUDIENCE });
+  const p = verified.payload;
+  if (
+    p.repository !== REPOSITORY ||
+    String(p.repository_id || "") !== REPOSITORY_ID ||
+    p.ref !== "refs/heads/main" ||
+    p.workflow_ref !== expectedWorkflow ||
+    !["push", "workflow_dispatch"].includes(String(p.event_name || ""))
+  ) throw new Error("github_oidc_claims_not_allowed");
+  return { workflowRef: String(p.workflow_ref), runId: String(p.run_id || ""), actor: String(p.actor || ""), sha: String(p.sha || "") };
+}
+async function rpc(config: ChainConfig, method: string, params: unknown[]) {
+  const response = await fetch(config.rpc, {
+    method: "POST", headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: crypto.randomUUID(), method, params }),
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error(config.chain + "_rpc_http_" + response.status);
+  const body = await response.json();
+  if (body?.error) throw new Error(config.chain + "_rpc_error_" + (body.error.code ?? "unknown"));
+  if (body?.result === undefined || body?.result === null) throw new Error(config.chain + "_rpc_result_missing");
+  return body.result;
+}
+async function getDeploymentAccount() {
+  const { data, error } = await supabase.rpc("get_executor_deployment_secret");
+  if (error || typeof data !== "string") throw new Error("deployment_signing_key_unavailable");
+  const normalized = data.startsWith("0x") ? data : "0x" + data;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) throw new Error("deployment_signing_key_format_invalid");
+  try { return privateKeyToAccount(normalized as Hex); } catch { throw new Error("deployment_signing_key_invalid"); }
+}
+async function verifyHotWalletRecord(config: ChainConfig) {
+  const { data, error } = await supabase.from("wallets")
+    .select("id,chain,address,status,is_hot,wallet_role").eq("id", config.walletId).maybeSingle();
+  if (error || !data) throw new Error("approved_hot_wallet_record_unavailable");
+  if (data.chain !== config.chain || data.status !== "active" || data.is_hot !== true ||
+      data.wallet_role !== "trading_hot" || String(data.address).toLowerCase() !== config.hotWallet.toLowerCase()) {
+    throw new Error("approved_hot_wallet_configuration_mismatch");
+  }
+}
+async function getExistingDeployment(config: ChainConfig) {
+  const { data, error } = await supabase.from("flash_executor_deployments")
+    .select("chain,executor_address,deployment_tx_hash,status,source_verified,payout_audited")
+    .eq("chain", config.chain).maybeSingle();
+  if (error) throw new Error("deployment_registry_lookup_failed");
+  return data;
+}
+async function prepare(config: ChainConfig, bytecode: Hex) {
+  await verifyHotWalletRecord(config);
+  const existing = await getExistingDeployment(config);
+  if (existing) throw new Error("deployment_registry_already_has_" + existing.status);
+  const chainId = Number(String(await rpc(config, "eth_chainId", [])).toLowerCase());
+  if (chainId !== config.chainId) throw new Error(config.chain + "_rpc_chain_id_mismatch");
+  const poolCode = String(await rpc(config, "eth_getCode", [config.pool, "latest"]));
+  if (!/^0x[0-9a-f]+$/i.test(poolCode) || poolCode.length <= 2) throw new Error(config.chain + "_aave_pool_code_missing");
+  const account = await getDeploymentAccount();
+  const initCode = buildInitCode(bytecode, config);
+  const gasPrice = BigInt(String(await rpc(config, "eth_gasPrice", [])));
+  const estimate = BigInt(String(await rpc(config, "eth_estimateGas", [{ from: account.address, data: initCode, value: "0x0" }])));
+  if (estimate <= 0n || gasPrice <= 0n) throw new Error(config.chain + "_gas_estimate_invalid");
+  const gas = (estimate * 120n + 99n) / 100n;
+  const balance = BigInt(String(await rpc(config, "eth_getBalance", [account.address, "latest"])));
+  const required = gas * gasPrice;
+  const requiredWithReserve = (required * 110n + 99n) / 100n;
+  if (balance < requiredWithReserve) {
+    return { ok: false as const, error: config.chain + "_deployment_signer_underfunded", chain: config.chain,
+      chain_id: config.chainId, deployer_address: account.address, balance_wei: balance.toString(),
+      estimated_gas: gas.toString(), gas_price_wei: gasPrice.toString(),
+      required_with_reserve_wei: requiredWithReserve.toString(), broadcast_attempted: false };
+  }
+  const nonce = BigInt(String(await rpc(config, "eth_getTransactionCount", [account.address, "pending"])));
+  const expectedAddress = getContractAddress({ from: account.address, nonce });
+  return { ok: true as const, config, account, initCode, nonce, expectedAddress, gasPrice, gas, balance,
+    initCodeHash: keccak256(initCode), deployerAddress: account.address, requiredWithReserve };
+}
+async function codeAt(config: ChainConfig, address: string) {
+  return String(await rpc(config, "eth_getCode", [address, "latest"]));
+}
+async function readGetter(config: ChainConfig, address: string, functionName: "HOT_WALLET" | "POOL") {
+  const calldata = encodeFunctionData({ abi: EXECUTOR_ABI, functionName });
+  const raw = String(await rpc(config, "eth_call", [{ to: address, data: calldata }, "latest"]));
+  return decodeFunctionResult({ abi: EXECUTOR_ABI, functionName, data: raw as Hex }) as string;
+}
+async function sourcifyExact(config: ChainConfig, address: string) {
+  try {
+    const response = await fetch("https://sourcify.dev/server/v2/contract/" + config.chainId + "/" + address,
+      { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) return { checked: true, verified: false, status: response.status };
+    const body = await response.json();
+    return { checked: true, verified: body?.match === "exact_match" && body?.runtimeMatch === "exact_match",
+      match: body?.match || null, runtime_match: body?.runtimeMatch || null, verified_at: body?.verifiedAt || null };
+  } catch { return { checked: true, verified: false, error: "sourcify_lookup_failed" }; }
+}
+async function verifyAndRecord(config: ChainConfig, address: string, txHash: string | null) {
+  const existing = await getExistingDeployment(config);
+  if (!existing || String(existing.executor_address).toLowerCase() !== address.toLowerCase()) throw new Error("deployment_registry_address_mismatch");
+  const code = await codeAt(config, address);
+  if (!/^0x[0-9a-f]+$/i.test(code) || code.length <= 2) throw new Error("executor_runtime_bytecode_missing");
+  const hotWallet = await readGetter(config, address, "HOT_WALLET");
+  const pool = await readGetter(config, address, "POOL");
+  if (hotWallet.toLowerCase() !== config.hotWallet.toLowerCase()) throw new Error("executor_hot_wallet_getter_mismatch");
+  if (pool.toLowerCase() !== config.pool.toLowerCase()) throw new Error("executor_pool_getter_mismatch");
+  const verification = await sourcifyExact(config, address);
+  const sourceVerified = verification.verified === true;
+  const payoutAudited = sourceVerified && hotWallet.toLowerCase() === config.hotWallet.toLowerCase() &&
+    pool.toLowerCase() === config.pool.toLowerCase();
+  const { error } = await supabase.from("flash_executor_deployments").update({
+    executor_address: address, deployment_tx_hash: txHash || existing.deployment_tx_hash,
+    runtime_bytecode_hash: keccak256(code as Hex), status: sourceVerified ? "verified" : "deployed_unverified",
+    source_verified: sourceVerified, payout_audited: payoutAudited, payout_behavior_verified: false,
+    failure_code: null, updated_at: new Date().toISOString(),
+  }).eq("chain", config.chain);
+  if (error) throw new Error("deployment_registry_update_failed");
+  return {
+    ok: true, chain: config.chain, chain_id: config.chainId, executor_address: address,
+    deployment_tx_hash: txHash || existing.deployment_tx_hash, hot_wallet: hotWallet, pool,
+    runtime_bytecode_bytes: (code.length - 2) / 2, runtime_bytecode_hash: keccak256(code as Hex),
+    source_verification: verification, payout_audited: payoutAudited,
+    payout_behavior_verified: false, status: sourceVerified ? "verified" : "deployed_unverified",
+  };
+}
+Deno.serve(async (req) => {
+  if (req.method !== "POST") return fail("method_not_allowed", 405);
+  let body: Record<string, unknown>;
+  try { body = await req.json(); } catch { return fail("invalid_json", 400); }
+  const chain = String(body.chain || "");
+  const config = CONFIGS.get(chain);
+  if (!config) return fail("chain_not_allowlisted", 400);
+  if (body.confirm_phrase !== config.confirmPhrase) return fail("mainnet_confirmation_missing", 403);
+  let identity: { workflowRef: string; runId: string; actor: string; sha: string };
+  try {
+    identity = await authorizeGithub(req, config.workflow);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const code = ["github_oidc_bearer_required", "github_oidc_claims_not_allowed"].includes(message)
+      ? message : "github_oidc_validation_failed";
+    return fail(code, 401);
+  }
+  const mode = String(body.mode || "");
+  if (!["preflight", "deploy", "verify"].includes(mode)) return fail("mode_not_allowlisted", 400);
+  if (mode === "verify") {
+    const existing = await getExistingDeployment(config).catch(() => null);
+    if (!existing?.executor_address) return fail("executor_not_deployed", 409);
+    try {
+      const result = await verifyAndRecord(config, String(existing.executor_address), existing.deployment_tx_hash || null);
+      return json({ ...result, github_workflow_ref: identity.workflowRef, github_run_id: identity.runId },
+        result.source_verification?.verified ? 200 : 202);
+    } catch (error) { return fail(error instanceof Error ? error.message : "executor_verification_failed", 409); }
+  }
+  const sourceBlobSha = String(body.contract_source_blob_sha || "");
+  if (sourceBlobSha !== config.sourceBlobSha) return fail("contract_source_revision_not_allowlisted", 403,
+    { expected_contract_source_blob_sha: config.sourceBlobSha });
+  let bytecode: Hex;
+  try { bytecode = normalizeHexBytecode(body.creation_bytecode); }
+  catch (error) { return fail(error instanceof Error ? error.message : "creation_bytecode_invalid", 400); }
+  if (mode === "preflight") {
+    try {
+      const check = await prepare(config, bytecode);
+      if (!check.ok) return fail(check.error, 402, {
+        chain: check.chain, chain_id: check.chain_id, deployer_address: check.deployer_address,
+        balance_wei: check.balance_wei, estimated_gas: check.estimated_gas, gas_price_wei: check.gas_price_wei,
+        required_with_reserve_wei: check.required_with_reserve_wei, broadcast_attempted: false,
+      });
+      return json({ ok: true, mode: "preflight", chain: config.chain, chain_id: config.chainId,
+        deployer_address: check.deployerAddress, balance_wei: check.balance.toString(),
+        estimated_gas: check.gas.toString(), gas_price_wei: check.gasPrice.toString(),
+        required_with_reserve_wei: check.requiredWithReserve.toString(), expected_contract_address: check.expectedAddress,
+        init_code_hash: check.initCodeHash, broadcast_attempted: false });
+    } catch (error) { return fail(error instanceof Error ? error.message : "deployment_preflight_failed", 409, { broadcast_attempted: false }); }
+  }
+  let prepared: Awaited<ReturnType<typeof prepare>>;
+  try {
+    prepared = await prepare(config, bytecode);
+    if (!prepared.ok) return fail(prepared.error, 402, {
+      chain: prepared.chain, chain_id: prepared.chain_id, deployer_address: prepared.deployer_address,
+      balance_wei: prepared.balance_wei, estimated_gas: prepared.estimated_gas, gas_price_wei: prepared.gas_price_wei,
+      required_with_reserve_wei: prepared.required_with_reserve_wei, broadcast_attempted: false,
+    });
+  } catch (error) { return fail(error instanceof Error ? error.message : "deployment_preflight_failed", 409, { broadcast_attempted: false }); }
+
+  const { error: insertError } = await supabase.from("flash_executor_deployments").insert({
+    chain: config.chain, chain_id: config.chainId, contract_name: config.contractName,
+    executor_address: prepared.expectedAddress, deployment_tx_hash: null, deployer_address: prepared.deployerAddress,
+    deployment_nonce: prepared.nonce.toString(), hot_wallet_id: config.walletId, hot_wallet_address: config.hotWallet,
+    pool_address: config.pool, contract_source_blob_sha: config.sourceBlobSha, init_code_hash: prepared.initCodeHash,
+    status: "pending", source_verified: false, payout_audited: false, payout_behavior_verified: false,
+    github_workflow_ref: identity.workflowRef, github_run_id: identity.runId, updated_at: new Date().toISOString(),
+  });
+  if (insertError) return fail("deployment_registry_insert_failed_or_duplicate", 409, { broadcast_attempted: false });
+
+  let signed: Hex;
+  try {
+    signed = await prepared.account.signTransaction({
+      chainId: config.chainId, nonce: prepared.nonce, gas: prepared.gas, gasPrice: prepared.gasPrice,
+      data: prepared.initCode, value: 0n, type: "legacy",
+    });
+  } catch { return fail("deployment_transaction_signing_failed", 500, { broadcast_attempted: false }); }
+  const txHash = keccak256(signed);
+  const { error: txHashSaveError } = await supabase.from("flash_executor_deployments")
+    .update({ deployment_tx_hash: txHash, updated_at: new Date().toISOString() })
+    .eq("chain", config.chain).eq("status", "pending");
+  if (txHashSaveError) return fail("deployment_transaction_hash_persistence_failed", 500, {
+    deployment_tx_hash: txHash, broadcast_attempted: false,
+  });
+  try {
+    const returnedHash = String(await rpc(config, "eth_sendRawTransaction", [signed]));
+    if (returnedHash.toLowerCase() !== txHash.toLowerCase()) return fail("rpc_broadcast_hash_mismatch", 502, {
+      predicted_tx_hash: txHash, returned_tx_hash: returnedHash, expected_contract_address: prepared.expectedAddress,
+      broadcast_attempted: true,
+    });
+  } catch {
+    return fail("deployment_broadcast_result_uncertain_check_tx_hash", 502, {
+      deployment_tx_hash: txHash, expected_contract_address: prepared.expectedAddress,
+      deployer_address: prepared.deployerAddress, broadcast_attempted: true,
+    });
+  }
+  let receipt: any = null;
+  for (let i = 0; i < 15; i++) {
+    try { receipt = await rpc(config, "eth_getTransactionReceipt", [txHash]); if (receipt) break; } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  if (!receipt) return json({
+    ok: true, mode: "deploy", status: "pending", chain: config.chain, chain_id: config.chainId,
+    deployer_address: prepared.deployerAddress, executor_address: prepared.expectedAddress,
+    deployment_tx_hash: txHash, broadcast_attempted: true, confirmed: false,
+    note: "Transaction accepted by RPC; receipt not yet available. Do not resubmit.",
+  }, 202);
+  if (String(receipt.status).toLowerCase() !== "0x1") {
+    await supabase.from("flash_executor_deployments")
+      .update({ status: "failed", failure_code: "deployment_reverted", updated_at: new Date().toISOString() })
+      .eq("chain", config.chain);
+    return fail("deployment_transaction_reverted", 409, {
+      deployment_tx_hash: txHash, executor_address: prepared.expectedAddress, broadcast_attempted: true, confirmed: true,
+    });
+  }
+  try {
+    const result = await verifyAndRecord(config, prepared.expectedAddress, txHash);
+    return json({ ...result, mode: "deploy", deployer_address: prepared.deployerAddress,
+      deployment_nonce: prepared.nonce.toString(), block_number: receipt.blockNumber || null,
+      broadcast_attempted: true, confirmed: true, github_workflow_ref: identity.workflowRef, github_run_id: identity.runId }, 200);
+  } catch (error) {
+    await supabase.from("flash_executor_deployments").update({
+      status: "deployed_unverified",
+      failure_code: error instanceof Error ? error.message.slice(0, 120) : "post_deployment_verification_failed",
+      updated_at: new Date().toISOString(),
+    }).eq("chain", config.chain);
+    return fail(error instanceof Error ? error.message : "post_deployment_verification_failed", 409, {
+      deployment_tx_hash: txHash, executor_address: prepared.expectedAddress, broadcast_attempted: true, confirmed: true,
+    });
+  }
+});

@@ -1,1 +1,1 @@
-Authorized BNB mainnet executor deployment. Retry after the corrected Foundry artifact path, YAML indentation, and optional 0x bytecode-prefix handling. Use the Supabase Vault signer; verify chain, funding, receipt, source/runtime, pool, and immutable payout configuration.
+Authorized BNB mainnet executor deployment. Retry after the server-side signer import fix. Use the Supabase Vault key only; verify chain, funding, receipt, source/runtime, pool, and immutable payout configuration.
