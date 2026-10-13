@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout reviewed source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
