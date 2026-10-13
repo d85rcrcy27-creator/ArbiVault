@@ -1,0 +1,65 @@
+name: Provision ArbiVault Executor Deployment Signer
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain:
+        description: Select the chain whose dedicated deployment signer should be created
+        required: true
+        type: choice
+        options:
+          - bnb
+          - ethereum
+      confirmation:
+        description: Type PROVISION_EXECUTOR_SIGNER to create or inspect that chain's signer
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  provision:
+    if: ${{ inputs.confirmation == 'PROVISION_EXECUTOR_SIGNER' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DEPLOY_URL: "https://karbtrfzxfyipxkhhqjz.supabase.co/functions/v1/arbivault-executor-deployer"
+      CHAIN: ${{ inputs.chain }}
+      CONFIRM_PHRASE: "PROVISION_EXECUTOR_SIGNER"
+    steps:
+      - name: Provision dedicated signer in Supabase Vault
+        shell: bash
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.confirmation }}" != "PROVISION_EXECUTOR_SIGNER" ]]; then
+            echo "::error::Explicit signer-provisioning confirmation is required."
+            exit 1
+          fi
+          case "$CHAIN" in
+            bnb|ethereum) ;;
+            *) echo "::error::Unsupported chain."; exit 1 ;;
+          esac
+          separator="?"
+          case "$ACTIONS_ID_TOKEN_REQUEST_URL" in *\?*) separator="&";; esac
+          token="$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL${separator}audience=arbivault-executor-deployer" | jq -er '.value')"
+          payload="$(jq -cn --arg mode "provision_signer" --arg chain "$CHAIN" --arg phrase "$CONFIRM_PHRASE" \
+            '{mode:$mode,chain:$chain,confirm_phrase:$phrase}')"
+          status="$(curl -sS -o "$RUNNER_TEMP/provision.json" -w '%{http_code}' \
+            -X POST "$DEPLOY_URL" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" -d "$payload")"
+          cat "$RUNNER_TEMP/provision.json"
+          if [[ "$status" != "200" ]] || \
+             [[ "$(jq -r '.ok // false' "$RUNNER_TEMP/provision.json")" != "true" ]] || \
+             [[ "$(jq -r '.private_key_returned // true' "$RUNNER_TEMP/provision.json")" != "false" ]]; then
+            echo "::error::Signer provisioning failed or did not confirm that private material stayed server-side."
+            exit 1
+          fi
+          jq -e '.signer_address | strings | test("^0x[0-9a-fA-F]{40}$")' "$RUNNER_TEMP/provision.json" >/dev/null
+          echo "Signer address was created/resolved in Supabase Vault. Private key was not returned."
