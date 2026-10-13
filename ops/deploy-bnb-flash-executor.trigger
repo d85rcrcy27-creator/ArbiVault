@@ -1,0 +1,1 @@
+Authorized BNB flash-executor deployment trigger. Deployment key is resolved only from Supabase Vault. The workflow must pass the server-side chain, funding, source, receipt, and payout checks.
