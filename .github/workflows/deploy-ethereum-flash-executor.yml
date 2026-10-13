@@ -7,9 +7,6 @@ on:
         description: Type DEPLOY_TO_ETHEREUM_MAINNET to deploy the executor to Ethereum mainnet
         required: true
         type: string
-  push:
-    paths:
-      - "ops/deploy-ethereum-flash-executor.trigger"
 
 permissions:
   contents: read
@@ -17,7 +14,7 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'push' || inputs.confirm_mainnet == 'DEPLOY_TO_ETHEREUM_MAINNET' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm_mainnet == 'DEPLOY_TO_ETHEREUM_MAINNET' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
