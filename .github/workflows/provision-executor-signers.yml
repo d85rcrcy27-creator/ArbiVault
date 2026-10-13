@@ -31,9 +31,6 @@ jobs:
     steps:
       - name: Provision dedicated signer in Supabase Vault
         shell: bash
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
           if [[ "${{ inputs.confirmation }}" != "PROVISION_EXECUTOR_SIGNER" ]]; then
@@ -57,7 +54,7 @@ jobs:
           cat "$RUNNER_TEMP/provision.json"
           if [[ "$status" != "200" ]] || \
              [[ "$(jq -r '.ok // false' "$RUNNER_TEMP/provision.json")" != "true" ]] || \
-             [[ "$(jq -r '.private_key_returned // true' "$RUNNER_TEMP/provision.json")" != "false" ]]; then
+             [[ "$(jq -r 'if has("private_key_returned") and .private_key_returned == false then "false" else "true" end' "$RUNNER_TEMP/provision.json")" != "false" ]]; then
             echo "::error::Signer provisioning failed or did not confirm that private material stayed server-side."
             exit 1
           fi
