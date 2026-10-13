@@ -48,7 +48,15 @@ jobs:
             echo "::error::Executor source revision is not the reviewed, allowlisted source."
             exit 1
           fi
-          bytecode="$(jq -r '.bytecode.object // empty' out/ArbiVaultFlashExecutor.sol/ArbiVaultFlashExecutor.json)"
+          artifact_path="$(find out -type f -name 'ArbiVaultFlashExecutor.json' -print -quit)"
+if [[ -z "$artifact_path" ]]; then
+  echo "::error::Foundry artifact ArbiVaultFlashExecutor.json was not found under out/."
+  exit 1
+fi
+if ! bytecode="$(jq -er '.bytecode.object | select(type == "string" and length > 0)' "$artifact_path" 2>/dev/null)"; then
+  echo "::error::Foundry artifact at $artifact_path has no creation bytecode object."
+  exit 1
+fi
           if [[ -z "$bytecode" || ! "$bytecode" =~ ^[0-9a-fA-F]+$ ]]; then
             echo "::error::Foundry did not emit valid creation bytecode."
             exit 1
