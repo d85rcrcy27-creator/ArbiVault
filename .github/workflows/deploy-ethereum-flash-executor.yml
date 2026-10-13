@@ -91,6 +91,14 @@ jobs:
             echo "::error::Supabase deployment preflight failed; no transaction was broadcast."
             exit 1
           fi
+          deployer="$(jq -er '.deployer_address' "$RUNNER_TEMP/preflight.json")"
+          deployer_lower="$(printf '%s' "$deployer" | tr '[:upper:]' '[:lower:]')"
+          bsc_hot_lower="0xea37838f3361b80601756f7b0d770a5f5f38c486"
+          eth_hot_lower="0xffd52f7a182887a0382f2cef33627af2f6bf0e27"
+          if [[ "$deployer_lower" == "$bsc_hot_lower" || "$deployer_lower" == "$eth_hot_lower" ]]; then
+            echo "::error::Deployment key resolves to a trading hot wallet; refusing to use a trading key for contract deployment."
+            exit 1
+          fi
 
       - name: Deploy with restricted Supabase Vault signer
         id: deploy
