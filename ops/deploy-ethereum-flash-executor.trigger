@@ -1,1 +1,1 @@
-Authorized Ethereum mainnet flash-executor deployment trigger. The deployment key remains in Supabase Vault. The workflow must pass chain, funding, source, receipt, and payout checks before recording a verified executor.
+Authorized Ethereum mainnet flash-executor deployment trigger. Retrying after the reviewed Foundry artifact-discovery fix. The deployment key is resolved only from Supabase Vault; the workflow must pass chain, signer funding, source, receipt, and payout checks.
