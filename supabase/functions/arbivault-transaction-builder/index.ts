@@ -655,7 +655,7 @@ async function buildEthereumFlashOpportunityQuote(
   if (normalizedAsset !== ETH_USDC.toLowerCase()) {
     throw new Error("ethereum_flash_quote_asset_not_allowlisted");
   }
-  if (!/^\\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+  if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
     throw new Error("ethereum_flash_amount_invalid");
   }
   if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS) {
