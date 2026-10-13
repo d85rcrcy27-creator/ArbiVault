@@ -69,7 +69,7 @@ function buildInitCode(bytecode: Hex, config: ChainConfig): Hex {
 }
 async function authorizeGithub(req: Request, expectedWorkflow: string) {
   const header = req.headers.get("authorization") || "";
-  const match = header.match(/^Bearer\\s+(.+)$/i);
+  const match = header.match(/^Bearer\s+(.+)$/i);
   if (!match) throw new Error("github_oidc_bearer_required");
   const verified = await jwtVerify(match[1], JWKS, { issuer: OIDC_ISSUER, audience: OIDC_AUDIENCE });
   const p = verified.payload;
