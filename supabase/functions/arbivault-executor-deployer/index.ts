@@ -5,7 +5,7 @@ import {
   keccak256, parseAbi, parseAbiParameters,
   type Address, type Hex,
 } from "npm:viem@2.39.0";
-import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
+import { generatePrivateKey, privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -17,6 +17,8 @@ const REPOSITORY = "d85rcrcy27-creator/ArbiVault";
 const REPOSITORY_ID = "1398360252";
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "arbivault-executor-deployer";
+const PROVISION_WORKFLOW = REPOSITORY + "/.github/workflows/provision-executor-signers.yml@refs/heads/main";
+const PROVISION_CONFIRM_PHRASE = "PROVISION_EXECUTOR_SIGNER";
 const JWKS = createRemoteJWKSet(new URL(OIDC_ISSUER + "/.well-known/jwks"));
 
 const BSC = {
@@ -67,7 +69,7 @@ function buildInitCode(bytecode: Hex, config: ChainConfig): Hex {
 }
 async function authorizeGithub(req: Request, expectedWorkflow: string) {
   const header = req.headers.get("authorization") || "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
+  const match = header.match(/^Bearer\\s+(.+)$/i);
   if (!match) throw new Error("github_oidc_bearer_required");
   const verified = await jwtVerify(match[1], JWKS, { issuer: OIDC_ISSUER, audience: OIDC_AUDIENCE });
   const p = verified.payload;
@@ -76,9 +78,15 @@ async function authorizeGithub(req: Request, expectedWorkflow: string) {
     String(p.repository_id || "") !== REPOSITORY_ID ||
     p.ref !== "refs/heads/main" ||
     p.workflow_ref !== expectedWorkflow ||
-    !["push", "workflow_dispatch"].includes(String(p.event_name || ""))
+    String(p.event_name || "") !== "workflow_dispatch"
   ) throw new Error("github_oidc_claims_not_allowed");
-  return { workflowRef: String(p.workflow_ref), runId: String(p.run_id || ""), actor: String(p.actor || ""), sha: String(p.sha || "") };
+  return {
+    workflowRef: String(p.workflow_ref),
+    runId: String(p.run_id || ""),
+    actor: String(p.actor || ""),
+    sha: String(p.sha || ""),
+    eventName: String(p.event_name || ""),
+  };
 }
 async function rpc(config: ChainConfig, method: string, params: unknown[]) {
   const response = await fetch(config.rpc, {
@@ -92,12 +100,70 @@ async function rpc(config: ChainConfig, method: string, params: unknown[]) {
   if (body?.result === undefined || body?.result === null) throw new Error(config.chain + "_rpc_result_missing");
   return body.result;
 }
-async function getDeploymentAccount() {
-  const { data, error } = await supabase.rpc("get_executor_deployment_secret");
-  if (error || typeof data !== "string") throw new Error("deployment_signing_key_unavailable");
-  const normalized = data.startsWith("0x") ? data : "0x" + data;
-  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) throw new Error("deployment_signing_key_format_invalid");
-  try { return privateKeyToAccount(normalized as Hex); } catch { throw new Error("deployment_signing_key_invalid"); }
+async function getDeploymentAccount(config: ChainConfig, provisionIfMissing = false) {
+  const selectSigner = () => supabase.from("executor_deployment_signers")
+    .select("chain,chain_id,signer_address,status")
+    .eq("chain", config.chain)
+    .maybeSingle();
+
+  const { data: initialSigner, error: initialError } = await selectSigner();
+  if (initialError) throw new Error("deployment_signer_registry_lookup_failed");
+
+  let signer = initialSigner;
+  let created = false;
+  if (!signer && provisionIfMissing) {
+    const privateKey = generatePrivateKey();
+    const candidate = privateKeyToAccount(privateKey);
+    if ([BSC.hotWallet, ETH.hotWallet].some(
+      (address) => address.toLowerCase() === candidate.address.toLowerCase()
+    )) {
+      throw new Error("deployment_signer_matches_trading_wallet");
+    }
+
+    const { data: stored, error: storeError } = await supabase.rpc("store_executor_deployment_signer", {
+      p_chain: config.chain,
+      p_signer_address: candidate.address,
+      p_secret: privateKey,
+    });
+    if (storeError || !stored?.ok) throw new Error("deployment_signer_vault_store_failed");
+    created = stored.created === true;
+
+    const { data: refreshedSigner, error: refreshError } = await selectSigner();
+    if (refreshError || !refreshedSigner) throw new Error("deployment_signer_registry_reload_failed");
+    signer = refreshedSigner;
+  }
+
+  if (!signer) throw new Error("deployment_signer_not_provisioned");
+  if (signer.status !== "active" || Number(signer.chain_id) !== config.chainId) {
+    throw new Error("deployment_signer_configuration_invalid");
+  }
+
+  const { data: secret, error: secretError } = await supabase.rpc(
+    "get_executor_deployment_signer_secret",
+    { p_chain: config.chain },
+  );
+  if (secretError || typeof secret !== "string") throw new Error("deployment_signer_secret_unavailable");
+
+  const normalized = secret.startsWith("0x") ? secret : "0x" + secret;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) throw new Error("deployment_signer_secret_format_invalid");
+
+  let account;
+  try {
+    account = privateKeyToAccount(normalized as Hex);
+  } catch {
+    throw new Error("deployment_signer_secret_invalid");
+  }
+
+  if (account.address.toLowerCase() !== String(signer.signer_address).toLowerCase()) {
+    throw new Error("deployment_signer_address_mismatch");
+  }
+  if ([BSC.hotWallet, ETH.hotWallet].some(
+    (address) => address.toLowerCase() === account.address.toLowerCase()
+  )) {
+    throw new Error("deployment_signer_matches_trading_wallet");
+  }
+
+  return { account, created };
 }
 async function verifyHotWalletRecord(config: ChainConfig) {
   const { data, error } = await supabase.from("wallets")
@@ -123,7 +189,7 @@ async function prepare(config: ChainConfig, bytecode: Hex) {
   if (chainId !== config.chainId) throw new Error(config.chain + "_rpc_chain_id_mismatch");
   const poolCode = String(await rpc(config, "eth_getCode", [config.pool, "latest"]));
   if (!/^0x[0-9a-f]+$/i.test(poolCode) || poolCode.length <= 2) throw new Error(config.chain + "_aave_pool_code_missing");
-  const account = await getDeploymentAccount();
+  const { account } = await getDeploymentAccount(config);
   const initCode = buildInitCode(bytecode, config);
   const gasPrice = BigInt(String(await rpc(config, "eth_gasPrice", [])));
   const estimate = BigInt(String(await rpc(config, "eth_estimateGas", [{ from: account.address, data: initCode, value: "0x0" }])));
@@ -193,21 +259,50 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return fail("method_not_allowed", 405);
   let body: Record<string, unknown>;
   try { body = await req.json(); } catch { return fail("invalid_json", 400); }
+
   const chain = String(body.chain || "");
   const config = CONFIGS.get(chain);
   if (!config) return fail("chain_not_allowlisted", 400);
-  if (body.confirm_phrase !== config.confirmPhrase) return fail("mainnet_confirmation_missing", 403);
-  let identity: { workflowRef: string; runId: string; actor: string; sha: string };
+
+  const mode = String(body.mode || "");
+  if (!["provision_signer", "preflight", "deploy", "verify"].includes(mode)) {
+    return fail("mode_not_allowlisted", 400);
+  }
+  const provisionMode = mode === "provision_signer";
+  const expectedPhrase = provisionMode ? PROVISION_CONFIRM_PHRASE : config.confirmPhrase;
+  if (body.confirm_phrase !== expectedPhrase) return fail("confirmation_phrase_missing_or_invalid", 403);
+
+  let identity: { workflowRef: string; runId: string; actor: string; sha: string; eventName: string };
   try {
-    identity = await authorizeGithub(req, config.workflow);
+    identity = await authorizeGithub(req, provisionMode ? PROVISION_WORKFLOW : config.workflow);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const code = ["github_oidc_bearer_required", "github_oidc_claims_not_allowed"].includes(message)
       ? message : "github_oidc_validation_failed";
     return fail(code, 401);
   }
-  const mode = String(body.mode || "");
-  if (!["preflight", "deploy", "verify"].includes(mode)) return fail("mode_not_allowlisted", 400);
+
+  if (provisionMode) {
+    try {
+      await verifyHotWalletRecord(config);
+      const result = await getDeploymentAccount(config, true);
+      return json({
+        ok: true,
+        mode: "provision_signer",
+        chain: config.chain,
+        chain_id: config.chainId,
+        signer_address: result.account.address,
+        signer_status: "active",
+        created: result.created,
+        custody: "supabase_vault_server_only",
+        private_key_returned: false,
+        github_workflow_ref: identity.workflowRef,
+        github_run_id: identity.runId,
+      });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : "deployment_signer_provision_failed", 409);
+    }
+  }
   if (mode === "verify") {
     const existing = await getExistingDeployment(config).catch(() => null);
     if (!existing?.executor_address) return fail("executor_not_deployed", 409);
