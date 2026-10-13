@@ -9,6 +9,8 @@ const FEEDS = [
   { id: 'gateio', name: 'GAT' },
 ];
 
+const SPONSOR_URL = 'https://github.com/sponsors/d85rcrcy27-creator?metadata_campaign=arbivault_market_efficiency';
+
 export default function UtilityBar({ globalLatency, livePnl = 0, engineStatus, onToggleEngine, status, connected, onOpenWallets }) {
   const latencyColor = globalLatency === 0 ? 'text-[#5a6080]' : globalLatency < 60 ? 'text-[#00FF87]' : globalLatency < 120 ? 'text-[#FFB800]' : 'text-[#FF4D4D]';
   const pnlPositive = Number(livePnl) >= 0;
@@ -17,14 +19,31 @@ export default function UtilityBar({ globalLatency, livePnl = 0, engineStatus, o
     <header className="sticky top-0 z-30 border-b border-[#232738] bg-[#090A0F]/95 backdrop-blur">
       <div className="flex items-center justify-between gap-4 px-4 py-3 md:px-6">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="relative flex h-2.5 w-2.5">
-              <span className={`absolute inline-flex h-full w-full rounded-full bg-[#00F0FF] opacity-60 ${status === 'live' ? 'animate-pulse-ping' : ''}`} />
-              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${status === 'live' ? 'bg-[#00F0FF]' : status === 'error' ? 'bg-[#FF4D4D]' : 'bg-[#FFB800]'}`} />
+          <div className="flex flex-col items-start gap-1">
+            <div className="flex items-center gap-2">
+              <div className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className={`absolute inline-flex h-full w-full rounded-full bg-[#00F0FF] opacity-60 ${status === 'live' ? 'animate-pulse-ping' : ''}`} />
+                <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${status === 'live' ? 'bg-[#00F0FF]' : status === 'error' ? 'bg-[#FF4D4D]' : 'bg-[#FFB800]'}`} />
+              </div>
+              <span className="font-mono text-sm font-bold tracking-wider text-[#00F0FF] text-glow-cyan">
+                ARBITRAGE PULSE
+              </span>
             </div>
-            <span className="font-mono text-sm font-bold tracking-wider text-[#00F0FF] text-glow-cyan">
-              ARBITRAGE PULSE
-            </span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 pl-[18px]">
+              <span className="font-mono text-[0.5rem] uppercase tracking-wider text-[#8a90b0]">
+                Conducting Market Efficiency Testing
+              </span>
+              <span aria-hidden="true" className="font-mono text-[0.5rem] text-[#5a6080]">·</span>
+              <a
+                href={SPONSOR_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Sponsor or donate to support ArbiVault development and market efficiency testing"
+                className="font-mono text-[0.55rem] font-semibold uppercase tracking-wider text-[#00F0FF] underline decoration-[#00F0FF]/40 underline-offset-2 hover:text-white"
+              >
+                Sponsor / Donate ↗
+              </a>
+            </div>
           </div>
           <div className="hidden items-center gap-1.5 sm:flex">
             {FEEDS.filter((f) => connected?.[f.id]).map((f) => (
