@@ -9,17 +9,70 @@ const supabase = createClient(
 const BSC_RPC = Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
 const ETHEREUM_RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com";
 const ETH_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_ETH_AAVE_PROVIDER") || "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e").trim();
-const ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
+const ENV_ETH_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR") || "").trim();
+let ETH_FLASH_EXECUTOR = ENV_ETH_FLASH_EXECUTOR;
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
-const BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+const ENV_BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
+let BSC_FLASH_EXECUTOR = ENV_BSC_FLASH_EXECUTOR;
 // Fail closed until the deployed executor contract source and live bytecode prove that
 // realized profits are paid to the calling ArbiVault trading hot wallet.
-const BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
-const ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
+let ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
 const AAVE_PROVIDER_ABI = parseAbi(["function getPool() view returns (address)"]);
+
+const BSC_FLASH_EXPECTED_POOL = "0x6807dc923806fE8Fd134338EABCA509979a7e0cB";
+const ETH_FLASH_EXPECTED_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
+
+async function syncExecutorRegistry() {
+  const { data: rows, error } = await supabase
+    .from("flash_executor_deployments")
+    .select("chain,executor_address,status,source_verified,payout_audited")
+    .in("chain", ["bnb", "ethereum"]);
+  if (error) throw new Error("flash_executor_registry_lookup_failed");
+
+  const bnb = (rows || []).find((row: any) => row.chain === "bnb") || null;
+  const ethereum = (rows || []).find((row: any) => row.chain === "ethereum") || null;
+  const usableStatuses = ["pending", "deployed_unverified", "verified"];
+
+  BSC_FLASH_EXECUTOR = bnb
+    ? (usableStatuses.includes(bnb.status) ? String(bnb.executor_address || "").trim() : "")
+    : ENV_BSC_FLASH_EXECUTOR;
+  ETH_FLASH_EXECUTOR = ethereum
+    ? (usableStatuses.includes(ethereum.status) ? String(ethereum.executor_address || "").trim() : "")
+    : ENV_ETH_FLASH_EXECUTOR;
+  BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = bnb
+    ? (bnb.status === "verified" && bnb.source_verified === true && bnb.payout_audited === true)
+    : ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
+  ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ethereum
+    ? (ethereum.status === "verified" && ethereum.source_verified === true && ethereum.payout_audited === true)
+    : ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+}
+
+async function persistExecutorAudit(chain: string, executor: Record<string, any>) {
+  if (executor.payout_audited !== true || !executor.address) return false;
+  const { data, error } = await supabase
+    .from("flash_executor_deployments")
+    .update({
+      status: "verified",
+      source_verified: true,
+      payout_audited: true,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("chain", chain)
+    .eq("executor_address", String(executor.address))
+    .select("chain")
+    .maybeSingle();
+  if (error || !data) throw new Error("flash_executor_audit_persist_failed");
+  if (chain === "bnb") BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = true;
+  if (chain === "ethereum") ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = true;
+  return true;
+}
+
 
 const PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
 const WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c";
@@ -51,6 +104,7 @@ const FLASH_EXECUTOR_ABI = parseAbi([
 const FLASH_PREMIUM_ABI = parseAbi(["function FLASHLOAN_PREMIUM_TOTAL() view returns (uint128)"]);
 const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
+  "function POOL() view returns (address)",
 ]);
 
 const BSC_ATOMIC_ALLOWED_TARGETS = new Set([PANCAKE_V2_ROUTER.toLowerCase(), BISWAP_ROUTER_V2.toLowerCase()]);
@@ -304,6 +358,7 @@ async function verifyExecutor(
   readCode: (address: string) => Promise<unknown>,
   readCall: (address: string, data: string) => Promise<unknown>,
   generatedWallets: Array<{ id: string; owner_id: string; chain: string; address: string }>,
+  expectedPool: string,
 ) {
   const validAddress = /^0x[a-fA-F0-9]{40}$/.test(executor);
   const result: Record<string, unknown> = {
@@ -314,6 +369,8 @@ async function verifyExecutor(
     bytecode_size_bytes: 0,
     payout_recipient_address: null,
     payout_recipient_matches_generated_hot_wallet: false,
+    pool_address: null,
+    pool_matches_expected: false,
     matched_generated_wallet_id: null,
     source_verification: { checked: false, verified: false, match: null, runtime_match: null },
   };
@@ -350,7 +407,26 @@ async function verifyExecutor(
     result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_payout_getter_failed";
   }
 
+  
+  try {
+    const poolCallData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" });
+    const poolRaw = String(await readCall(executor, poolCallData));
+    const pool = decodeFunctionResult({
+      abi: FLASH_EXECUTOR_PAYOUT_ABI,
+      functionName: "POOL",
+      data: poolRaw as \`0x\${string}\`,
+    }) as string;
+    result.pool_address = pool;
+    result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase();
+  } catch (error) {
+    result.pool_read_error = error instanceof Error ? error.message : "executor_pool_getter_failed";
+  }
+
   result.source_verification = await lookupSourcifyVerification(chainId, executor);
+  result.payout_audited = result.code_deployed === true &&
+    result.payout_recipient_matches_generated_hot_wallet === true &&
+    result.pool_matches_expected === true &&
+    (result.source_verification as any)?.verified === true;
   return result;
 }
 
@@ -413,6 +489,7 @@ async function diagnoseFlashExecutor() {
     (address) => rpc("eth_getCode", [address, "latest"]),
     (address, data) => rpc("eth_call", [{ to: address, data }, "latest"]),
     generatedWallets,
+    BSC_FLASH_EXPECTED_POOL,
   );
   bnb.ready_for_flash_transaction_test =
     bnb.rpc_chain_ok === true &&
@@ -445,7 +522,11 @@ async function diagnoseFlashExecutor() {
     (address) => ethereumRpc("eth_getCode", [address, "latest"]),
     (address, data) => ethereumRpc("eth_call", [{ to: address, data }, "latest"]),
     generatedWallets,
+    ETH_FLASH_EXPECTED_POOL,
   );
+  await persistExecutorAudit("bnb", bnb.executor as Record<string, any>);
+  await persistExecutorAudit("ethereum", eth.executor as Record<string, any>);
+
   eth.ready_for_flash_transaction_test =
     eth.rpc_chain_ok === true &&
     eth.aave_pool_resolved === true &&
@@ -1130,6 +1211,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    await syncExecutorRegistry();
     const body = await req.json();
     if (body?.mode === "diagnostic") {
       return json(await diagnoseFlashExecutor());
