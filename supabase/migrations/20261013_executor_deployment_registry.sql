@@ -70,3 +70,18 @@ $$;
 
 REVOKE ALL ON FUNCTION public.get_executor_deployment_secret() FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_executor_deployment_secret() TO service_role;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='flash_executor_deployments'
+      AND policyname='flash_executor_deployments_service_role_only'
+  ) THEN
+    CREATE POLICY flash_executor_deployments_service_role_only
+      ON public.flash_executor_deployments
+      FOR ALL TO service_role USING (true) WITH CHECK (true);
+  END IF;
+END
+$$;
