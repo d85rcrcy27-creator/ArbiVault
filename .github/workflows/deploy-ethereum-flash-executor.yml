@@ -57,6 +57,7 @@ jobs:
             echo "::error::Foundry artifact at $artifact_path has no creation bytecode object."
             exit 1
           fi
+          bytecode="${bytecode#0x}"
           if [[ -z "$bytecode" || ! "$bytecode" =~ ^[0-9a-fA-F]+$ ]]; then
             echo "::error::Foundry did not emit valid creation bytecode."
             exit 1
