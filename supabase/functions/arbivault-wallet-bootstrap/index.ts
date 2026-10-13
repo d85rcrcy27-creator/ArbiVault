@@ -18,10 +18,23 @@ const corsHeaders={
  'Vary':'Origin'
 }
 const json=(x:unknown,s=200)=>Response.json(x,{status:s,headers:{...corsHeaders,'cache-control':'no-store'}})
+async function walletAddressHasContractCode(chain:'bnb'|'ethereum',address:string){
+ const endpoint=chain==='bnb'?(Deno.env.get('BSC_RPC_URL')||'https://bsc-dataseed.binance.org'):(Deno.env.get('ETHEREUM_RPC_URL')||'https://ethereum-rpc.publicnode.com')
+ const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json',accept:'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:crypto.randomUUID(),method:'eth_getCode',params:[address,'latest']})})
+ if(!response.ok)throw new Error('wallet_contract_detection_rpc_failed')
+ const body=await response.json()
+ if(body.error||typeof body.result!=='string')throw new Error('wallet_contract_detection_rpc_failed')
+ return body.result!=='0x'&&body.result!=='0x0'
+}
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp'){
- const {data:existing}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
- if(existing?.secret_ref)return existing
+ const {data:existing,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
+ if(existingError)throw new Error('active_wallet_lookup_failed')
+ let replacedWalletId:string|null=null
+ let contractCodeDetected=false
+ if(existing?.address&&(chain==='bnb'||chain==='ethereum'))contractCodeDetected=await walletAddressHasContractCode(chain,existing.address)
+ if(existing?.secret_ref&&!contractCodeDetected)return existing
  if(existing?.id){
+  replacedWalletId=existing.id
   const {error:quarantineError}=await admin.from('wallets').update({status:'quarantined'}).eq('id',existing.id).eq('owner_id',userId)
   if(quarantineError)throw new Error('wallet_orphan_quarantine_failed')
  }
@@ -42,7 +55,13 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
   await admin.from('wallets').update({status:'quarantined'}).eq('id',wallet.id).eq('owner_id',userId)
   throw new Error('wallet_secret_reference_persist_failed')
  }
- await admin.rpc('record_reconciliation_event',{p_wallet_id:wallet.id,p_chain:chain,p_tx_hash:null,p_payment_id:null,p_trade_id:null,p_event_type:'wallet_created',p_status:'verified',p_source:'arbivault-wallet-bootstrap',p_details:{custody:'server_vault',wallet_role:'trading_hot',secret_ref_saved:true}})
+ if(replacedWalletId){
+  const {error:bindingError}=await admin.from('bot_wallet_bindings').update({wallet_id:wallet.id}).eq('owner_id',userId).eq('wallet_id',replacedWalletId)
+  if(bindingError)throw new Error('wallet_binding_rotation_failed')
+  const {error:adapterError}=await admin.from('execution_adapters').update({configured:false,automatic_signing:false,can_broadcast:false,last_error:contractCodeDetected?'wallet_address_contains_contract_code':'wallet_secret_reference_missing',updated_at:new Date().toISOString()}).eq('allowed_wallet_id',replacedWalletId)
+  if(adapterError)throw new Error('old_wallet_signer_disable_failed')
+ }
+ await admin.rpc('record_reconciliation_event',{p_wallet_id:wallet.id,p_chain:chain,p_tx_hash:null,p_payment_id:null,p_trade_id:null,p_event_type:'wallet_created',p_status:'verified',p_source:'arbivault-wallet-bootstrap',p_details:{custody:'server_vault',wallet_role:'trading_hot',secret_ref_saved:true,replaced_wallet_id:replacedWalletId,rotation_reason:contractCodeDetected?'contract_code_detected':'missing_secret_reference'}})
  return wallet
 }
 async function ensureBindings(userId:string,wallets:any[]){
