@@ -1,1 +1,1 @@
-Authorized BNB flash-executor deployment trigger. Retrying after the reviewed Foundry artifact-discovery fix. The deployment key is resolved only from Supabase Vault; the workflow must pass chain, signer funding, source, receipt, and payout checks.
+Authorized BNB mainnet executor deployment trigger. Retry after the artifact-discovery and YAML-indentation fixes. Resolve the deployment signer only from Supabase Vault; verify chain, signer funding, transaction receipt, runtime/source, Aave pool, and immutable hot-wallet payout before recording verified status.
