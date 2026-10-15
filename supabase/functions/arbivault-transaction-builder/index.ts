@@ -243,6 +243,12 @@ async function buildJupiter(
   if (!("inputMint" in assets) || !assets.inputMint || !assets.outputMint) {
     throw new Error("jupiter_route_assets_invalid");
   }
+  if (!JUPITER_API_KEY) {
+    throw new Error("jupiter_api_key_not_configured");
+  }
+  if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+    throw new Error("jupiter_amount_invalid");
+  }
   const params = new URLSearchParams({
     inputMint: assets.inputMint,
     outputMint: assets.outputMint,
@@ -263,8 +269,25 @@ async function buildJupiter(
   if (!response.ok) {
     throw new Error(body?.errorMessage || `jupiter_order_http_${response.status}`);
   }
-  if (!body?.transaction) {
+  if (!body?.transaction || typeof body.transaction !== "string") {
     throw new Error(body?.errorMessage || "jupiter_transaction_unavailable");
+  }
+  try {
+    if (!atob(body.transaction).length) throw new Error("empty");
+  } catch {
+    throw new Error("jupiter_transaction_base64_invalid");
+  }
+  if (body.inputMint && body.inputMint !== assets.inputMint) {
+    throw new Error("jupiter_input_mint_mismatch");
+  }
+  if (body.outputMint && body.outputMint !== assets.outputMint) {
+    throw new Error("jupiter_output_mint_mismatch");
+  }
+  if (body.inAmount && String(body.inAmount) !== amountRaw) {
+    throw new Error("jupiter_input_amount_mismatch");
+  }
+  if (body.taker && String(body.taker).trim() !== taker) {
+    throw new Error("jupiter_taker_mismatch");
   }
 
   return {
