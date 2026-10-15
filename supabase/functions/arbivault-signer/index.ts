@@ -24,7 +24,7 @@ function createTurnkeySolanaSigner() {
     defaultOrganizationId: organizationId,
   });
   return new TurnkeySigner({
-    client: turnkey.apiClient(),
+    client: turnkey.apiClient() as any,
     organizationId,
   });
 }
