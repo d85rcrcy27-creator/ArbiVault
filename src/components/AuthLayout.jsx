@@ -1,5 +1,3 @@
-import React from 'react'
-
 export default function AuthLayout({ icon: Icon, title, subtitle, footer, children }) {
   return (
     <main className="min-h-[100dvh] flex items-center justify-center bg-background px-3 py-4 sm:px-6 sm:py-8 [padding-top:max(1rem,env(safe-area-inset-top))] [padding-bottom:max(1rem,env(safe-area-inset-bottom))]">
