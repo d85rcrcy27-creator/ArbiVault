@@ -77,7 +77,11 @@ async function authorize(req: Request) {
 }
 
 function sha256Hex(value: Uint8Array) {
-  return crypto.subtle.digest("SHA-256", value).then((hash) =>
+  // Use a dedicated ArrayBuffer to satisfy the WebCrypto BufferSource types
+  // and avoid passing a view whose backing type may be SharedArrayBuffer.
+  const copy = new ArrayBuffer(value.byteLength);
+  new Uint8Array(copy).set(value);
+  return crypto.subtle.digest("SHA-256", copy).then((hash) =>
     Array.from(new Uint8Array(hash)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
   );
 }
@@ -116,7 +120,7 @@ function fromApiInstruction(ix: ApiInstruction): TransactionInstruction {
       isSigner: account.isSigner,
       isWritable: account.isWritable,
     })),
-    data,
+    data: Buffer.from(data),
   });
 }
 
