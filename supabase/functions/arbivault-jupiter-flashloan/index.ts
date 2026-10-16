@@ -10,6 +10,7 @@ import {
 } from "npm:@solana/web3.js@1.98.4";
 import BN from "npm:bn.js@5.2.2";
 import bs58 from "npm:bs58@6.0.0";
+import { Buffer } from "node:buffer";
 import { getFlashloanIx } from "npm:@jup-ag/lend@0.4.0/flashloan";
 
 const supabase = createClient(
@@ -136,26 +137,41 @@ function dedupeInstructions(instructions: TransactionInstruction[]) {
   });
 }
 
-function transformLookupTables(builds: JupiterBuild[]) {
-  const addressMap = new Map<string, string[]>();
+async function loadLookupTables(connection: Connection, builds: JupiterBuild[]) {
+  // Never synthesize AddressLookupTableAccount state from off-chain API data.
+  // Load the actual lookup table from Solana and confirm every API-referenced
+  // address is present in that on-chain table.
+  const required = new Map<string, Set<string>>();
   for (const build of builds) {
     for (const [tableAddress, addresses] of Object.entries(build.addressesByLookupTableAddress || {})) {
-      const combined = addressMap.get(tableAddress) || [];
-      for (const address of addresses) if (!combined.includes(address)) combined.push(address);
-      addressMap.set(tableAddress, combined);
+      const addressSet = required.get(tableAddress) || new Set<string>();
+      for (const address of addresses) {
+        new PublicKey(address);
+        addressSet.add(address);
+      }
+      required.set(tableAddress, addressSet);
     }
   }
-  return Array.from(addressMap.entries()).map(([tableAddress, addresses]) =>
-    new AddressLookupTableAccount({
-      key: new PublicKey(tableAddress),
-      state: {
-        deactivationSlot: BigInt("18446744073709551615"),
-        lastExtendedSlot: 0,
-        lastExtendedSlotStartIndex: 0,
-        addresses: addresses.map((address) => new PublicKey(address)),
-      },
-    })
-  );
+  const currentSlot = BigInt(await connection.getSlot("confirmed"));
+  const tables: AddressLookupTableAccount[] = [];
+  for (const [tableAddress, expectedAddresses] of required.entries()) {
+    const result = await connection.getAddressLookupTable(new PublicKey(tableAddress), {
+      commitment: "confirmed",
+    });
+    const table = result.value;
+    if (!table) throw new Error("jupiter_lookup_table_not_found_on_chain");
+    if (table.state.deactivationSlot <= currentSlot) {
+      throw new Error("jupiter_lookup_table_deactivated");
+    }
+    const onChainAddresses = new Set(table.state.addresses.map((address) => address.toBase58()));
+    for (const expectedAddress of expectedAddresses) {
+      if (!onChainAddresses.has(expectedAddress)) {
+        throw new Error("jupiter_lookup_table_address_mismatch");
+      }
+    }
+    tables.push(table);
+  }
+  return tables;
 }
 
 async function getJupiterBuild(
@@ -197,7 +213,10 @@ async function getJupiterBuild(
   if ((body.otherInstructions || []).length > 0 || body.tipInstruction) {
     throw new Error("jupiter_unreviewed_extra_instruction_blocked");
   }
-  const impact = Number(body.priceImpactPct ?? 0);
+  if (body.priceImpactPct === undefined || body.priceImpactPct === null) {
+    throw new Error("jupiter_price_impact_missing");
+  }
+  const impact = Number(body.priceImpactPct);
   if (!Number.isFinite(impact) || impact < 0 || impact > MAX_PRICE_IMPACT_FRACTION) {
     throw new Error("jupiter_price_impact_out_of_bounds");
   }
@@ -237,14 +256,23 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
     slippageBps,
   );
 
-  const { borrowIx, paybackIx } = await getFlashloanIx({
+  const {
+    setupIxs: flashloanSetupIxs,
+    borrowIx,
+    paybackIx,
+    cleanupIxs: flashloanCleanupIxs,
+    feeAmount,
+  } = await getFlashloanIx({
     connection,
     signer,
     asset: USDC_MINT,
     amount: new BN(amountRaw),
   });
+  const flashloanFeeRaw = BigInt(String(feeAmount));
+  if (flashloanFeeRaw < 0n) throw new Error("jupiter_flashloan_fee_invalid");
 
   const setupInstructions = dedupeInstructions([
+    ...flashloanSetupIxs,
     ...first.setupInstructions.map(fromApiInstruction),
     ...second.setupInstructions.map(fromApiInstruction),
   ]);
@@ -255,7 +283,7 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
   const cleanupAfterRoundTrip = second.cleanupInstruction
     ? [fromApiInstruction(second.cleanupInstruction)]
     : [];
-  const lookupTables = transformLookupTables([first, second]);
+  const lookupTables = await loadLookupTables(connection, [first, second]);
   const blockhash = bs58.encode(Buffer.from(first.blockhashWithMetadata.blockhash));
   const instructions = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNITS }),
@@ -263,8 +291,9 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
     borrowIx,
     swapOne,
     swapTwo,
-    ...cleanupAfterRoundTrip,
     paybackIx,
+    ...cleanupAfterRoundTrip,
+    ...flashloanCleanupIxs,
   ];
   const message = new TransactionMessage({
     payerKey: signer,
@@ -292,7 +321,7 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
   const conservativeProfitRaw = conservativeReturnRaw - BigInt(amountRaw);
   const netProfitRaw = estimatedNetworkFeeUsdcRaw === null
     ? null
-    : conservativeProfitRaw - estimatedNetworkFeeUsdcRaw;
+    : conservativeProfitRaw - flashloanFeeRaw - estimatedNetworkFeeUsdcRaw;
   const simulationOk = simulation.value.err === null;
   const netProfitable = simulationOk && netProfitRaw !== null && netProfitRaw > 0n;
 
@@ -315,6 +344,7 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
       second_leg_minimum_out_raw: second.otherAmountThreshold,
       conservative_round_trip_profit_raw: conservativeProfitRaw.toString(),
       gross_round_trip_profit_raw: grossProfitRaw.toString(),
+      flashloan_fee_usdc_raw: flashloanFeeRaw.toString(),
       estimated_network_fee_lamports: feeLamports?.toString() ?? null,
       estimated_network_fee_usdc_raw: estimatedNetworkFeeUsdcRaw?.toString() ?? null,
       estimated_net_profit_usdc_raw: netProfitRaw?.toString() ?? null,
@@ -415,6 +445,11 @@ Deno.serve(async (req: Request) => {
       "jupiter_build_response_invalid",
       "jupiter_unreviewed_extra_instruction_blocked",
       "jupiter_price_impact_out_of_bounds",
+      "jupiter_price_impact_missing",
+      "jupiter_lookup_table_not_found_on_chain",
+      "jupiter_lookup_table_deactivated",
+      "jupiter_lookup_table_address_mismatch",
+      "jupiter_flashloan_fee_invalid",
       "flashloan_amount_invalid",
       "flashloan_amount_below_simulation_minimum",
       "flashloan_amount_above_simulation_cap",
