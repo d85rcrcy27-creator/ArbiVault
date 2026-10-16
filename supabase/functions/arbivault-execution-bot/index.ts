@@ -811,21 +811,30 @@ export default {
                 ? configuredNotional
                 : 100
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
-              // BNB Chain USDT has 18 decimals. Use the configured strategy size or a
-              // quote-only screening default; policy capital allowance never sets notional.
-              const amountRaw = (BigInt(Math.round(notionalUsd * 100000000)) * 10000000000n).toString()
+              const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
+              const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
+              if (!isBnbFlash && !isEthereumFlash) {
+                throw new Error('flash_pair_chain_protocol_mismatch')
+              }
+              const flashLoanAsset = isBnbFlash
+                ? '0x55d398326f99059fF775485246999027B3197955' // BSC USDT (18 decimals)
+                : '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' // Ethereum USDC (6 decimals)
+              // Convert cents to token base units using the exact chain token decimals.
+              // This is a quote-screening notional, not a claim about wallet balance.
+              const notionalCents = BigInt(Math.round(notionalUsd * 100))
+              const amountRaw = (notionalCents * (isBnbFlash ? 10000000000000000n : 10000n)).toString()
               flashQuote = await callTransactionBuilder({
                 mode: 'flash_quote',
                 route_id: executionRoute.id,
                 source_wallet_id: flashSourceWalletId,
                 side: 'sell',
                 amount_raw: amountRaw,
-                flash_loan_asset: '0x55d398326f99059fF775485246999027B3197955',
+                flash_loan_asset: flashLoanAsset,
                 slippage_bps: slippageBps,
                 price_impact_pct: 0,
               })
               executionContext.flash_live_quote = {
-                source: flashQuote.source || 'live_bsc_router_quotes',
+                source: flashQuote.source || (isBnbFlash ? 'live_bsc_router_quotes' : 'live_ethereum_router_quotes'),
                 quoted_at: flashQuote.quoted_at || null,
                 notional_usd: notionalUsd,
                 profitable: flashQuote.profitable === true,
