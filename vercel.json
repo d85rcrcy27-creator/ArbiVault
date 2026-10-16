@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pnpm build",
+  "buildCommand": "pnpm typecheck && pnpm lint && pnpm audit --prod && pnpm build",
   "installCommand": "pnpm install --lockfile-only && pnpm install --frozen-lockfile",
   "outputDirectory": "dist",
   "rewrites": [
