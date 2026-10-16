@@ -358,7 +358,7 @@ Deno.serve(async (req) => {
     }
     const { data: attemptRow, error: attemptError } = await supabase
       .from("execution_attempts")
-      .select("id,owner_id,adapter_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
+      .select("id,owner_id,adapter_id,strategy_bot_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
       .eq("id", requestRow.execution_attempt_id)
       .maybeSingle();
     if (attemptError) return json({ error: "execution_attempt_lookup_failed" }, 500);
@@ -370,11 +370,28 @@ Deno.serve(async (req) => {
       attemptRow.chain !== chain ||
       attemptRow.execution_mode !== "on_chain" ||
       attemptRow.status !== "validated" ||
+      !attemptRow.strategy_bot_id ||
       attemptRow.transaction_payload_hash !== payloadHash
     ) {
       return json({ error: "execution_attempt_authorization_mismatch" }, 403);
     }
 
+    const { data: strategyWalletBinding, error: strategyWalletBindingError } = await supabase
+      .from("arbivault_strategy_wallets")
+      .select("id")
+      .eq("owner_id", wallet.owner_id)
+      .eq("strategy_bot_id", attemptRow.strategy_bot_id)
+      .eq("chain", chain)
+      .eq("wallet_id", walletId)
+      .eq("purpose", "strategy_execution")
+      .eq("status", "assigned")
+      .maybeSingle();
+    if (strategyWalletBindingError) {
+      return json({ error: "strategy_wallet_binding_lookup_failed" }, 503);
+    }
+    if (!strategyWalletBinding) {
+      return json({ error: "wallet_not_bound_to_strategy_on_chain" }, 403);
+    }
 
     const { data: executionPolicy, error: executionPolicyError } = await supabase
       .from("arbivault_execution_policy")
