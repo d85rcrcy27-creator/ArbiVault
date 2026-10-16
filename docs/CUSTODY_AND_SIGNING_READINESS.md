@@ -44,4 +44,4 @@ Turnkey EVM and Turnkey Bitcoin signing are **not implemented by this maintenanc
 - The executor deployment registry has no entries, so Ethereum/BNB flash-loan executor readiness cannot be asserted.
 - Leaked-password protection remains disabled in Supabase Auth. Three strategy RPCs are being changed to SECURITY INVOKER in the accompanying migration; that migration is not applied by this branch.
 
-Do not enable or promote live execution until these records are reconciled and the branch CI, dependency audit, Supabase security advisors, and chain-specific read-only signing checks pass.
+Do not enable or promote live execution until these records are reconciled and the branch CI, full dependency audit, Supabase security advisors, and chain-specific read-only signing checks pass. The maintenance branch's full dependency audit now passes after migrating to Tailwind v4 and removing the vulnerable Tailwind v3 `chokidar`/`braces` dependency path.
