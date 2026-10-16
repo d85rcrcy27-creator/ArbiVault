@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import {  useEffect, useRef, useState  } from "react"
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { AlertTriangle, Fingerprint, Loader2, Lock, Mail, ShieldCheck } from 'lucide-react'
 import AuthLayout from '@/components/AuthLayout'
