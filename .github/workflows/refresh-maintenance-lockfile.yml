@@ -1,0 +1,40 @@
+name: Sync maintenance dependency lockfile
+
+on:
+  push:
+    branches: ["chore/upgrade-vite-8-3-4"]
+    paths:
+      - "package.json"
+      - ".github/workflows/refresh-maintenance-lockfile.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  sync-lockfile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.34.0"
+          run_install: false
+      - name: Regenerate lockfile without running package scripts
+        run: pnpm install --lockfile-only --ignore-scripts
+      - name: Commit generated lockfile on maintenance branch only
+        run: |
+          if git diff --quiet -- pnpm-lock.yaml; then
+            echo "pnpm-lock.yaml already matches package.json"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pnpm-lock.yaml
+          git commit -m "chore(lockfile): sync maintenance dependencies"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
