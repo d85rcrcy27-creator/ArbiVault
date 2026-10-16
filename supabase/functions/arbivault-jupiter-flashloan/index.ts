@@ -50,7 +50,7 @@ type JupiterBuild = {
   otherInstructions: ApiInstruction[];
   tipInstruction: ApiInstruction | null;
   addressesByLookupTableAddress: Record<string, string[]> | null;
-  blockhashWithMetadata: { blockhash: number[]; lastValidBlockHeight: number };
+  blockhashWithMetadata: { blockhash: string; lastValidBlockHeight: number | string };
 };
 
 const json = (value: unknown, status = 200) => Response.json(value, {
@@ -206,17 +206,19 @@ async function getJupiterBuild(
     !Array.isArray(body.setupInstructions) ||
     !body.swapInstruction ||
     !body.blockhashWithMetadata ||
-    !Array.isArray(body.blockhashWithMetadata.blockhash)
+    typeof body.blockhashWithMetadata.blockhash !== "string" ||
+    !Number.isFinite(Number(body.blockhashWithMetadata.lastValidBlockHeight))
   ) {
     throw new Error("jupiter_build_response_invalid");
   }
   if ((body.otherInstructions || []).length > 0 || body.tipInstruction) {
     throw new Error("jupiter_unreviewed_extra_instruction_blocked");
   }
-  if (body.priceImpactPct === undefined || body.priceImpactPct === null) {
+  const rawImpact = body.priceImpactPct ?? body.routerResult?.priceImpactPct;
+  if (rawImpact === undefined || rawImpact === null) {
     throw new Error("jupiter_price_impact_missing");
   }
-  const impact = Number(body.priceImpactPct);
+  const impact = Number(rawImpact);
   if (!Number.isFinite(impact) || impact < 0 || impact > MAX_PRICE_IMPACT_FRACTION) {
     throw new Error("jupiter_price_impact_out_of_bounds");
   }
@@ -284,7 +286,9 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
     ? [fromApiInstruction(second.cleanupInstruction)]
     : [];
   const lookupTables = await loadLookupTables(connection, [first, second]);
-  const blockhash = bs58.encode(Buffer.from(first.blockhashWithMetadata.blockhash));
+  const blockhashBytes = bs58.decode(first.blockhashWithMetadata.blockhash);
+  if (blockhashBytes.length !== 32) throw new Error("jupiter_blockhash_invalid");
+  const blockhash = first.blockhashWithMetadata.blockhash;
   const instructions = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNITS }),
     ...setupInstructions,
@@ -446,6 +450,7 @@ Deno.serve(async (req: Request) => {
       "jupiter_unreviewed_extra_instruction_blocked",
       "jupiter_price_impact_out_of_bounds",
       "jupiter_price_impact_missing",
+      "jupiter_blockhash_invalid",
       "jupiter_lookup_table_not_found_on_chain",
       "jupiter_lookup_table_deactivated",
       "jupiter_lookup_table_address_mismatch",
