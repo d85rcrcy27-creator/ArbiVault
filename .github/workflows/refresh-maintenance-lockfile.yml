@@ -42,4 +42,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pnpm-lock.yaml
           git commit -m "chore(lockfile): sync maintenance dependencies"
-          git push origin "HEAD:${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          target_branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          git fetch origin "$target_branch"
+          git rebase "origin/$target_branch"
+          git push origin "HEAD:$target_branch"
