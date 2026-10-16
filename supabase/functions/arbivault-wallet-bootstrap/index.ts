@@ -172,6 +172,7 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
   }else if(chain==='xrp'){
     const xrplWallet=XrplWallet.generate()
     address=xrplWallet.address
+    if(!xrplWallet.seed)throw new Error('xrp_seed_generation_failed')
     secret=xrplWallet.seed
   }else{
     const key=ECPair.makeRandom()
