@@ -580,13 +580,17 @@ export default {
     if (marketAdapterError) return Response.json({ error: marketAdapterError.message }, { status: 500 })
 
     // These adapters are signing/broadcast boundaries, not exchange trading venues.
-    const signerAdapters = (adapters || []).filter((adapter: any) =>
-      adapter.health_status === 'healthy' &&
-      adapter.can_broadcast === true &&
-      adapter.read_only === false &&
-      adapter.signer_provider === 'internal_vault' &&
-      !!adapter.allowed_wallet_id
-    )
+    const signerAdapters = (adapters || []).filter((adapter: any) => {
+      const expectedProvider = adapter.chain === 'solana' ? 'turnkey' : 'internal_vault'
+      return adapter.health_status === 'healthy' &&
+        adapter.configured === true &&
+        adapter.automatic_signing === true &&
+        adapter.can_broadcast === true &&
+        adapter.read_only === false &&
+        adapter.signer_provider === expectedProvider &&
+        adapter.signing_boundary === expectedProvider &&
+        !!adapter.allowed_wallet_id
+    })
     const cexExecutionAdapters = (adapters || []).filter((adapter: any) =>
       adapter.health_status === 'healthy' &&
       adapter.configured === true &&
@@ -633,15 +637,40 @@ export default {
         const chains = bot.chains?.length ? bot.chains : ['solana', 'bnb']
         const opportunities: any[] = []
 
-        const wallets = await supabase
-          .from('wallets')
-          .select('id,chain,address,status,is_hot,wallet_role')
+        // Execution bots may use only wallets explicitly bound to this bot
+        // configuration, and only after provenance and owner-scoped approval pass.
+        const { data: botWalletBindings, error: botWalletBindingError } = await supabase
+          .from('bot_wallet_bindings')
+          .select('wallet_id,role')
           .eq('owner_id', bot.owner_id)
-          .eq('status', 'active')
-          .eq('is_hot', true)
-          .eq('wallet_role', 'trading_hot')
+          .eq('bot_config_id', bot.id)
+          .eq('role', 'execution')
+        if (botWalletBindingError) throw botWalletBindingError
+        const boundWalletIds = [...new Set((botWalletBindings || []).map((binding: any) => binding.wallet_id).filter(Boolean))]
+
+        const { data: approvedWalletRows, error: approvedWalletError } = await supabase
+          .from('approved_wallets')
+          .select('wallet_id')
+          .eq('owner_id', bot.owner_id)
+          .eq('status', 'approved')
+        if (approvedWalletError) throw approvedWalletError
+        const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
+
+        const wallets = boundWalletIds.length
+          ? await supabase
+              .from('wallets')
+              .select('id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status')
+              .eq('owner_id', bot.owner_id)
+              .eq('status', 'active')
+              .eq('is_hot', true)
+              .eq('wallet_role', 'trading_hot')
+              .in('id', boundWalletIds)
+          : { data: [], error: null }
 
         if (wallets.error) throw wallets.error
+        const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
+          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+        )
 
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
@@ -728,7 +757,7 @@ export default {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
-          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
+          const wallet = executionEligibleWallets.find((candidate: any) => candidate.chain === executionRoute.chain) || null
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
