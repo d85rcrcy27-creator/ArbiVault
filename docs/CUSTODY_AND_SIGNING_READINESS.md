@@ -37,7 +37,7 @@ Turnkey EVM and Turnkey Bitcoin signing are **not implemented by this maintenanc
 
 ## Current release blockers observed in Supabase
 
-- The primary execution policy is enabled in `live` mode.
+- The primary execution policy's `enabled` flag is now **false** as a safety containment; its mode field remains `live`. At the time of verification there were zero authorized signing requests and zero broadcast execution attempts.
 - All four configured broadcast-capable adapters are internal-vault adapters, and their latest wallet approval records are not approved.
 - Current wallet metadata shows no approved, verified active trading wallet for these adapters.
 - The configured Solana adapter does not currently satisfy the new Turnkey-provider and explicit program-allowlist requirements.
