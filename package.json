@@ -97,7 +97,8 @@
     "typescript": "^5.9.3",
     "vite": "^8.3.4",
     "tailwindcss-animate": "^1.0.7",
-    "@eslint-react/eslint-plugin": "^5.28.0"
+    "@eslint-react/eslint-plugin": "^5.28.0",
+    "eslint-plugin-react-dom": "^5.28.0"
   },
   "pnpm": {
     "overrides": {
