@@ -26,43 +26,228 @@ async function walletAddressHasContractCode(chain:'bnb'|'ethereum',address:strin
  if(body.error||typeof body.result!=='string')throw new Error('wallet_contract_detection_rpc_failed')
  return body.result!=='0x'&&body.result!=='0x0'
 }
+function expectedDerivationPath(chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp') {
+  if (chain === 'bnb' || chain === 'ethereum') return 'internal-random-secp256k1'
+  if (chain === 'solana') return 'internal-random-ed25519'
+  if (chain === 'bitcoin') return 'internal-random-secp256k1-p2wpkh'
+  return 'internal-random-xrpl-secp256k1'
+}
+
+async function getStoredWalletSecret(walletId:string) {
+  const {data,error}=await admin.rpc('get_wallet_secret',{p_wallet_id:walletId})
+  if(error||typeof data!=='string'||!data)throw new Error('wallet_secret_readback_failed')
+  return data
+}
+
+function deriveAddressFromSecret(chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp',secret:string) {
+  if(chain==='bnb'||chain==='ethereum'){
+    if(!/^0x[0-9a-fA-F]{64}$/.test(secret))throw new Error('evm_secret_format_invalid')
+    return privateKeyToAccount(secret as `0x${string}`).address
+  }
+  if(chain==='solana'){
+    if(!/^[0-9a-fA-F]{128}$/.test(secret))throw new Error('solana_secret_format_invalid')
+    const bytes=Uint8Array.from(secret.match(/.{2}/g)||[],byte=>Number.parseInt(byte,16))
+    return Keypair.fromSecretKey(bytes).publicKey.toBase58()
+  }
+  if(chain==='bitcoin'){
+    const key=ECPair.fromWIF(secret,bitcoin.networks.bitcoin)
+    const address=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin}).address
+    if(!address)throw new Error('bitcoin_address_derivation_failed')
+    return address
+  }
+  return XrplWallet.fromSeed(secret).address
+}
+
+function walletAddressesMatch(chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp',expected:string,derived:string) {
+  return chain==='bnb'||chain==='ethereum'||chain==='bitcoin'
+    ? expected.toLowerCase()===derived.toLowerCase()
+    : expected===derived
+}
+
+async function disableWalletAdapters(walletId:string,reason:string) {
+  const {error}=await admin.from('execution_adapters').update({
+    configured:false,
+    automatic_signing:false,
+    can_broadcast:false,
+    read_only:true,
+    last_error:reason,
+    updated_at:new Date().toISOString()
+  }).eq('allowed_wallet_id',walletId)
+  if(error)throw new Error('wallet_adapter_fail_closed_update_failed')
+}
+
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp'){
- const {data:existing,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
- if(existingError)throw new Error('active_wallet_lookup_failed')
- let replacedWalletId:string|null=null
- let contractCodeDetected=false
- if(existing?.address&&(chain==='bnb'||chain==='ethereum'))contractCodeDetected=await walletAddressHasContractCode(chain,existing.address)
- if(existing?.secret_ref&&!contractCodeDetected)return existing
- if(existing?.id){
-  replacedWalletId=existing.id
-  const {error:quarantineError}=await admin.from('wallets').update({status:'quarantined'}).eq('id',existing.id).eq('owner_id',userId)
-  if(quarantineError)throw new Error('wallet_orphan_quarantine_failed')
- }
- let address='',secret='',derivation_path:string|null=null
- if(chain==='bnb'||chain==='ethereum'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
- else if(chain==='solana'){const kp=Keypair.generate();address=kp.publicKey.toBase58();secret=Array.from(kp.secretKey).map(b=>b.toString(16).padStart(2,'0')).join('');derivation_path='internal-random-ed25519'}
- else if(chain==='xrp'){const xrplWallet=XrplWallet.generate();address=xrplWallet.address;secret=xrplWallet.seed;derivation_path='internal-random-xrpl-secp256k1'}
- else{const key=ECPair.makeRandom(),payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin});if(!payment.address)throw new Error('bitcoin_address_derivation_failed');address=payment.address;secret=key.toWIF();derivation_path='internal-random-secp256k1-p2wpkh'}
- const {data:wallet,error}=await admin.from('wallets').insert({owner_id:userId,chain,address,label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',status:'active',is_hot:true,custody_type:'server_vault',wallet_role:'trading_hot',verification_source:'arbivault-wallet-bootstrap',data_quality_status:'verified',derivation_path}).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').single()
- if(error||!wallet)throw new Error(error?.message||'wallet_create_failed')
- const {data:secretRef,error:se}=await admin.rpc('store_wallet_secret',{p_wallet_id:wallet.id,p_secret:secret})
- if(se||!secretRef){
-  await admin.from('wallets').update({status:'quarantined'}).eq('id',wallet.id).eq('owner_id',userId)
-  throw new Error('wallet_secret_storage_failed')
- }
- const {error:refError}=await admin.from('wallets').update({secret_ref:secretRef,updated_at:new Date().toISOString()}).eq('id',wallet.id).eq('owner_id',userId)
- if(refError){
-  await admin.from('wallets').update({status:'quarantined'}).eq('id',wallet.id).eq('owner_id',userId)
-  throw new Error('wallet_secret_reference_persist_failed')
- }
- if(replacedWalletId){
-  const {error:bindingError}=await admin.from('bot_wallet_bindings').update({wallet_id:wallet.id}).eq('owner_id',userId).eq('wallet_id',replacedWalletId)
-  if(bindingError)throw new Error('wallet_binding_rotation_failed')
-  const {error:adapterError}=await admin.from('execution_adapters').update({configured:false,automatic_signing:false,can_broadcast:false,last_error:contractCodeDetected?'wallet_address_contains_contract_code':'wallet_secret_reference_missing',updated_at:new Date().toISOString()}).eq('allowed_wallet_id',replacedWalletId)
-  if(adapterError)throw new Error('old_wallet_signer_disable_failed')
- }
- await admin.rpc('record_reconciliation_event',{p_wallet_id:wallet.id,p_chain:chain,p_tx_hash:null,p_payment_id:null,p_trade_id:null,p_event_type:'wallet_created',p_status:'verified',p_source:'arbivault-wallet-bootstrap',p_details:{custody:'server_vault',wallet_role:'trading_hot',secret_ref_saved:true,replaced_wallet_id:replacedWalletId,rotation_reason:contractCodeDetected?'contract_code_detected':'missing_secret_reference'}})
- return wallet
+  const derivationPath=expectedDerivationPath(chain)
+  const {data:existingRows,error:existingError}=await admin
+    .from('wallets')
+    .select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref,derivation_path,data_quality_status,verification_source')
+    .eq('owner_id',userId)
+    .eq('chain',chain)
+    .eq('wallet_role','trading_hot')
+    .order('created_at',{ascending:false})
+    .limit(20)
+  if(existingError)throw new Error('trading_wallet_lookup_failed')
+
+  // Prefer the wallet ArbiVault previously generated and stored, rather than
+  // silently creating a replacement or redirecting bot bindings to a new address.
+  const candidates=(existingRows||[]).filter((wallet:any)=>
+    wallet.custody_type==='server_vault' &&
+    wallet.verification_source==='arbivault-wallet-bootstrap' &&
+    wallet.data_quality_status==='verified' &&
+    wallet.secret_ref &&
+    wallet.derivation_path===derivationPath
+  )
+  if(candidates.length>1)throw new Error('multiple_verified_generated_wallets_require_manual_reconciliation')
+
+  let existing=candidates[0]||null
+  if(!existing && (existingRows||[]).length>0){
+    // Existing records without a uniquely verifiable secret reference must be
+    // reconciled in place. Never create a second wallet or move bindings/funds.
+    for(const wallet of existingRows||[])await disableWalletAdapters(wallet.id,'wallet_secret_or_provenance_requires_manual_review')
+    throw new Error('existing_wallet_requires_secret_and_provenance_verification')
+  }
+
+  if(existing){
+    if(chain==='bnb'||chain==='ethereum'){
+      const contractCodeDetected=await walletAddressHasContractCode(chain,existing.address)
+      if(contractCodeDetected){
+        await disableWalletAdapters(existing.id,'contract_wallet_requires_safe_adapter_review')
+        throw new Error('wallet_address_contains_contract_code_manual_review_required')
+      }
+    }
+    let storedSecret:string
+    try{
+      storedSecret=await getStoredWalletSecret(existing.id)
+    }catch{
+      await disableWalletAdapters(existing.id,'wallet_secret_readback_failed')
+      throw new Error('wallet_secret_readback_failed')
+    }
+    let derivedAddress:string
+    try{
+      derivedAddress=deriveAddressFromSecret(chain,storedSecret)
+    }catch{
+      await admin.from('wallets').update({status:'quarantined',data_quality_status:'needs_review',updated_at:new Date().toISOString()}).eq('id',existing.id).eq('owner_id',userId)
+      await disableWalletAdapters(existing.id,'wallet_secret_derivation_failed')
+      throw new Error('wallet_secret_derivation_failed')
+    }
+    if(!walletAddressesMatch(chain,existing.address,derivedAddress)){
+      await admin.from('wallets').update({status:'quarantined',data_quality_status:'needs_review',updated_at:new Date().toISOString()}).eq('id',existing.id).eq('owner_id',userId)
+      await disableWalletAdapters(existing.id,'wallet_address_secret_mismatch')
+      throw new Error('wallet_address_secret_mismatch')
+    }
+    if(existing.status==='quarantined' && existing.verification_source!=='arbivault-wallet-bootstrap'){
+      throw new Error('quarantined_wallet_requires_manual_reconciliation')
+    }
+    const {data:verifiedWallet,error:verifyError}=await admin.from('wallets').update({
+      status:'active',
+      data_quality_status:'verified',
+      verification_source:'arbivault-wallet-bootstrap',
+      updated_at:new Date().toISOString()
+    }).eq('id',existing.id).eq('owner_id',userId)
+      .select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref,derivation_path,data_quality_status,verification_source')
+      .single()
+    if(verifyError||!verifiedWallet)throw new Error('wallet_verification_state_update_failed')
+    await admin.rpc('record_reconciliation_event',{
+      p_wallet_id:verifiedWallet.id,
+      p_chain:chain,
+      p_tx_hash:null,
+      p_payment_id:null,
+      p_trade_id:null,
+      p_event_type:'wallet_key_address_verified',
+      p_status:'verified',
+      p_source:'arbivault-wallet-bootstrap',
+      p_details:{custody:'server_vault',secret_ref_saved:true,secret_readback_verified:true,address_secret_match:true,onchain_balance_checked:false,reactivated_from:existing.status}
+    })
+    return verifiedWallet
+  }
+
+  let address='',secret=''
+  if(chain==='bnb'||chain==='ethereum'){
+    secret=generatePrivateKey()
+    address=privateKeyToAccount(secret as `0x${string}`).address
+  }else if(chain==='solana'){
+    const keypair=Keypair.generate()
+    address=keypair.publicKey.toBase58()
+    secret=Array.from(keypair.secretKey).map(byte=>byte.toString(16).padStart(2,'0')).join('')
+  }else if(chain==='xrp'){
+    const xrplWallet=XrplWallet.generate()
+    address=xrplWallet.address
+    secret=xrplWallet.seed
+  }else{
+    const key=ECPair.makeRandom()
+    const payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin})
+    if(!payment.address)throw new Error('bitcoin_address_derivation_failed')
+    address=payment.address
+    secret=key.toWIF()
+  }
+
+  const {data:wallet,error}=await admin.from('wallets').insert({
+    owner_id:userId,
+    chain,
+    address,
+    label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',
+    status:'quarantined',
+    is_hot:true,
+    custody_type:'server_vault',
+    wallet_role:'trading_hot',
+    verification_source:'arbivault-wallet-bootstrap',
+    data_quality_status:'needs_review',
+    derivation_path:derivationPath
+  }).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref,derivation_path,data_quality_status,verification_source').single()
+  if(error||!wallet)throw new Error(error?.message||'wallet_create_failed')
+
+  const {data:secretRef,error:storeError}=await admin.rpc('store_wallet_secret',{p_wallet_id:wallet.id,p_secret:secret})
+  if(storeError||!secretRef){
+    await admin.from('wallets').update({status:'quarantined',data_quality_status:'needs_review'}).eq('id',wallet.id).eq('owner_id',userId)
+    throw new Error('wallet_secret_storage_failed')
+  }
+  const {error:refError}=await admin.from('wallets').update({secret_ref:secretRef,updated_at:new Date().toISOString()}).eq('id',wallet.id).eq('owner_id',userId)
+  if(refError){
+    await admin.from('wallets').update({status:'quarantined',data_quality_status:'needs_review'}).eq('id',wallet.id).eq('owner_id',userId)
+    throw new Error('wallet_secret_reference_persist_failed')
+  }
+
+  let storedSecret:string
+  try{
+    storedSecret=await getStoredWalletSecret(wallet.id)
+  }catch{
+    await disableWalletAdapters(wallet.id,'wallet_secret_readback_failed')
+    throw new Error('wallet_secret_readback_failed')
+  }
+  let derivedAddress:string
+  try{
+    derivedAddress=deriveAddressFromSecret(chain,storedSecret)
+  }catch{
+    await disableWalletAdapters(wallet.id,'wallet_secret_derivation_failed')
+    throw new Error('wallet_secret_derivation_failed')
+  }
+  if(!walletAddressesMatch(chain,address,derivedAddress)){
+    await admin.from('wallets').update({status:'quarantined',data_quality_status:'needs_review'}).eq('id',wallet.id).eq('owner_id',userId)
+    await disableWalletAdapters(wallet.id,'wallet_address_secret_mismatch')
+    throw new Error('wallet_address_secret_mismatch')
+  }
+
+  const {data:verifiedWallet,error:verifyError}=await admin.from('wallets').update({
+    status:'active',
+    data_quality_status:'verified',
+    verification_source:'arbivault-wallet-bootstrap',
+    updated_at:new Date().toISOString()
+  }).eq('id',wallet.id).eq('owner_id',userId)
+    .select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref,derivation_path,data_quality_status,verification_source')
+    .single()
+  if(verifyError||!verifiedWallet)throw new Error('wallet_verification_state_update_failed')
+  await admin.rpc('record_reconciliation_event',{
+    p_wallet_id:verifiedWallet.id,
+    p_chain:chain,
+    p_tx_hash:null,
+    p_payment_id:null,
+    p_trade_id:null,
+    p_event_type:'wallet_created_and_key_address_verified',
+    p_status:'verified',
+    p_source:'arbivault-wallet-bootstrap',
+    p_details:{custody:'server_vault',secret_ref_saved:true,secret_readback_verified:true,address_secret_match:true,onchain_balance_checked:false}
+  })
+  return verifiedWallet
 }
 async function ensureBindings(userId:string,wallets:any[]){
  const botDefaults=[
