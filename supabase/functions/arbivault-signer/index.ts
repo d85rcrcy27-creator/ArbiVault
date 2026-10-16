@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
 import { ECPairFactory } from "npm:ecpair@3.0.0";
-import { Keypair, VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
+import { Connection, Keypair, PublicKey, VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
 import { Turnkey } from "npm:@turnkey/sdk-server@1.5.0";
 import { TurnkeySigner } from "npm:@turnkey/solana@1.0.0";
 
@@ -670,6 +670,17 @@ Deno.serve(async (req) => {
       };
       signed = await account.signTransaction(tx);
     } else if (chain === "solana") {
+      const solanaRpcUrl = Deno.env.get("SOLANA_RPC_URL") || "";
+      if (!solanaRpcUrl) return json({ error: "solana_rpc_not_configured" }, 503);
+      const solanaConnection = new Connection(solanaRpcUrl, "confirmed");
+      try {
+        const genesisHash = await solanaConnection.getGenesisHash();
+        if (genesisHash !== "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp") {
+          return json({ error: "solana_rpc_cluster_mismatch" }, 403);
+        }
+      } catch {
+        return json({ error: "solana_rpc_cluster_verification_failed" }, 503);
+      }
       const raw = decode64(unsigned);
       let versioned: VersionedTransaction | null = null;
       try {
@@ -696,11 +707,33 @@ Deno.serve(async (req) => {
         ) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
+        let lookupTableAccounts:any[] = [];
+        const lookups = Array.isArray(message?.addressTableLookups) ? message.addressTableLookups : [];
+        if (lookups.length > 0) {
+          try {
+            for (const lookup of lookups) {
+              const lookupKey = new PublicKey(lookup.accountKey);
+              const { value } = await solanaConnection.getAddressLookupTable(lookupKey);
+              if (!value || !value.key.equals(lookupKey)) {
+                return json({ error: "solana_address_lookup_table_unresolved" }, 403);
+              }
+              lookupTableAccounts.push(value);
+            }
+          } catch {
+            return json({ error: "solana_address_lookup_table_resolution_failed" }, 503);
+          }
+        }
+        let resolvedAccountKeys:any;
+        try {
+          resolvedAccountKeys = message.getAccountKeys({ addressLookupTableAccounts: lookupTableAccounts });
+        } catch {
+          return json({ error: "solana_message_account_keys_unresolved" }, 403);
+        }
         const programIds = (message?.compiledInstructions || []).map((instruction: any) =>
-          staticKeys[instruction.programIdIndex]?.toBase58() || ""
+          resolvedAccountKeys.get(instruction.programIdIndex)?.toBase58() || ""
         );
         if (!solanaProgramAllowlist(adapter, programIds)) {
-          return json({ error: "solana_program_not_allowlisted_or_lookup_unresolved" }, 403);
+          return json({ error: "solana_program_not_allowlisted" }, 403);
         }
         let signedVersioned: VersionedTransaction;
         if (adapter.signer_provider === "turnkey") {
