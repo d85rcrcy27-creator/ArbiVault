@@ -589,7 +589,7 @@ export default {
           .eq('status', 'approved')
         if (approvedWalletError) throw approvedWalletError
         const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
-        const executionEligibleWallets = (executionEligibleWallets).filter((wallet: any) =>
+        const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
           wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
         )
 
