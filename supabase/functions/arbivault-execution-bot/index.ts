@@ -315,6 +315,7 @@ async function spreadFor(pair: typeof PAIRS[number]) {
   let buy: any = quotes[0]
   let sell: any = quotes[0]
   for (const quote of quotes) {
+    if (!quote) continue
     if (quote.ask < buy.ask) buy = quote
     if (quote.bid > sell.bid) sell = quote
   }
@@ -816,7 +817,7 @@ export default {
               flashQuote = await callTransactionBuilder({
                 mode: 'flash_quote',
                 route_id: executionRoute.id,
-                source_wallet_id: wallet.id,
+                source_wallet_id: flashSourceWalletId,
                 side: 'sell',
                 amount_raw: amountRaw,
                 flash_loan_asset: '0x55d398326f99059fF775485246999027B3197955',
@@ -842,7 +843,7 @@ export default {
               ) {
                 flashBuild = await callTransactionBuilder({
                   route_id: executionRoute.id,
-                  source_wallet_id: wallet.id,
+                  source_wallet_id: flashSourceWalletId,
                   side: 'sell',
                   amount_raw: amountRaw,
                   flash_loan_asset: flashQuote.best.asset,
