@@ -272,6 +272,7 @@ async function ensureBindings(userId:string,wallets:any[]){
   // the same address. Keep every adapter fail-closed; verification is not approval.
   for(const wallet of wallets){
     const chain=wallet.chain
+    if(!['ethereum','bnb','solana','bitcoin'].includes(chain))continue
     const {data:chainWallets,error:chainWalletError}=await admin.from('wallets')
       .select('id')
       .eq('owner_id',userId)
@@ -319,7 +320,6 @@ async function ensureBindings(userId:string,wallets:any[]){
     }
 
     const adapterType=chain==='solana'?'solana_program':chain==='bitcoin'?'bitcoin_psbt':'dex_router'
-    if(!['ethereum','bnb','solana','bitcoin'].includes(chain))continue
     const allowedContracts=chain==='ethereum'
       ? [ETH_UNISWAP_V2_ROUTER]
       : chain==='bnb' ? [BSC_PANCAKE_V2_ROUTER] : []
@@ -384,7 +384,7 @@ Deno.serve(async(req)=>{
     const {data:{user},error}=await client.auth.getUser()
     if(error||!user)return json({error:'authentication_required'},401)
     const body=await req.json().catch(()=>({}))
-    const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin','xrp']
+    const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin']
     const chains=['bnb','solana','ethereum','bitcoin','xrp'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'bitcoin'|'ethereum'|'xrp')[]
     const wallets:any[]=[]
     const blockedChains:{chain:string,error:string}[]=[]
