@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
 import { ECPairFactory } from "npm:ecpair@3.0.0";
-import { VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
+import { Keypair, VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
 import { Turnkey } from "npm:@turnkey/sdk-server@1.5.0";
 import { TurnkeySigner } from "npm:@turnkey/solana@1.0.0";
 
@@ -236,10 +236,9 @@ Deno.serve(async (req) => {
       .eq("id", adapterId)
       .maybeSingle();
     if (ae) return json({ error: ae.message }, 500);
-    // Provider selection is chain-specific. EVM and Bitcoin currently use
-    // the internal vault; Solana uses Turnkey. Never silently cross provider
-    // boundaries just because an adapter row is configured.
-    const expectedSignerProvider = chain === "solana" ? "turnkey" : "internal_vault";
+    // EVM and Bitcoin currently use the internal vault. Solana may use
+    // the internal vault or Turnkey, but the wallet custody type must match.
+    const supportedProviders = chain === "solana" ? ["internal_vault", "turnkey"] : ["internal_vault"];
     if (
       !adapter ||
       adapter.chain !== chain ||
@@ -247,21 +246,30 @@ Deno.serve(async (req) => {
       adapter.automatic_signing !== true ||
       adapter.can_broadcast !== true ||
       adapter.read_only === true ||
-      adapter.signer_provider !== expectedSignerProvider
+      !supportedProviders.includes(adapter.signer_provider)
     ) {
-      return json({ error: "adapter_signer_provider_not_authorized", expected_provider: expectedSignerProvider }, 403);
+      return json({ error: "adapter_signer_provider_not_authorized", supported_providers: supportedProviders }, 403);
     }
 
     if (
       adapter.allowed_wallet_id !== walletId ||
-      adapter.signing_boundary !== expectedSignerProvider
+      adapter.signing_boundary !== adapter.signer_provider
     ) {
       return json({ error: "wallet_not_bound_to_expected_signer" }, 403);
     }
 
+    const expectedAdapterTypes = chain === "solana"
+      ? ["solana_program", "custom"]
+      : chain === "bitcoin"
+        ? ["bitcoin_psbt", "custom"]
+        : ["dex_router", "evm_flash_atomic", "custom"];
+    if (!expectedAdapterTypes.includes(adapter.adapter_type)) {
+      return json({ error: "adapter_protocol_type_mismatch", chain, adapter_type: adapter.adapter_type }, 403);
+    }
+
     const { data: wallet, error: we } = await supabase
       .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,custody_type")
       .eq("id", walletId)
       .maybeSingle();
     if (we) return json({ error: "source_wallet_lookup_failed" }, 503);
@@ -273,6 +281,10 @@ Deno.serve(async (req) => {
       wallet.chain !== chain
     ) {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
+    }
+    const expectedCustody = adapter.signer_provider === "turnkey" ? "turnkey" : "server_vault";
+    if (wallet.custody_type !== expectedCustody) {
+      return json({ error: "wallet_custody_provider_mismatch" }, 403);
     }
 
     // A hot wallet is not execution-eligible solely because its row is active.
@@ -434,7 +446,7 @@ Deno.serve(async (req) => {
       return json({ error: "signing_request_already_claimed_or_not_authorized", signing_blocked: true }, 409);
     }
 
-    const sv = chain === "solana" ? "" : await getSecret(walletId);
+    const sv = adapter.signer_provider === "turnkey" ? "" : await getSecret(walletId);
     let signed = "";
 
     if (chain === "bnb" || chain === "ethereum") {
@@ -665,7 +677,14 @@ Deno.serve(async (req) => {
       } catch {
         versioned = null;
       }
-      const turnkeySigner = createTurnkeySolanaSigner();
+      const turnkeySigner = adapter.signer_provider === "turnkey" ? createTurnkeySolanaSigner() : null;
+      const internalSolanaKeypair = () => {
+        if (!/^[0-9a-fA-F]{128}$/.test(sv)) throw new Error("solana_internal_secret_format_invalid");
+        const secretBytes = Uint8Array.from(sv.match(/.{2}/g) || [], byte => Number.parseInt(byte, 16));
+        const keypair = Keypair.fromSecretKey(secretBytes);
+        if (keypair.publicKey.toBase58() !== wallet.address) throw new Error("signer_secret_address_mismatch");
+        return keypair;
+      };
       if (versioned) {
         const message: any = versioned.message;
         const required = Number(message?.header?.numRequiredSignatures || 0);
@@ -683,9 +702,16 @@ Deno.serve(async (req) => {
         if (!solanaProgramAllowlist(adapter, programIds)) {
           return json({ error: "solana_program_not_allowlisted_or_lookup_unresolved" }, 403);
         }
-        const signedVersioned = await turnkeySigner.signTransaction(versioned, wallet.address) as VersionedTransaction;
+        let signedVersioned: VersionedTransaction;
+        if (adapter.signer_provider === "turnkey") {
+          if (!turnkeySigner) return json({ error: "turnkey_solana_signer_not_configured" }, 503);
+          signedVersioned = await turnkeySigner.signTransaction(versioned, wallet.address) as VersionedTransaction;
+        } else {
+          versioned.sign([internalSolanaKeypair()]);
+          signedVersioned = versioned;
+        }
         if (!signedVersioned.signatures?.length || signedVersioned.signatures.every((sig: Uint8Array) => sig.every((byte) => byte === 0))) {
-          return json({ error: "turnkey_solana_signature_missing" }, 502);
+          return json({ error: "solana_signature_missing" }, 502);
         }
         signed = btoa(String.fromCharCode(...signedVersioned.serialize()));
       } else {
@@ -702,12 +728,19 @@ Deno.serve(async (req) => {
         if (!solanaProgramAllowlist(adapter, programIds)) {
           return json({ error: "solana_program_not_allowlisted" }, 403);
         }
-        const signedLegacy = await turnkeySigner.signTransaction(legacy, wallet.address) as Transaction;
+        let signedLegacy: Transaction;
+        if (adapter.signer_provider === "turnkey") {
+          if (!turnkeySigner) return json({ error: "turnkey_solana_signer_not_configured" }, 503);
+          signedLegacy = await turnkeySigner.signTransaction(legacy, wallet.address) as Transaction;
+        } else {
+          legacy.partialSign(internalSolanaKeypair());
+          signedLegacy = legacy;
+        }
         const signature = signedLegacy.signatures.find((item: any) => item.publicKey.toBase58() === wallet.address)?.signature;
         if (!signature || signature.every((byte: number) => byte === 0)) {
-          return json({ error: "turnkey_solana_signature_missing" }, 502);
+          return json({ error: "solana_signature_missing" }, 502);
         }
-        signed = btoa(String.fromCharCode(...signedLegacy.serialize()));
+        signed = btoa(String.fromCharCode(...signedLegacy.serialize({ requireAllSignatures: false, verifySignatures: true })));
       }
     } else {
       const psbt = bitcoin.Psbt.fromBase64(unsigned, { network: bitcoin.networks.bitcoin });
