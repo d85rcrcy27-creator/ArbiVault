@@ -50,6 +50,7 @@ The default simulation size is 10 USDC. The supported range is 1–100 USDC, and
 - [ ] GitHub Deno type-check passes for this Edge Function.
 - [ ] `diagnostic` confirms mainnet RPC and Jupiter API configuration.
 - [ ] A 10 USDC test simulation succeeds with zero transaction signatures or broadcasts.
-- [ ] Negative simulations are verified for failed API quotes, excessive slippage/impact, unknown lookup tables, inactive wallet, non-owned wallet, and amounts outside the allowed range.
+- [ ] Negative simulations are verified for failed/mismatched API quotes, non-positive net output after fees, unknown lookup tables, inactive wallet, non-owned wallet, and amounts outside the allowed range.
+- [ ] Review accepts that this preflight uses Jupiter's quoted output and minimum-output threshold rather than a separate price-impact field (not guaranteed by the documented /build response).
 - [ ] Security review approves the instruction/ALT boundary before signer integration.
 - [ ] UI and bot route integration is implemented separately, with execution still disabled until independently approved.
