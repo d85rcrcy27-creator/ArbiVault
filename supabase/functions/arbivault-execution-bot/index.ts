@@ -315,6 +315,7 @@ async function spreadFor(pair: typeof PAIRS[number]) {
   let buy: any = quotes[0]
   let sell: any = quotes[0]
   for (const quote of quotes) {
+    if (!quote) continue
     if (quote.ask < buy.ask) buy = quote
     if (quote.bid > sell.bid) sell = quote
   }
@@ -580,13 +581,19 @@ export default {
     if (marketAdapterError) return Response.json({ error: marketAdapterError.message }, { status: 500 })
 
     // These adapters are signing/broadcast boundaries, not exchange trading venues.
-    const signerAdapters = (adapters || []).filter((adapter: any) =>
-      adapter.health_status === 'healthy' &&
-      adapter.can_broadcast === true &&
-      adapter.read_only === false &&
-      adapter.signer_provider === 'internal_vault' &&
-      !!adapter.allowed_wallet_id
-    )
+    const signerAdapters = (adapters || []).filter((adapter: any) => {
+      const supportedProviders = adapter.chain === 'solana'
+        ? ['internal_vault', 'turnkey']
+        : ['internal_vault']
+      return adapter.health_status === 'healthy' &&
+        adapter.configured === true &&
+        adapter.automatic_signing === true &&
+        adapter.can_broadcast === true &&
+        adapter.read_only === false &&
+        supportedProviders.includes(adapter.signer_provider) &&
+        adapter.signing_boundary === adapter.signer_provider &&
+        !!adapter.allowed_wallet_id
+    })
     const cexExecutionAdapters = (adapters || []).filter((adapter: any) =>
       adapter.health_status === 'healthy' &&
       adapter.configured === true &&
@@ -633,15 +640,40 @@ export default {
         const chains = bot.chains?.length ? bot.chains : ['solana', 'bnb']
         const opportunities: any[] = []
 
-        const wallets = await supabase
-          .from('wallets')
-          .select('id,chain,address,status,is_hot,wallet_role')
+        // Execution bots may use only wallets explicitly bound to this bot
+        // configuration, and only after provenance and owner-scoped approval pass.
+        const { data: botWalletBindings, error: botWalletBindingError } = await supabase
+          .from('bot_wallet_bindings')
+          .select('wallet_id,role')
           .eq('owner_id', bot.owner_id)
-          .eq('status', 'active')
-          .eq('is_hot', true)
-          .eq('wallet_role', 'trading_hot')
+          .eq('bot_config_id', bot.id)
+          .eq('role', 'execution')
+        if (botWalletBindingError) throw botWalletBindingError
+        const boundWalletIds = [...new Set((botWalletBindings || []).map((binding: any) => binding.wallet_id).filter(Boolean))]
+
+        const { data: approvedWalletRows, error: approvedWalletError } = await supabase
+          .from('approved_wallets')
+          .select('wallet_id')
+          .eq('owner_id', bot.owner_id)
+          .eq('status', 'approved')
+        if (approvedWalletError) throw approvedWalletError
+        const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
+
+        const wallets = boundWalletIds.length
+          ? await supabase
+              .from('wallets')
+              .select('id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status')
+              .eq('owner_id', bot.owner_id)
+              .eq('status', 'active')
+              .eq('is_hot', true)
+              .eq('wallet_role', 'trading_hot')
+              .in('id', boundWalletIds)
+          : { data: [], error: null }
 
         if (wallets.error) throw wallets.error
+        const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
+          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+        )
 
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
@@ -728,7 +760,7 @@ export default {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
-          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
+          const wallet = executionEligibleWallets.find((candidate: any) => candidate.chain === executionRoute.chain) || null
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
@@ -746,10 +778,15 @@ export default {
           let flashQuote: any = null
           let flashBuild: any = null
           let builderError: string | null = null
+          const chainFlashExecutorReady = executionRoute.chain === 'bnb'
+            ? flashExecutorDiagnostic?.bnb?.ready_for_flash_transaction_test === true
+            : executionRoute.chain === 'ethereum'
+              ? flashExecutorDiagnostic?.ethereum?.ready_for_flash_transaction_test === true
+              : false
           const multiLegBuilderConfigured =
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
             executionRoute.builder_enabled === true &&
-            flashExecutorDiagnostic?.ready_for_flash_transaction_test === true
+            chainFlashExecutorReady
           if (wallet && executionRoute.route_type === 'dex_cex') {
             try {
               // Still collect a live DEX-side quote when the CEX order adapter is
@@ -766,8 +803,12 @@ export default {
 
           if (executionRoute.route_type === 'flash_liquidity') {
             try {
-              if (executionRoute.chain !== 'bnb' || executionRoute.pair !== 'BNB/USDT') {
-                throw new Error('flash_live_quote_route_not_supported')
+              const flashSourceWalletId = wallet?.id
+              if (!flashSourceWalletId) throw new Error('flash_source_wallet_unavailable')
+              const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
+              const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
+              if (!isBnbFlash && !isEthereumFlash) {
+                throw new Error('flash_pair_chain_protocol_mismatch')
               }
               if (strategyBot?.flash_loan_enabled !== true) {
                 throw new Error('flash_loan_strategy_disabled')
@@ -781,21 +822,25 @@ export default {
                 ? configuredNotional
                 : 100
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
-              // BNB Chain USDT has 18 decimals. Use the configured strategy size or a
-              // quote-only screening default; policy capital allowance never sets notional.
-              const amountRaw = (BigInt(Math.round(notionalUsd * 100000000)) * 10000000000n).toString()
+              const flashLoanAsset = isBnbFlash
+                ? '0x55d398326f99059fF775485246999027B3197955' // BSC USDT (18 decimals)
+                : '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' // Ethereum USDC (6 decimals)
+              // Convert cents to token base units using the exact chain token decimals.
+              // This is a quote-screening notional, not a claim about wallet balance.
+              const notionalCents = BigInt(Math.round(notionalUsd * 100))
+              const amountRaw = (notionalCents * (isBnbFlash ? 10000000000000000n : 10000n)).toString()
               flashQuote = await callTransactionBuilder({
                 mode: 'flash_quote',
                 route_id: executionRoute.id,
-                source_wallet_id: wallet.id,
+                source_wallet_id: flashSourceWalletId,
                 side: 'sell',
                 amount_raw: amountRaw,
-                flash_loan_asset: '0x55d398326f99059fF775485246999027B3197955',
+                flash_loan_asset: flashLoanAsset,
                 slippage_bps: slippageBps,
                 price_impact_pct: 0,
               })
               executionContext.flash_live_quote = {
-                source: flashQuote.source || 'live_bsc_router_quotes',
+                source: flashQuote.source || (isBnbFlash ? 'live_bsc_router_quotes' : 'live_ethereum_router_quotes'),
                 quoted_at: flashQuote.quoted_at || null,
                 notional_usd: notionalUsd,
                 profitable: flashQuote.profitable === true,
@@ -806,14 +851,14 @@ export default {
 
               if (
                 flashQuote.profitable === true &&
-                flashExecutorDiagnostic?.ready_for_flash_transaction_test === true &&
+                chainFlashExecutorReady &&
                 flashQuote.best?.executor_configured === true &&
                 Array.isArray(flashQuote.best?.data) &&
                 flashQuote.best.data.length === 2
               ) {
                 flashBuild = await callTransactionBuilder({
                   route_id: executionRoute.id,
-                  source_wallet_id: wallet.id,
+                  source_wallet_id: flashSourceWalletId,
                   side: 'sell',
                   amount_raw: amountRaw,
                   flash_loan_asset: flashQuote.best.asset,
@@ -839,11 +884,19 @@ export default {
             }
           }
 
+          const requiredAdapterTypes = executionRoute.route_type === 'flash_liquidity'
+            ? ['evm_flash_atomic', 'custom']
+            : executionRoute.chain === 'solana'
+              ? ['solana_program', 'custom']
+              : executionRoute.chain === 'bitcoin'
+                ? ['bitcoin_psbt', 'custom']
+                : ['dex_router', 'custom']
           const executionAdapter = wallet
             ? signerAdapters.find((adapter: any) =>
                 adapter.allowed_wallet_id === wallet.id &&
                 adapter.chain === executionRoute.chain &&
-                adapter.automatic_signing === true
+                adapter.automatic_signing === true &&
+                requiredAdapterTypes.includes(adapter.adapter_type)
               ) || null
             : null
           const executionAdapterConfigured = !!executionAdapter

@@ -1,0 +1,34 @@
+name: Validate Supabase Edge Functions
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+      - ".github/workflows/validate-edge-functions.yml"
+  push:
+    branches: ["chore/upgrade-vite-8-3-4"]
+    paths:
+      - "supabase/functions/**"
+      - ".github/workflows/validate-edge-functions.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deno-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check modified execution functions
+        run: |
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-signer/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-transaction-builder/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-execution-bot/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-wallet-bootstrap/index.ts

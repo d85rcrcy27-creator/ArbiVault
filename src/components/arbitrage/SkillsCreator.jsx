@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2, ArrowRight, FlaskConical, GripVertical, Pencil, X } from 'lucide-react'
-import { createBotSkill, deleteBotSkill, listBotSkills, updateBotSkill, runBacktest } from '@/lib/arbivault'
-import { supabase } from '@/lib/supabase'
+import { createBotSkill, deleteBotSkill, listBotSkills, updateBotSkill, runBacktest, scoutPublicData } from '@/lib/arbivault'
 
 const CONDITION_BLOCKS = [
   { id: 'spread', label: 'IF Spread >', type: 'condition', unit: '%', placeholder: '0.50' },

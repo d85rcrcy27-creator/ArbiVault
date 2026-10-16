@@ -1,8 +1,5 @@
-import tailwindcssAnimate from 'tailwindcss-animate'
-
 export default {
   darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],
   theme: {
     extend: {
       opacity: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [i, `${i / 100}`])),
@@ -85,5 +82,4 @@ export default {
       },
     },
   },
-  plugins: [tailwindcssAnimate],
 }

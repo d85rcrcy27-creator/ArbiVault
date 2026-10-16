@@ -574,13 +574,45 @@ export default {
 
         const wallets = await supabase
           .from('wallets')
-          .select('id,chain,address,status,is_hot,wallet_role')
+          .select('id,chain,address,status,is_hot,wallet_role,data_quality_status')
           .eq('owner_id', bot.owner_id)
           .eq('status', 'active')
           .eq('is_hot', true)
           .eq('wallet_role', 'trading_hot')
 
         if (wallets.error) throw wallets.error
+
+        const { data: approvedWalletRows, error: approvedWalletError } = await supabase
+          .from('approved_wallets')
+          .select('wallet_id')
+          .eq('owner_id', bot.owner_id)
+          .eq('status', 'approved')
+        if (approvedWalletError) throw approvedWalletError
+        const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
+        const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
+          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+        )
+
+        // Execution wallets must be explicitly bound to this strategy bot on the
+        // same chain. An owner's other approved wallets are not interchangeable.
+        const { data: strategyWalletBindings, error: strategyWalletBindingError } = await supabase
+          .from('arbivault_strategy_wallets')
+          .select('wallet_id,chain,purpose,status')
+          .eq('owner_id', bot.owner_id)
+          .eq('strategy_bot_id', bot.id)
+          .eq('status', 'assigned')
+        if (strategyWalletBindingError) throw strategyWalletBindingError
+        const botWalletBindings = (strategyWalletBindings || []).filter((binding: any) =>
+          binding.purpose === 'strategy_execution' &&
+          binding.wallet_id &&
+          binding.chain
+        )
+        const botWalletIdsByChain = new Map<string, Set<string>>()
+        for (const binding of botWalletBindings) {
+          const chainWalletIds = botWalletIdsByChain.get(binding.chain) || new Set<string>()
+          chainWalletIds.add(binding.wallet_id)
+          botWalletIdsByChain.set(binding.chain, chainWalletIds)
+        }
 
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
@@ -667,7 +699,10 @@ export default {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
-          const wallet = (wallets.data || []).find((candidate: any) => candidate.chain === executionRoute.chain) || null
+          const botWalletIds = botWalletIdsByChain.get(executionRoute.chain) || new Set<string>()
+          const wallet = executionEligibleWallets.find((candidate: any) =>
+            candidate.chain === executionRoute.chain && botWalletIds.has(candidate.id)
+          ) || null
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,

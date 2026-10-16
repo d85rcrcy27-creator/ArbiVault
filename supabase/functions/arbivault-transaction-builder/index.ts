@@ -1291,15 +1291,32 @@ Deno.serve(async (req) => {
 
     const { data: wallet, error: walletError } = await supabase
       .from("wallets")
-      .select("id,chain,address,status,is_hot,wallet_role")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
       .eq("id", sourceWalletId)
       .maybeSingle();
 
-    if (walletError) return json({ error: walletError.message }, 500);
+    if (walletError) return json({ error: "source_wallet_lookup_failed" }, 503);
     if (!wallet || wallet.status !== "active" || wallet.is_hot !== true || wallet.wallet_role !== "trading_hot") {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
     }
     if (wallet.chain !== route.chain) return json({ error: "wallet_route_chain_mismatch" }, 403);
+
+    // Read-only quotes can run without wallet approval; building an executable
+    // payload requires verified provenance plus explicit owner-scoped approval.
+    if (!quoteOnlyMode) {
+      if (wallet.data_quality_status !== "verified") {
+        return json({ error: "source_wallet_not_verified" }, 403);
+      }
+      const { data: approvedWallet, error: approvalError } = await supabase
+        .from("approved_wallets")
+        .select("id")
+        .eq("owner_id", wallet.owner_id)
+        .eq("wallet_id", wallet.id)
+        .eq("status", "approved")
+        .maybeSingle();
+      if (approvalError) return json({ error: "wallet_approval_lookup_failed" }, 503);
+      if (!approvedWallet) return json({ error: "source_wallet_not_approved" }, 403);
+    }
 
     if (body.mode === "flash_quote") {
       if (!isAtomicFlashRoute) {

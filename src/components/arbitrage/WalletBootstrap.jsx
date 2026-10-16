@@ -75,7 +75,7 @@ export default function WalletBootstrap() {
           const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
             body:{chains:required}
           })
-          if(error){let detail=error.message;try{const payload=await error.context?.json?.();if(payload?.error)detail=payload.error}catch{};throw new Error(detail)}
+          if(error){let detail=error.message;try{const payload=await error.context?.json?.();if(payload?.error)detail=payload.error}catch { /* Keep the original request error when the response body is unreadable. */ };throw new Error(detail)}
           if(active&&data?.wallets)setWallets(data.wallets)
         }
       }catch(e){
@@ -93,7 +93,7 @@ export default function WalletBootstrap() {
       const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
         body:{chains:['bnb','solana','ethereum','bitcoin','xrp']}
       })
-      if(error){let detail=error.message;try{const payload=await error.context?.json?.();if(payload?.error)detail=payload.error}catch{};throw new Error(detail)}
+      if(error){let detail=error.message;try{const payload=await error.context?.json?.();if(payload?.error)detail=payload.error}catch { /* Keep the original request error when the response body is unreadable. */ };throw new Error(detail)}
       if(!data?.ok)throw new Error(data?.error||'Wallet bootstrap failed')
       setWallets(data.wallets||[])
     }catch(e){setError(e.message||'Wallet bootstrap failed')}finally{setBusy(false)}
