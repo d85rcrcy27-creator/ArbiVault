@@ -250,75 +250,167 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
   return verifiedWallet
 }
 async function ensureBindings(userId:string,wallets:any[]){
- const botDefaults=[
-  {name:'ArbiVault Execution Bot',strategy:'liquidity_fragmentation',chains:['bnb','solana','xrp'],enabled:false,min_profit_threshold:0.50,max_gas_budget:0.01,max_trade_size:10000,slippage_tolerance:0.50,autonomy_enabled:true,autonomy_mode:'observe_only',requires_human_approval:false,max_autonomous_transaction:0,allowed_payment_methods:['crypto','stripe'],bot_role:'execution'},
-  {name:'ArbiVault Sync Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana','xrp'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'sync',allowed_payment_methods:['crypto','stripe']},
-  {name:'ArbiVault Payment Processing Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'payment',allowed_payment_methods:['crypto','stripe']}
- ]
- for(const spec of botDefaults){
-  const {data:existing,error:findError}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role',spec.bot_role).maybeSingle()
-  if(findError)throw findError
-  if(!existing){
-   const {data:created,error:createError}=await admin.from('bot_configs').insert({...spec,owner_id:userId}).select('id,bot_role,chains').single()
-   if(createError)throw createError
+  const botDefaults=[
+    {name:'ArbiVault Execution Bot',strategy:'liquidity_fragmentation',chains:['bnb','solana','xrp'],enabled:false,min_profit_threshold:0.50,max_gas_budget:0.01,max_trade_size:10000,slippage_tolerance:0.50,autonomy_enabled:true,autonomy_mode:'observe_only',requires_human_approval:false,max_autonomous_transaction:0,allowed_payment_methods:['crypto','stripe'],bot_role:'execution'},
+    {name:'ArbiVault Sync Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana','xrp'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'sync',allowed_payment_methods:['crypto','stripe']},
+    {name:'ArbiVault Payment Processing Bot',strategy:'global',chains:['bitcoin','ethereum','bnb','solana'],enabled:true,autonomy_enabled:true,autonomy_mode:'bounded',bot_role:'payment',allowed_payment_methods:['crypto','stripe']}
+  ]
+  for(const spec of botDefaults){
+    const {data:existing,error:findError}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role',spec.bot_role).maybeSingle()
+    if(findError)throw findError
+    if(!existing){
+      const {error:createError}=await admin.from('bot_configs').insert({...spec,owner_id:userId})
+      if(createError)throw createError
+    }
   }
- }
- const {data:bots,error:be}=await admin.from('bot_configs').select('id,bot_role,chains').eq('owner_id',userId).eq('bot_role','execution').maybeSingle()
- if(be)throw be
- const bot=bots
- if(!bot)throw new Error('execution_bot_not_initialized')
- for(const w of wallets){
-  const {data:binding}=await admin.from('bot_wallet_bindings').select('id').eq('owner_id',userId).eq('bot_config_id',bot.id).eq('wallet_id',w.id).eq('role','execution').maybeSingle()
-  if(!binding)await admin.from('bot_wallet_bindings').insert({owner_id:userId,bot_config_id:bot.id,wallet_id:w.id,role:'execution'})
-  const chain=w.chain
-  // Only create adapters for chains supported by the current internal-vault signer.
-  // Ethereum is not supported by the deployed signer and must not create a stale blocker row.
-  if(!['ethereum','bnb','solana','bitcoin'].includes(chain)) continue
-  const {data:adapter}=await admin.from('execution_adapters').select('id').eq('chain',chain).eq('allowed_wallet_id',w.id).eq('signer_provider','internal_vault').maybeSingle()
-  const allowedContracts = chain === 'ethereum'
-   ? [ETH_UNISWAP_V2_ROUTER]
-   : chain === 'bnb' ? [BSC_PANCAKE_V2_ROUTER] : []
-  const patch={configured:true,health_status:'healthy',read_only:false,signing_boundary:'internal_vault',can_broadcast:true,can_withdraw:false,automatic_signing:true,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v2',last_error:null,allowed_contracts:allowedContracts,updated_at:new Date().toISOString()}
-  if(adapter){
-   const {error:updateError}=await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
-   if(updateError)throw new Error('signer_adapter_refresh_failed')
-  }else{
-   const {error:insertError}=await admin.from('execution_adapters').insert({...patch,name:'ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer',adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_programs:[]})
-   if(insertError)throw new Error('signer_adapter_create_failed')
-  }
- }
 
- const walletByChain=new Map(wallets.map((w:any)=>[w.chain,w]))
- const {data:strategyBots,error:sbe}=await admin
-  .from('arbivault_strategy_bots')
-  .select('id')
-  .eq('owner_id',userId)
-  .eq('enabled',true)
-  .eq('execution_enabled',true)
- if(sbe)throw sbe
+  const {data:executionBot,error:executionBotError}=await admin.from('bot_configs').select('id,bot_role').eq('owner_id',userId).eq('bot_role','execution').maybeSingle()
+  if(executionBotError)throw executionBotError
+  if(!executionBot)throw new Error('execution_bot_not_initialized')
 
- for(const strategyBot of strategyBots||[]){
-  const {data:strategyRoutes,error:sre}=await admin
-   .from('arbivault_strategy_routes')
-   .select('chain')
-   .eq('strategy_bot_id',strategyBot.id)
-   .eq('enabled',true)
-  if(sre)throw sre
-  const chains=[...new Set((strategyRoutes||[]).map((r:any)=>r.chain))]
-  for(const chain of chains){
-   const wallet=walletByChain.get(chain)||null
-   const values={owner_id:userId,strategy_bot_id:strategyBot.id,chain,wallet_id:wallet?.id||null,purpose:'strategy_execution',status:wallet?'assigned':'unassigned',destination_policy:'approved_only',updated_at:new Date().toISOString()}
-   const {data:existing,error:ee}=await admin.from('arbivault_strategy_wallets').select('id').eq('strategy_bot_id',strategyBot.id).eq('chain',chain).maybeSingle()
-   if(ee)throw ee
-   if(existing?.id){
-    const {error:e}=await admin.from('arbivault_strategy_wallets').update(values).eq('id',existing.id)
-    if(e)throw e
-   }else{
-    const {error:e}=await admin.from('arbivault_strategy_wallets').insert(values)
-    if(e)throw e
-   }
+  // Rebind only after ensureWallet has read the stored secret back and derived
+  // the same address. Keep every adapter fail-closed; verification is not approval.
+  for(const wallet of wallets){
+    const chain=wallet.chain
+    const {data:chainWallets,error:chainWalletError}=await admin.from('wallets')
+      .select('id')
+      .eq('owner_id',userId)
+      .eq('chain',chain)
+      .eq('wallet_role','trading_hot')
+    if(chainWalletError)throw new Error('chain_wallet_lookup_failed')
+    const chainWalletIds=(chainWallets||[]).map((row:any)=>row.id)
+    if(chainWalletIds.length){
+      const {error:disableError}=await admin.from('execution_adapters').update({
+        configured:false,
+        automatic_signing:false,
+        can_broadcast:false,
+        read_only:true,
+        health_status:'unconfigured',
+        last_error:'awaiting_explicit_wallet_approval_and_protocol_allowlist',
+        updated_at:new Date().toISOString()
+      }).in('allowed_wallet_id',chainWalletIds)
+      if(disableError)throw new Error('chain_adapters_fail_closed_update_failed')
+    }
+
+    const {data:executionBindings,error:bindingError}=await admin.from('bot_wallet_bindings')
+      .select('id,wallet_id,bot_config_id')
+      .eq('owner_id',userId)
+      .eq('bot_config_id',executionBot.id)
+      .eq('role','execution')
+    if(bindingError)throw new Error('bot_wallet_binding_lookup_failed')
+    const existingBoundIds=[...new Set((executionBindings||[]).map((row:any)=>row.wallet_id).filter(Boolean))]
+    let existingBoundWallets:any[]=[]
+    if(existingBoundIds.length){
+      const {data,error}=await admin.from('wallets').select('id,chain').in('id',existingBoundIds)
+      if(error)throw new Error('bound_wallet_chain_lookup_failed')
+      existingBoundWallets=data||[]
+    }
+    const boundWalletById=new Map(existingBoundWallets.map((row:any)=>[row.id,row]))
+    const sameChainBindings=(executionBindings||[]).filter((row:any)=>boundWalletById.get(row.wallet_id)?.chain===chain)
+    for(const binding of sameChainBindings){
+      if(binding.wallet_id!==wallet.id){
+        const {error}=await admin.from('bot_wallet_bindings').update({wallet_id:wallet.id}).eq('id',binding.id).eq('owner_id',userId)
+        if(error)throw new Error('verified_bot_wallet_rebind_failed')
+      }
+    }
+    if(sameChainBindings.length===0){
+      const {error}=await admin.from('bot_wallet_bindings').insert({owner_id:userId,bot_config_id:executionBot.id,wallet_id:wallet.id,role:'execution'})
+      if(error)throw new Error('verified_bot_wallet_binding_create_failed')
+    }
+
+    const adapterType=chain==='solana'?'solana_program':chain==='bitcoin'?'bitcoin_psbt':'dex_router'
+    if(!['ethereum','bnb','solana','bitcoin'].includes(chain))continue
+    const allowedContracts=chain==='ethereum'
+      ? [ETH_UNISWAP_V2_ROUTER]
+      : chain==='bnb' ? [BSC_PANCAKE_V2_ROUTER] : []
+    const {data:adapter,error:adapterLookupError}=await admin.from('execution_adapters')
+      .select('id')
+      .eq('chain',chain)
+      .eq('allowed_wallet_id',wallet.id)
+      .eq('signer_provider','internal_vault')
+      .limit(1)
+      .maybeSingle()
+    if(adapterLookupError)throw new Error('signer_adapter_lookup_failed')
+    const safeAdapterPatch={
+      configured:false,
+      health_status:'unconfigured',
+      read_only:true,
+      signing_boundary:'internal_vault',
+      can_broadcast:false,
+      can_withdraw:false,
+      automatic_signing:false,
+      allowed_wallet_id:wallet.id,
+      signer_key_ref:wallet.address,
+      policy_version:'arbivault-internal-v3-pending-approval',
+      last_error:'awaiting_explicit_wallet_approval_and_protocol_allowlist',
+      allowed_contracts:allowedContracts,
+      allowed_programs:[],
+      adapter_type:adapterType,
+      updated_at:new Date().toISOString()
+    }
+    if(adapter){
+      const {error}=await admin.from('execution_adapters').update(safeAdapterPatch).eq('id',adapter.id)
+      if(error)throw new Error('signer_adapter_safe_update_failed')
+    }else{
+      const {error}=await admin.from('execution_adapters').insert({
+        ...safeAdapterPatch,
+        name:'ArbiVault '+chain.toUpperCase()+' Internal Vault Signer',
+        endpoint:'supabase://arbivault-signer',
+        chain,
+        signer_provider:'internal_vault',
+        max_transaction_value:0
+      })
+      if(error)throw new Error('signer_adapter_create_failed')
+    }
+
+    // Update existing strategy bindings to the verified intended wallet for this
+    // chain only. No wallet or strategy binding is changed for blocked chains.
+    const {error:strategyBindingError}=await admin.from('arbivault_strategy_wallets').update({
+      wallet_id:wallet.id,
+      status:'assigned',
+      purpose:'strategy_execution',
+      destination_policy:'approved_only',
+      updated_at:new Date().toISOString()
+    }).eq('owner_id',userId).eq('chain',chain).eq('purpose','strategy_execution')
+    if(strategyBindingError)throw new Error('verified_strategy_wallet_rebind_failed')
   }
- }
- return bot
+  return executionBot
 }
-Deno.serve(async(req)=>{if(req.method==='OPTIONS')return new Response('ok',{status:200,headers:corsHeaders});if(req.method!=='POST')return json({error:'method_not_allowed'},405);try{const client=auth(req),{data:{user},error}=await client.auth.getUser();if(error||!user)return json({error:'authentication_required'},401);const body=await req.json().catch(()=>({}));const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin','xrp'];const chains=['bnb','solana','ethereum','bitcoin','xrp'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'ethereum'|'bitcoin'|'xrp')[];const wallets=[];for(const chain of chains)wallets.push(await ensureWallet(user.id,chain));const bot=await ensureBindings(user.id,wallets);return json({ok:true,wallets,bot:{id:bot.id,role:bot.bot_role},signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},201)}catch(e){return json({error:e instanceof Error?e.message:'wallet_bootstrap_failed'},500)}})
+Deno.serve(async(req)=>{
+  if(req.method==='OPTIONS')return new Response('ok',{status:200,headers:corsHeaders})
+  if(req.method!=='POST')return json({error:'method_not_allowed'},405)
+  try{
+    const client=auth(req)
+    const {data:{user},error}=await client.auth.getUser()
+    if(error||!user)return json({error:'authentication_required'},401)
+    const body=await req.json().catch(()=>({}))
+    const requested=Array.isArray(body.chains)?body.chains:['bnb','solana','ethereum','bitcoin','xrp']
+    const chains=['bnb','solana','ethereum','bitcoin','xrp'].filter(x=>requested.includes(x)) as ('bnb'|'solana'|'bitcoin'|'ethereum'|'xrp')[]
+    const wallets:any[]=[]
+    const blockedChains:{chain:string,error:string}[]=[]
+    for(const chain of chains){
+      try{
+        wallets.push(await ensureWallet(user.id,chain))
+      }catch(error){
+        blockedChains.push({chain,error:error instanceof Error?error.message:'wallet_verification_failed'})
+      }
+    }
+    if(wallets.length===0){
+      return json({ok:false,wallets:[],blocked_chains:blockedChains,signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false}},409)
+    }
+    const bot=await ensureBindings(user.id,wallets)
+    const safeWallets=wallets.map(({id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,data_quality_status,verification_source,derivation_path}:any)=>({
+      id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,data_quality_status,verification_source,derivation_path
+    }))
+    return json({
+      ok:blockedChains.length===0,
+      partial:blockedChains.length>0,
+      wallets:safeWallets,
+      blocked_chains:blockedChains,
+      bot:{id:bot.id,role:bot.bot_role},
+      signer:{provider:'internal_vault',custody:'server_vault',turnkey_required:false,adapter_broadcast_enabled:false}
+    },blockedChains.length>0?207:200)
+  }catch(error){
+    return json({error:error instanceof Error?error.message:'wallet_bootstrap_failed'},500)
+  }
+})
