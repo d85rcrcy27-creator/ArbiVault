@@ -776,10 +776,15 @@ export default {
           let flashQuote: any = null
           let flashBuild: any = null
           let builderError: string | null = null
+          const chainFlashExecutorReady = executionRoute.chain === 'bnb'
+            ? flashExecutorDiagnostic?.bnb?.ready_for_flash_transaction_test === true
+            : executionRoute.chain === 'ethereum'
+              ? flashExecutorDiagnostic?.ethereum?.ready_for_flash_transaction_test === true
+              : false
           const multiLegBuilderConfigured =
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
             executionRoute.builder_enabled === true &&
-            flashExecutorDiagnostic?.ready_for_flash_transaction_test === true
+            chainFlashExecutorReady
           if (wallet && executionRoute.route_type === 'dex_cex') {
             try {
               // Still collect a live DEX-side quote when the CEX order adapter is
@@ -844,7 +849,7 @@ export default {
 
               if (
                 flashQuote.profitable === true &&
-                flashExecutorDiagnostic?.ready_for_flash_transaction_test === true &&
+                chainFlashExecutorReady &&
                 flashQuote.best?.executor_configured === true &&
                 Array.isArray(flashQuote.best?.data) &&
                 flashQuote.best.data.length === 2
