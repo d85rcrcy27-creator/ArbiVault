@@ -6,6 +6,11 @@ on:
     paths:
       - "package.json"
       - ".github/workflows/refresh-maintenance-lockfile.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "package.json"
+      - ".github/workflows/refresh-maintenance-lockfile.yml"
 
 permissions:
   contents: write
@@ -17,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -37,4 +42,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pnpm-lock.yaml
           git commit -m "chore(lockfile): sync maintenance dependencies"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
