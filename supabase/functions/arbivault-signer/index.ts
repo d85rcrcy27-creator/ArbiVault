@@ -246,10 +246,10 @@ Deno.serve(async (req) => {
 
     const { data: wallet, error: we } = await supabase
       .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
       .eq("id", walletId)
       .maybeSingle();
-    if (we) return json({ error: we.message }, 500);
+    if (we) return json({ error: "source_wallet_lookup_failed" }, 503);
     if (
       !wallet ||
       wallet.status !== "active" ||
@@ -258,6 +258,24 @@ Deno.serve(async (req) => {
       wallet.chain !== chain
     ) {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
+    }
+
+    // A hot wallet is not execution-eligible solely because its row is active.
+    // Require verified provenance and an explicit, owner-scoped approval before
+    // any signing or broadcast. Missing/ revoked approvals fail closed.
+    if (wallet.data_quality_status !== "verified") {
+      return json({ error: "source_wallet_not_verified" }, 403);
+    }
+    const { data: approvedWallet, error: approvalError } = await supabase
+      .from("approved_wallets")
+      .select("id")
+      .eq("owner_id", wallet.owner_id)
+      .eq("wallet_id", wallet.id)
+      .eq("status", "approved")
+      .maybeSingle();
+    if (approvalError) return json({ error: "wallet_approval_lookup_failed" }, 503);
+    if (!approvedWallet) {
+      return json({ error: "source_wallet_not_approved" }, 403);
     }
 
     if (chain === "bnb" || chain === "ethereum") {
