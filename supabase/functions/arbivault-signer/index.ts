@@ -163,6 +163,15 @@ function decode64(v: string) {
   return Uint8Array.from(atob(v), c => c.charCodeAt(0));
 }
 
+function solanaProgramAllowlist(adapter: any, programIds: string[]) {
+  const allowed = Array.isArray(adapter?.allowed_programs)
+    ? adapter.allowed_programs.map((value: unknown) => String(value))
+    : [];
+  // Empty allowlists are not interpreted as unrestricted access.
+  return allowed.length > 0 && programIds.length > 0 &&
+    programIds.every((programId) => !!programId && allowed.includes(programId));
+}
+
 async function rotateFlaggedWallet(walletId: string) {
   const token = (await supabase.rpc("get_bot_cron_token")).data;
   if (!token) return { ok: false, error: "rotation_auth_unavailable" };
@@ -227,21 +236,26 @@ Deno.serve(async (req) => {
       .eq("id", adapterId)
       .maybeSingle();
     if (ae) return json({ error: ae.message }, 500);
+    // Provider selection is chain-specific. EVM and Bitcoin currently use
+    // the internal vault; Solana uses Turnkey. Never silently cross provider
+    // boundaries just because an adapter row is configured.
+    const expectedSignerProvider = chain === "solana" ? "turnkey" : "internal_vault";
     if (
       !adapter ||
       adapter.configured !== true ||
       adapter.automatic_signing !== true ||
       adapter.can_broadcast !== true ||
-      adapter.signer_provider !== "internal_vault"
+      adapter.read_only === true ||
+      adapter.signer_provider !== expectedSignerProvider
     ) {
-      return json({ error: "adapter_not_authorized" }, 403);
+      return json({ error: "adapter_signer_provider_not_authorized", expected_provider: expectedSignerProvider }, 403);
     }
 
     if (
       adapter.allowed_wallet_id !== walletId ||
-      adapter.signing_boundary !== "internal_vault"
+      adapter.signing_boundary !== expectedSignerProvider
     ) {
-      return json({ error: "wallet_not_bound_to_internal_signer" }, 403);
+      return json({ error: "wallet_not_bound_to_expected_signer" }, 403);
     }
 
     const { data: wallet, error: we } = await supabase
@@ -389,7 +403,7 @@ Deno.serve(async (req) => {
       return json({
         ok: true,
         signing_request_id: requestRow.id,
-        provider: "internal_vault",
+        provider: adapter.signer_provider,
         chain,
         mode,
         tx_hash: String(latestBeforeSigning.tx_hash),
@@ -645,6 +659,12 @@ Deno.serve(async (req) => {
         ) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
+        const programIds = (message?.compiledInstructions || []).map((instruction: any) =>
+          staticKeys[instruction.programIdIndex]?.toBase58() || ""
+        );
+        if (!solanaProgramAllowlist(adapter, programIds)) {
+          return json({ error: "solana_program_not_allowlisted_or_lookup_unresolved" }, 403);
+        }
         const signedVersioned = await turnkeySigner.signTransaction(versioned, wallet.address) as VersionedTransaction;
         if (!signedVersioned.signatures?.length || signedVersioned.signatures.every((sig: Uint8Array) => sig.every((byte) => byte === 0))) {
           return json({ error: "turnkey_solana_signature_missing" }, 502);
@@ -659,6 +679,10 @@ Deno.serve(async (req) => {
         }
         if (!legacy.feePayer || legacy.feePayer.toBase58() !== wallet.address) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
+        }
+        const programIds = legacy.instructions.map((instruction: any) => instruction.programId.toBase58());
+        if (!solanaProgramAllowlist(adapter, programIds)) {
+          return json({ error: "solana_program_not_allowlisted" }, 403);
         }
         const signedLegacy = await turnkeySigner.signTransaction(legacy, wallet.address) as Transaction;
         const signature = signedLegacy.signatures.find((item: any) => item.publicKey.toBase58() === wallet.address)?.signature;
