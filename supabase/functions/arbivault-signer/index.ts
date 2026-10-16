@@ -4,9 +4,30 @@ import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
 import { ECPairFactory } from "npm:ecpair@3.0.0";
-import { VersionedTransaction, Transaction, Keypair } from "npm:@solana/web3.js@1.98.4";
+import { VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
+import { Turnkey } from "npm:@turnkey/sdk-server@1.5.0";
+import { TurnkeySigner } from "npm:@turnkey/solana@1.0.0";
 
 const ECPair = ECPairFactory(ecc);
+
+function createTurnkeySolanaSigner() {
+  const apiPublicKey = Deno.env.get("TURNKEY_API_PUBLIC_KEY") || "";
+  const apiPrivateKey = Deno.env.get("TURNKEY_API_PRIVATE_KEY") || "";
+  const organizationId = Deno.env.get("TURNKEY_ORGANIZATION_ID") || "";
+  if (!apiPublicKey || !apiPrivateKey || !organizationId) {
+    throw new Error("turnkey_solana_signer_not_configured");
+  }
+  const turnkey = new Turnkey({
+    apiBaseUrl: "https://api.turnkey.com",
+    apiPublicKey,
+    apiPrivateKey,
+    defaultOrganizationId: organizationId,
+  });
+  return new TurnkeySigner({
+    client: turnkey.apiClient() as any,
+    organizationId,
+  });
+}
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -363,7 +384,7 @@ Deno.serve(async (req) => {
       return json({ error: "signing_request_already_claimed_or_not_authorized", signing_blocked: true }, 409);
     }
 
-    const sv = await getSecret(walletId);
+    const sv = chain === "solana" ? "" : await getSecret(walletId);
     let signed = "";
 
     if (chain === "bnb" || chain === "ethereum") {
@@ -588,31 +609,29 @@ Deno.serve(async (req) => {
       signed = await account.signTransaction(tx);
     } else if (chain === "solana") {
       const raw = decode64(unsigned);
-      const secretBytes = Uint8Array.from((sv.match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
-      const kp = Keypair.fromSecretKey(secretBytes);
-      if (kp.publicKey.toBase58() !== wallet.address) {
-        return json({ error: "signer_secret_address_mismatch" }, 403);
-      }
-
       let versioned: VersionedTransaction | null = null;
       try {
         versioned = VersionedTransaction.deserialize(raw);
       } catch {
         versioned = null;
       }
+      const turnkeySigner = createTurnkeySolanaSigner();
       if (versioned) {
         const message: any = versioned.message;
         const required = Number(message?.header?.numRequiredSignatures || 0);
         const staticKeys: any[] = message?.staticAccountKeys || [];
         if (
           required < 1 ||
-          !staticKeys[0]?.equals(kp.publicKey) ||
-          !staticKeys.slice(0, required).some((key: any) => key.equals(kp.publicKey))
+          staticKeys[0]?.toBase58() !== wallet.address ||
+          !staticKeys.slice(0, required).some((key: any) => key.toBase58() === wallet.address)
         ) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
-        versioned.sign([kp]);
-        signed = btoa(String.fromCharCode(...versioned.serialize()));
+        const signedVersioned = await turnkeySigner.signTransaction(versioned, wallet.address) as VersionedTransaction;
+        if (!signedVersioned.signatures?.length || signedVersioned.signatures.every((sig: Uint8Array) => sig.every((byte) => byte === 0))) {
+          return json({ error: "turnkey_solana_signature_missing" }, 502);
+        }
+        signed = btoa(String.fromCharCode(...signedVersioned.serialize()));
       } else {
         let legacy: Transaction;
         try {
@@ -620,11 +639,15 @@ Deno.serve(async (req) => {
         } catch {
           return json({ error: "solana_transaction_decode_failed" }, 400);
         }
-        if (!legacy.feePayer || !legacy.feePayer.equals(kp.publicKey)) {
+        if (!legacy.feePayer || legacy.feePayer.toBase58() !== wallet.address) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
-        legacy.partialSign(kp);
-        signed = btoa(String.fromCharCode(...legacy.serialize()));
+        const signedLegacy = await turnkeySigner.signTransaction(legacy, wallet.address) as Transaction;
+        const signature = signedLegacy.signatures.find((item: any) => item.publicKey.toBase58() === wallet.address)?.signature;
+        if (!signature || signature.every((byte: number) => byte === 0)) {
+          return json({ error: "turnkey_solana_signature_missing" }, 502);
+        }
+        signed = btoa(String.fromCharCode(...signedLegacy.serialize()));
       }
     } else {
       const psbt = bitcoin.Psbt.fromBase64(unsigned, { network: bitcoin.networks.bitcoin });
