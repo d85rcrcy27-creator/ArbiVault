@@ -263,7 +263,7 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
   // is safer than knowingly leaving intermediate WSOL unaccounted for.
   const secondInputRaw = String(first.outAmount);
   if (
-    !/^\\d+$/.test(secondInputRaw) ||
+    !/^\d+$/.test(secondInputRaw) ||
     BigInt(secondInputRaw) <= 0n ||
     BigInt(String(first.otherAmountThreshold)) <= 0n ||
     BigInt(String(first.otherAmountThreshold)) > BigInt(secondInputRaw)
