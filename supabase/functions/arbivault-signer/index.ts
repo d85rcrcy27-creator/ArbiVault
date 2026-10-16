@@ -242,6 +242,7 @@ Deno.serve(async (req) => {
     const expectedSignerProvider = chain === "solana" ? "turnkey" : "internal_vault";
     if (
       !adapter ||
+      adapter.chain !== chain ||
       adapter.configured !== true ||
       adapter.automatic_signing !== true ||
       adapter.can_broadcast !== true ||
