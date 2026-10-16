@@ -36,3 +36,5 @@ jobs:
         run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
       - name: Type-check signer
         run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-signer/index.ts
+      - name: Type-check Jupiter flashloan preflight
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
