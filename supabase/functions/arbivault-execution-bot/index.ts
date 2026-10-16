@@ -582,14 +582,16 @@ export default {
 
     // These adapters are signing/broadcast boundaries, not exchange trading venues.
     const signerAdapters = (adapters || []).filter((adapter: any) => {
-      const expectedProvider = adapter.chain === 'solana' ? 'turnkey' : 'internal_vault'
+      const supportedProviders = adapter.chain === 'solana'
+        ? ['internal_vault', 'turnkey']
+        : ['internal_vault']
       return adapter.health_status === 'healthy' &&
         adapter.configured === true &&
         adapter.automatic_signing === true &&
         adapter.can_broadcast === true &&
         adapter.read_only === false &&
-        adapter.signer_provider === expectedProvider &&
-        adapter.signing_boundary === expectedProvider &&
+        supportedProviders.includes(adapter.signer_provider) &&
+        adapter.signing_boundary === adapter.signer_provider &&
         !!adapter.allowed_wallet_id
     })
     const cexExecutionAdapters = (adapters || []).filter((adapter: any) =>
@@ -882,11 +884,19 @@ export default {
             }
           }
 
+          const requiredAdapterTypes = executionRoute.route_type === 'flash_liquidity'
+            ? ['evm_flash_atomic', 'custom']
+            : executionRoute.chain === 'solana'
+              ? ['solana_program', 'custom']
+              : executionRoute.chain === 'bitcoin'
+                ? ['bitcoin_psbt', 'custom']
+                : ['dex_router', 'custom']
           const executionAdapter = wallet
             ? signerAdapters.find((adapter: any) =>
                 adapter.allowed_wallet_id === wallet.id &&
                 adapter.chain === executionRoute.chain &&
-                adapter.automatic_signing === true
+                adapter.automatic_signing === true &&
+                requiredAdapterTypes.includes(adapter.adapter_type)
               ) || null
             : null
           const executionAdapterConfigured = !!executionAdapter
