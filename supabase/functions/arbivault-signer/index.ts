@@ -748,14 +748,33 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Atomically claim the authorization before broadcasting. Two concurrent
+    // workers may both reach this point, but only one can transition authorized
+    // -> signed and therefore only one may broadcast this signing request.
+    const signingClaimAt = new Date().toISOString();
+    const { data: claimedRequest, error: claimError } = await supabase
+      .from("signing_requests")
+      .update({ status: "signed", signed_at: signingClaimAt })
+      .eq("id", requestRow.id)
+      .eq("status", "authorized")
+      .select("id")
+      .maybeSingle();
+
+    if (claimError) {
+      return json({ error: "signing_request_claim_failed", signing_blocked: true, broadcast_attempted: false }, 503);
+    }
+    if (!claimedRequest) {
+      return json({ error: "signing_request_claimed_by_another_worker", signing_blocked: true, broadcast_attempted: false }, 409);
+    }
+
     const txHash = await broadcastSigned(chain, signed);
     const broadcastAt = new Date().toISOString();
 
     const { error: markError } = await supabase
       .from("signing_requests")
-      .update({ status: "broadcast", signed_at: now, broadcast_at: broadcastAt, tx_hash: txHash })
+      .update({ status: "broadcast", signed_at: signingClaimAt, broadcast_at: broadcastAt, tx_hash: txHash })
       .eq("id", requestRow.id)
-      .eq("status", "authorized");
+      .eq("status", "signed");
 
     if (markError) {
       // The network broadcast already succeeded. Persist the execution attempt too,
