@@ -99,5 +99,11 @@
     "typescript": "^5.9.3",
     "vite": "^8.3.4",
     "tailwindcss-animate": "^1.0.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "source-map-js": "^1.2.2",
+      "postcss-selector-parser": "^7.1.6"
+    }
   }
 }
