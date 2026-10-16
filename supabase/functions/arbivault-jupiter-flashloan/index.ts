@@ -28,7 +28,6 @@ const SOL_DECIMALS = 9;
 const MIN_SIMULATION_USDC_RAW = 1_000_000n;       // 1 USDC
 const MAX_SIMULATION_USDC_RAW = 100_000_000n;     // 100 USDC
 const MAX_SLIPPAGE_BPS = 100;
-const MAX_PRICE_IMPACT_FRACTION = 0.05;           // 5%, Jupiter reports a fraction
 const MAX_COMPUTE_UNITS = 1_400_000;
 
 type ApiInstruction = {
@@ -43,14 +42,16 @@ type JupiterBuild = {
   inAmount: string;
   outAmount: string;
   otherAmountThreshold: string;
-  priceImpactPct?: string;
+  swapMode?: string;
+  slippageBps?: number;
+  computeBudgetInstructions?: ApiInstruction[];
   setupInstructions: ApiInstruction[];
   swapInstruction: ApiInstruction;
   cleanupInstruction: ApiInstruction | null;
   otherInstructions: ApiInstruction[];
   tipInstruction: ApiInstruction | null;
   addressesByLookupTableAddress: Record<string, string[]> | null;
-  blockhashWithMetadata: { blockhash: string; lastValidBlockHeight: number | string };
+  blockhashWithMetadata: { blockhash: number[]; lastValidBlockHeight: number };
 };
 
 const json = (value: unknown, status = 200) => Response.json(value, {
@@ -206,8 +207,11 @@ async function getJupiterBuild(
     !Array.isArray(body.setupInstructions) ||
     !body.swapInstruction ||
     !body.blockhashWithMetadata ||
-    typeof body.blockhashWithMetadata.blockhash !== "string" ||
-    !Number.isFinite(Number(body.blockhashWithMetadata.lastValidBlockHeight))
+    !Array.isArray(body.blockhashWithMetadata.blockhash) ||
+    body.blockhashWithMetadata.blockhash.some((byte: unknown) =>
+      typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 255
+    ) ||
+    !Number.isSafeInteger(Number(body.blockhashWithMetadata.lastValidBlockHeight))
   ) {
     throw new Error("jupiter_build_response_invalid");
   }
@@ -223,14 +227,10 @@ async function getJupiterBuild(
   ) {
     throw new Error("jupiter_unreviewed_extra_instruction_blocked");
   }
-  const rawImpact = body.priceImpactPct ?? body.routerResult?.priceImpactPct;
-  if (rawImpact === undefined || rawImpact === null) {
-    throw new Error("jupiter_price_impact_missing");
-  }
-  const impact = Number(rawImpact);
-  if (!Number.isFinite(impact) || impact < 0 || impact > MAX_PRICE_IMPACT_FRACTION) {
-    throw new Error("jupiter_price_impact_out_of_bounds");
-  }
+  // Jupiter's documented /build response guarantees quote output and the
+  // minimum output threshold, but not a distinct priceImpactPct field. This
+  // preflight screens the actual quoted round-trip outputs and enforces the
+  // slippage bound instead of treating a missing impact value as zero.
   return body as JupiterBuild;
 }
 
@@ -303,9 +303,9 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
     ? [fromApiInstruction(second.cleanupInstruction)]
     : [];
   const lookupTables = await loadLookupTables(connection, [first, second]);
-  const blockhashBytes = bs58.decode(first.blockhashWithMetadata.blockhash);
+  const blockhashBytes = Uint8Array.from(first.blockhashWithMetadata.blockhash);
   if (blockhashBytes.length !== 32) throw new Error("jupiter_blockhash_invalid");
-  const blockhash = first.blockhashWithMetadata.blockhash;
+  const blockhash = bs58.encode(Buffer.from(blockhashBytes));
   const instructions = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNITS }),
     ...setupInstructions,
@@ -370,8 +370,9 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
       estimated_network_fee_usdc_raw: estimatedNetworkFeeUsdcRaw?.toString() ?? null,
       estimated_net_profit_usdc_raw: netProfitRaw?.toString() ?? null,
       profitable_after_estimated_fee: netProfitable,
-      price_impact_fraction_first_leg: first.priceImpactPct ?? null,
-      price_impact_fraction_second_leg: second.priceImpactPct ?? null,
+      price_impact_fraction_first_leg: null,
+      price_impact_fraction_second_leg: null,
+      price_impact_note: "Jupiter /build response does not guarantee a separate priceImpactPct field; quoted outputs and minimum-output thresholds are used for screening.",
     },
     simulation: {
       ok: simulationOk,
@@ -466,8 +467,6 @@ Deno.serve(async (req: Request) => {
       "jupiter_build_response_invalid",
       "jupiter_unreviewed_extra_instruction_blocked",
       "jupiter_output_threshold_invalid",
-      "jupiter_price_impact_out_of_bounds",
-      "jupiter_price_impact_missing",
       "jupiter_blockhash_invalid",
       "jupiter_lookup_table_not_found_on_chain",
       "jupiter_lookup_table_deactivated",
