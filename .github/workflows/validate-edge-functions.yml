@@ -26,8 +26,8 @@ jobs:
           deno-version: v2.x
       - name: Type-check modified execution functions
         run: |
-          deno check --no-lock supabase/functions/arbivault-signer/index.ts
-          deno check --no-lock supabase/functions/arbivault-transaction-builder/index.ts
-          deno check --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
-          deno check --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
-          deno check --no-lock supabase/functions/arbivault-execution-bot/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-signer/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-transaction-builder/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-execution-bot/index.ts
