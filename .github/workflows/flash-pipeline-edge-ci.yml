@@ -6,12 +6,14 @@ on:
       - "supabase/functions/arbivault-transaction-builder/index.ts"
       - "supabase/functions/arbivault-flash-loan-strategy/index.ts"
       - "supabase/functions/arbivault-signer/index.ts"
+      - "supabase/functions/arbivault-jupiter-flashloan/index.ts"
       - ".github/workflows/flash-pipeline-edge-ci.yml"
   pull_request:
     paths:
       - "supabase/functions/arbivault-transaction-builder/index.ts"
       - "supabase/functions/arbivault-flash-loan-strategy/index.ts"
       - "supabase/functions/arbivault-signer/index.ts"
+      - "supabase/functions/arbivault-jupiter-flashloan/index.ts"
       - ".github/workflows/flash-pipeline-edge-ci.yml"
 
 permissions:
