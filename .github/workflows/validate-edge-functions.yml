@@ -31,3 +31,4 @@ jobs:
           deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-flash-loan-strategy/index.ts
           deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
           deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-execution-bot/index.ts
+          deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-wallet-bootstrap/index.ts
