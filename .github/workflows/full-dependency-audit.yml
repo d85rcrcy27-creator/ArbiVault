@@ -1,0 +1,36 @@
+name: Full dependency security audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/full-dependency-audit.yml"
+  push:
+    branches: ["chore/upgrade-vite-8-3-4"]
+    paths:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/full-dependency-audit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  audit-all-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.34.0"
+          run_install: false
+      - name: Install from committed lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Audit production and development dependency trees
+        run: pnpm audit
