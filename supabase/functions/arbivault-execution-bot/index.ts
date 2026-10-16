@@ -796,8 +796,12 @@ export default {
 
           if (executionRoute.route_type === 'flash_liquidity') {
             try {
-              if (executionRoute.chain !== 'bnb' || executionRoute.pair !== 'BNB/USDT') {
-                throw new Error('flash_live_quote_route_not_supported')
+              const flashSourceWalletId = wallet?.id
+              if (!flashSourceWalletId) throw new Error('flash_source_wallet_unavailable')
+              const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
+              const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
+              if (!isBnbFlash && !isEthereumFlash) {
+                throw new Error('flash_pair_chain_protocol_mismatch')
               }
               if (strategyBot?.flash_loan_enabled !== true) {
                 throw new Error('flash_loan_strategy_disabled')
@@ -811,11 +815,6 @@ export default {
                 ? configuredNotional
                 : 100
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
-              const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
-              const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
-              if (!isBnbFlash && !isEthereumFlash) {
-                throw new Error('flash_pair_chain_protocol_mismatch')
-              }
               const flashLoanAsset = isBnbFlash
                 ? '0x55d398326f99059fF775485246999027B3197955' // BSC USDT (18 decimals)
                 : '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48' // Ethereum USDC (6 decimals)
