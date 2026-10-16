@@ -574,13 +574,24 @@ export default {
 
         const wallets = await supabase
           .from('wallets')
-          .select('id,chain,address,status,is_hot,wallet_role')
+          .select('id,chain,address,status,is_hot,wallet_role,data_quality_status')
           .eq('owner_id', bot.owner_id)
           .eq('status', 'active')
           .eq('is_hot', true)
           .eq('wallet_role', 'trading_hot')
 
         if (wallets.error) throw wallets.error
+
+        const { data: approvedWalletRows, error: approvedWalletError } = await supabase
+          .from('approved_wallets')
+          .select('wallet_id')
+          .eq('owner_id', bot.owner_id)
+          .eq('status', 'approved')
+        if (approvedWalletError) throw approvedWalletError
+        const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
+        const executionEligibleWallets = (executionEligibleWallets).filter((wallet: any) =>
+          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+        )
 
         const flashRouteDiagnostics = (routes || [])
           .filter((candidate: any) =>
