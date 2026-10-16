@@ -211,7 +211,16 @@ async function getJupiterBuild(
   ) {
     throw new Error("jupiter_build_response_invalid");
   }
-  if ((body.otherInstructions || []).length > 0 || body.tipInstruction) {
+  const outputAmount = BigInt(String(body.outAmount));
+  const minimumOutput = BigInt(String(body.otherAmountThreshold));
+  if (outputAmount <= 0n || minimumOutput <= 0n || minimumOutput > outputAmount) {
+    throw new Error("jupiter_output_threshold_invalid");
+  }
+  if (
+    (body.otherInstructions !== undefined && !Array.isArray(body.otherInstructions)) ||
+    (body.otherInstructions || []).length > 0 ||
+    body.tipInstruction
+  ) {
     throw new Error("jupiter_unreviewed_extra_instruction_blocked");
   }
   const rawImpact = body.priceImpactPct ?? body.routerResult?.priceImpactPct;
@@ -456,6 +465,7 @@ Deno.serve(async (req: Request) => {
       "solana_rpc_not_mainnet",
       "jupiter_build_response_invalid",
       "jupiter_unreviewed_extra_instruction_blocked",
+      "jupiter_output_threshold_invalid",
       "jupiter_price_impact_out_of_bounds",
       "jupiter_price_impact_missing",
       "jupiter_blockhash_invalid",
