@@ -245,9 +245,17 @@ async function simulateRoundTrip(walletAddress: string, amountRaw: string, slipp
   }
 
   const first = await getJupiterBuild(USDC_MINT, WSOL_MINT, amountRaw, signer, slippageBps);
-  const secondInputRaw = String(first.otherAmountThreshold);
-  if (!/^\d+$/.test(secondInputRaw) || BigInt(secondInputRaw) <= 0n) {
-    throw new Error("jupiter_first_leg_minimum_output_invalid");
+  // Use the first leg's quoted output as the exact second-leg input. If
+  // actual output falls below this, the entire Solana transaction reverts; this
+  // is safer than knowingly leaving intermediate WSOL unaccounted for.
+  const secondInputRaw = String(first.outAmount);
+  if (
+    !/^\\d+$/.test(secondInputRaw) ||
+    BigInt(secondInputRaw) <= 0n ||
+    BigInt(String(first.otherAmountThreshold)) <= 0n ||
+    BigInt(String(first.otherAmountThreshold)) > BigInt(secondInputRaw)
+  ) {
+    throw new Error("jupiter_first_leg_quote_invalid");
   }
   const second = await getJupiterBuild(WSOL_MINT, USDC_MINT, secondInputRaw, signer, slippageBps);
   const feeQuote = await getJupiterBuild(
