@@ -17,6 +17,8 @@ export default function VerificationDashboard({ routes = [], marketSnapshot = []
   const quoteCount = marketSnapshot.reduce((sum, item) => sum + Number(item.quote_count || 0), 0)
   const rpcReady = chainRpcHealth.length > 0 && chainRpcHealth.every((item) => item.ok === true)
   const signerReady = signerHealth.length > 0 && signerHealth.every((item) => item.healthy === true)
+  const signerBlockers = signerHealth.filter((item) => item.healthy !== true).map((item) => `${String(item.chain || 'unknown').toUpperCase()}: ${String(item.reason || 'health_not_verified').replaceAll('_', ' ')}`)
+  const bscMainnetHealth = chainRpcHealth.find((item) => item.chain === 'bnb')
   const hasQuotes = marketSnapshot.length > 0 && marketSnapshot.every((item) => Array.isArray(item.quotes) && item.quotes.length > 0)
   const handleRefresh = async () => {
     if (!onRefresh || refreshing) return
@@ -33,8 +35,8 @@ export default function VerificationDashboard({ routes = [], marketSnapshot = []
         <div className="mb-1 font-mono text-[0.58rem] uppercase tracking-wider text-[#8a90b0]">Connection checks</div>
         <CheckRow label="Market quotes" state={hasQuotes ? 'pass' : 'check'} detail={hasQuotes ? `${marketSnapshot.length} market pairs · ${quoteCount} reported feeds. Quotes are current observations, not guaranteed executable prices.` : 'No complete quote set is currently available.'} />
         <CheckRow label="Chain RPC endpoints" state={rpcReady ? 'pass' : chainRpcHealth.length ? 'check' : 'waiting'} detail={rpcReady ? `${chainRpcHealth.length} reported chain endpoints responded successfully.` : 'At least one endpoint is down or has not returned a health result.'} />
-        <CheckRow label="Signer adapter health" state={signerReady ? 'pass' : signerHealth.length ? 'check' : 'waiting'} detail={signerReady ? 'The runtime reports all listed signer adapters healthy; this does not authorize signing.' : 'One or more signer adapters are unhealthy or have not reported status.'} />
-        <CheckRow label="BSC testnet read-only probe" state={testnetHealth?.ok ? 'pass' : testnetHealth ? 'check' : 'waiting'} detail={testnetHealth?.ok ? `RPC responded; latest observed block ${Number.isFinite(Number(testnetHealth.latest_block_number)) ? Number(testnetHealth.latest_block_number).toLocaleString() : 'unreported'}. No transaction is implied.` : 'Testnet probe is unavailable or failing.'} />
+        <CheckRow label="Signer adapter health" state={signerReady ? 'pass' : signerHealth.length ? 'check' : 'waiting'} detail={signerReady ? 'All listed signer adapters passed the runtime policy checks; this does not authorize a transaction by itself.' : signerHealth.length ? `Not ready: ${signerBlockers.join('; ') || 'one or more adapters are blocked'}. Signing stays disabled until the actual wallet, key binding, and adapter policy pass.` : 'No signer health result has been returned by the runtime yet.'} />
+        <CheckRow label="BSC mainnet RPC (chain 56)" state={bscMainnetHealth?.ok ? 'pass' : bscMainnetHealth ? 'check' : 'waiting'} detail={bscMainnetHealth?.ok ? `Mainnet RPC responded via ${bscMainnetHealth.provider || 'configured provider'} in ${Number(bscMainnetHealth.latencyMs || 0)} ms. Read-only connectivity only; signer health is checked separately.` : bscMainnetHealth ? `Mainnet RPC check failed: ${bscMainnetHealth.last_error || 'provider unavailable'}.` : 'No BSC mainnet RPC result has been returned yet.'} />
       </div>
       <div className="rounded border border-[#232738] bg-[#090A0F] p-3">
         <div className="mb-1 font-mono text-[0.58rem] uppercase tracking-wider text-[#8a90b0]">Available operational actions</div>
