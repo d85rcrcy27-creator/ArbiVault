@@ -48,7 +48,6 @@ jobs:
           init_code="0x${bytecode#0x}${args#0x}"
           gas="$(cast rpc --rpc-url "$rpc" eth_estimateGas "{\"data\":\"$init_code\",\"from\":\"0x0000000000000000000000000000000000000001\"}" | tr -d '"')"
           gas_price="$(cast gas-price --rpc-url "$rpc")"
-          cost_wei="$(cast to-dec "$(cast --to-uint256 "$gas" 2>/dev/null)")"
           cost_wei="$(python3 -c 'import sys; print(int(sys.argv[1],0)*int(sys.argv[2],0))' "$gas" "$gas_price")"
           cost_eth="$(python3 -c 'import sys; print(f"{int(sys.argv[1])/10**18:.8f}")' "$cost_wei")"
           echo "Estimated Sepolia deployment gas: $gas"
