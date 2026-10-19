@@ -178,8 +178,8 @@ Deno.serve(async (req) => {
       };
 
       const notional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 1000);
-      const feePct = body.round_trip_fee_pct == null ? 0.20 : Number(body.round_trip_fee_pct);
-      const slippagePct = body.slippage_pct == null ? 0.10 : Number(body.slippage_pct);
+      const feePct = body.round_trip_fee_pct == null ? 0.10 : Number(body.round_trip_fee_pct);
+      const slippagePct = body.slippage_pct == null ? 0 : Number(body.slippage_pct);
       const costPct = feePct + slippagePct;
       const builtSamples = chronologicallyOrderedLiveRows.map((row: any) => {
         const metadata = row.metadata || {};
@@ -241,6 +241,13 @@ Deno.serve(async (req) => {
       );
       const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
+      // Potential profit is reported separately from strategy-qualified results.
+      // These estimates use recorded observations; they are not executable or realized PnL.
+      const potentialProfitable = builtSamples.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
+      const potentialGrossPnl = builtSamples.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0);
+      const potentialNetPnl = builtSamples.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
+      const bestSample = builtSamples.reduce((best: any, sample: any) =>
+        !best || sample.estimatedNetProfitUsd > best.estimatedNetProfitUsd ? sample : best, null);
       const observedTimes = builtSamples.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
       const observedSpanDays = observedTimes.length
         ? Math.max(0, (Math.max(...observedTimes) - Math.min(...observedTimes)) / 86400000)
@@ -282,6 +289,15 @@ Deno.serve(async (req) => {
         pnl: Number(netPnl.toFixed(2)),
         gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
         estimated_net_pnl: Number(netPnl.toFixed(2)),
+        strategy_qualified_net_pnl: Number(netPnl.toFixed(2)),
+        strategy_qualified_gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
+        potential_gross_pnl_all_samples: Number(potentialGrossPnl.toFixed(2)),
+        potential_net_pnl_all_samples: Number(potentialNetPnl.toFixed(2)),
+        potential_profitable_samples: potentialProfitable.length,
+        best_sample_spread_pct: bestSample ? Number(bestSample.spreadPct.toFixed(6)) : null,
+        best_sample_potential_net_profit_usd: bestSample ? Number(bestSample.estimatedNetProfitUsd.toFixed(2)) : null,
+        estimated_not_realized: true,
+        cost_methodology: "Recorded live market observations less configured round-trip fee and slippage assumptions. Potential totals are hypothetical sample-level estimates, not realized or executable PnL.",
         historical_max_spread_pct: Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)),
         historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
         reason: qualifying.length
@@ -378,7 +394,7 @@ Deno.serve(async (req) => {
     // Respect the actual backtest controls rather than silently using a $10,000
     // notional for every skill. Values are assumptions, not realized execution costs.
     const FEE_PCT = body.round_trip_fee_pct == null ? 0.10 : Number(body.round_trip_fee_pct);
-    const SLIPPAGE_PCT = body.slippage_pct == null ? 0.10 : Number(body.slippage_pct);
+    const SLIPPAGE_PCT = body.slippage_pct == null ? 0 : Number(body.slippage_pct);
     const COST_PCT = FEE_PCT + SLIPPAGE_PCT;
     const requestedNotional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 10000);
     const NOTIONAL = Number.isFinite(requestedNotional) && requestedNotional > 0 ? requestedNotional : 10000;
@@ -445,7 +461,7 @@ Deno.serve(async (req) => {
       pnl_is_realized: false,
       pnl_is_executable: false,
       source_is_historical_observation_data: true,
-      cost_methodology: "Historical spread observations less the configured 0.10% fee assumption; does not model a synchronized executable bid/ask fill or guarantee slippage.",
+      cost_methodology: "Historical spread-only observations; estimated net profit subtracts the configured round-trip fee and slippage assumptions. Potential totals sum hypothetical sample-level results and are not realized or executable PnL.",
       ...spreadStats,
       skill_id: skillId || null,
       strategy: skill?.name || null,
@@ -469,9 +485,6 @@ Deno.serve(async (req) => {
       best_sample_spread_pct: bestSample ? Number(bestSample.spread.toFixed(6)) : null,
       best_sample_potential_net_profit_usd: bestSampleNetProfit == null ? null : Number(bestSampleNetProfit.toFixed(2)),
       estimated_not_realized: true,
-      pnl_is_realized: false,
-      pnl_is_executable: false,
-      cost_methodology: "Historical spread-only observations; estimated net profit subtracts the configured round-trip fee and slippage assumptions. Potential totals sum hypothetical sample-level results and are not realized or executable PnL.",
       fee_pct: FEE_PCT,
       slippage_pct: SLIPPAGE_PCT,
       total_cost_assumption_pct: COST_PCT,
