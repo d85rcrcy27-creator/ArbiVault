@@ -1,0 +1,33 @@
+name: Ethereum Sepolia Flash Executor Solidity CI
+
+on:
+  push:
+    branches: ["testnet/ethereum-sepolia-executor"]
+    paths:
+      - "contracts/ArbiVaultEthereumSepoliaFlashExecutor.sol"
+      - "test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-sepolia-flash-executor.yml"
+  pull_request:
+    paths:
+      - "contracts/ArbiVaultEthereumSepoliaFlashExecutor.sol"
+      - "test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-sepolia-flash-executor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Compile contracts
+        run: forge build --sizes
+      - name: Run Sepolia executor safety tests
+        run: forge test --match-path test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol -vv
