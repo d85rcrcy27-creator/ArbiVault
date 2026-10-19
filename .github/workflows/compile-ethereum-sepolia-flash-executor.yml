@@ -1,0 +1,76 @@
+name: Ethereum Sepolia Flash Executor Solidity CI
+
+on:
+  push:
+    branches: ["testnet/ethereum-sepolia-executor"]
+    paths:
+      - "contracts/ArbiVaultEthereumSepoliaFlashExecutor.sol"
+      - "test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-sepolia-flash-executor.yml"
+  pull_request:
+    paths:
+      - "contracts/ArbiVaultEthereumSepoliaFlashExecutor.sol"
+      - "test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/compile-ethereum-sepolia-flash-executor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Compile contracts
+        run: forge build --sizes
+      - name: Run Sepolia executor safety tests
+        run: forge test --match-path test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol -vv
+
+      - name: Estimate Sepolia deployment gas and cost (no transaction broadcast)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpc="https://ethereum-sepolia-rpc.publicnode.com"
+          chain_id="$(cast chain-id --rpc-url "$rpc")"
+          test "$chain_id" = "11155111"
+          artifact="out/ArbiVaultEthereumSepoliaFlashExecutor.sol/ArbiVaultEthereumSepoliaFlashExecutor.json"
+          bytecode="$(jq -er '.bytecode.object | select(type == "string" and length > 0)' "$artifact")"
+          # Nonzero estimate-only recipient; no wallet or transaction is used.
+          hot_wallet="0x0000000000000000000000000000000000000001"
+          pool="0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951"
+          args="$(cast abi-encode "constructor(address,address)" "$pool" "$hot_wallet")"
+          init_code="0x${bytecode#0x}${args#0x}"
+          gas="$(cast rpc --rpc-url "$rpc" eth_estimateGas "{\"data\":\"$init_code\",\"from\":\"0x0000000000000000000000000000000000000001\"}" | tr -d '"')"
+          gas_price="$(cast gas-price --rpc-url "$rpc")"
+          cost_wei="$(python3 -c 'import sys; print(int(sys.argv[1],0)*int(sys.argv[2],0))' "$gas" "$gas_price")"
+          cost_eth="$(python3 -c 'import sys; print(f"{int(sys.argv[1])/10**18:.8f}")' "$cost_wei")"
+          echo "Estimated Sepolia deployment gas: $gas"
+          echo "Current gas price (wei): $gas_price"
+          echo "Estimated deployment cost: $cost_eth Sepolia ETH (test ETH; not USD)"
+          echo "No transaction was broadcast."
+
+      - name: Check configured Sepolia protocol/token bytecode
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpc="https://ethereum-sepolia-rpc.publicnode.com"
+          chain_id="$(cast chain-id --rpc-url "$rpc")"
+          test "$chain_id" = "11155111"
+          for address in \
+            0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951 \
+            0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3 \
+            0xeaBcE3E74EF41FB40024a21Cc2ee2F5dDc615791 \
+            0xC558DBdd856501FCd9aaF1E62eae57A9F0629a3c \
+            0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8; do
+            code="$(cast code "$address" --rpc-url "$rpc")"
+            if [[ -z "$code" || "$code" == "0x" ]]; then
+              echo "::error::No Sepolia bytecode at configured address $address"
+              exit 1
+            fi
+          done
