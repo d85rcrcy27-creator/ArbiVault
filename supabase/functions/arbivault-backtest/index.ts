@@ -71,7 +71,7 @@ Deno.serve(async (req) => {
       const queryPageSize = 1000;
       const { data: firstLivePage, error: liveRowsError, count: liveRowsCount } = await admin
         .from("strategy_observations")
-        .select("id,symbol,metric,value,observed_at,metadata", { count: "exact" })
+        .select("id,symbol,metric,value,observed_at,metadata")
         .eq("owner_id", skill.owner_id)
         .eq("source_key", "public_exchange_order_books")
         .eq("domain", "execution_scout")
@@ -85,8 +85,7 @@ Deno.serve(async (req) => {
       // Supabase REST responses may be capped at 1,000 rows regardless of .limit().
       // Fetch pages explicitly, up to 10,000 of the newest recorded samples.
       const liveRows: any[] = [...(firstLivePage || [])];
-      const liveRowsTarget = Math.min(liveSampleLimit, liveRowsCount ?? liveRows.length);
-      for (let offset = liveRows.length; offset < liveRowsTarget; offset += queryPageSize) {
+      for (let offset = liveRows.length; offset < liveSampleLimit; offset += queryPageSize) {
         const { data: page, error: pageError } = await admin
           .from("strategy_observations")
           .select("id,symbol,metric,value,observed_at,metadata")
@@ -97,10 +96,11 @@ Deno.serve(async (req) => {
           .gte("observed_at", startAt.toISOString())
           .lte("observed_at", endAt.toISOString())
           .order("observed_at", { ascending: false })
-          .range(offset, Math.min(offset + queryPageSize - 1, liveRowsTarget - 1));
+          .range(offset, Math.min(offset + queryPageSize - 1, liveSampleLimit - 1));
         if (pageError) return json({ error: "live_observation_page_lookup_failed", detail: pageError.message }, 500);
         if (!page?.length) break;
         liveRows.push(...page);
+        if (page.length < queryPageSize) break;
       }
 
       // Put newest-selected samples back into chronological order for calculations.
@@ -111,9 +111,9 @@ Deno.serve(async (req) => {
       const volumeSymbols = bases.map((symbol) => symbol + "/USD");
       const volumeRows: any[] = [];
       if (volumeSymbols.length) {
-        const { data: firstVolumePage, error: volumeRowsError, count: volumeRowsCount } = await admin
+        const { data: firstVolumePage, error: volumeRowsError } = await admin
           .from("strategy_observations")
-          .select("symbol,value,observed_at,metadata", { count: "exact" })
+          .select("symbol,value,observed_at,metadata")
           .eq("owner_id", skill.owner_id)
           .eq("source_key", "coingecko")
           .eq("metric", "public_market_price")
@@ -124,8 +124,7 @@ Deno.serve(async (req) => {
           .range(0, queryPageSize - 1);
         if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
         volumeRows.push(...(firstVolumePage || []));
-        const volumeRowsTarget = Math.min(liveSampleLimit, volumeRowsCount ?? volumeRows.length);
-        for (let offset = volumeRows.length; offset < volumeRowsTarget; offset += queryPageSize) {
+        for (let offset = volumeRows.length; offset < liveSampleLimit; offset += queryPageSize) {
           const { data: page, error: pageError } = await admin
             .from("strategy_observations")
             .select("symbol,value,observed_at,metadata")
@@ -136,10 +135,11 @@ Deno.serve(async (req) => {
             .gte("observed_at", startAt.toISOString())
             .lte("observed_at", endAt.toISOString())
             .order("observed_at", { ascending: false })
-            .range(offset, Math.min(offset + queryPageSize - 1, volumeRowsTarget - 1));
+            .range(offset, Math.min(offset + queryPageSize - 1, liveSampleLimit - 1));
           if (pageError) return json({ error: "live_volume_page_lookup_failed", detail: pageError.message }, 500);
           if (!page?.length) break;
           volumeRows.push(...page);
+          if (page.length < queryPageSize) break;
         }
       }
 
