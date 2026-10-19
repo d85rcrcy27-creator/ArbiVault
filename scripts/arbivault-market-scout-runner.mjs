@@ -2,8 +2,8 @@
 // Node.js 20+
 // Install: npm install @supabase/supabase-js
 // Required env: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_EMAIL, SUPABASE_PASSWORD
-// This calls the existing authenticated arbivault-market-scout Edge Function.
-// It does not execute trades or authorize wallet signing.
+// Calls the existing authenticated scout and reads back its persisted route observations.
+// Read-only: does not execute trades, authorize wallet signing, or move funds.
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -16,18 +16,11 @@ const intervalSeconds = Math.max(60, Number(process.env.SCOUT_INTERVAL_SECONDS |
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY,
-  {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-  },
+  { auth: { autoRefreshToken: true, persistSession: false, detectSessionInUrl: false } },
 );
 
 let stopping = false;
 let running = false;
-
 process.on("SIGINT", () => { stopping = true; console.log("Stopping scout loop."); });
 process.on("SIGTERM", () => { stopping = true; console.log("Stopping scout loop."); });
 
@@ -38,12 +31,15 @@ async function ensureSession() {
     email: process.env.SUPABASE_EMAIL,
     password: process.env.SUPABASE_PASSWORD,
   });
-  if (error || !data.session) throw new Error("Supabase sign-in failed: " + (error?.message || "session_missing"));
+  if (error || !data.session) {
+    throw new Error("Supabase sign-in failed: " + (error?.message || "session_missing"));
+  }
 }
 
 async function scoutOnce() {
   if (running || stopping) return;
   running = true;
+  const startedAt = new Date(Date.now() - 5_000).toISOString();
   try {
     await ensureSession();
     const { data, error } = await supabase.functions.invoke("arbivault-market-scout", {
@@ -58,7 +54,46 @@ async function scoutOnce() {
       return;
     }
 
-    const summary = {
+    // Pull back the persisted observed-opportunity rows created by this scout run.
+    // RLS must allow the authenticated user to read their own strategy_observations.
+    const { data: observedRows, error: observedError } = await supabase
+      .from("strategy_observations")
+      .select("id,symbol,metric,value,observed_at,metadata,observed_route_id,execution_route_id,strategy_bot_id,execution_bot_config_id")
+      .eq("domain", "execution_scout")
+      .eq("metric", "spread_pct")
+      .gte("observed_at", startedAt)
+      .order("observed_at", { ascending: false })
+      .limit(100);
+
+    const linkedObservations = (observedRows ?? []).map((row) => ({
+      observation_id: row.id,
+      pair: row.symbol,
+      spread_pct: row.value,
+      observed_at: row.observed_at,
+      observed_route_id: row.observed_route_id ?? null,
+      execution_route_id: row.execution_route_id ?? null,
+      strategy_bot_id: row.strategy_bot_id ?? null,
+      execution_bot_config_id: row.execution_bot_config_id ?? null,
+      route_link_status: row.observed_route_id ? "linked_to_observed_route" : "unlinked_observation",
+      buy_exchange: row.metadata?.buy_exchange ?? null,
+      sell_exchange: row.metadata?.sell_exchange ?? null,
+      chain: row.metadata?.chain ?? null,
+    }));
+
+    const routeSummaries = (data.routes ?? []).map((route) => ({
+      chain: route.chain,
+      pair: route.pair,
+      buy_exchange: route.buyExchange,
+      sell_exchange: route.sellExchange,
+      spread_pct: route.spreadPct,
+      latency_ms: route.latency,
+      observed_route_id: route.observed_route_id ?? null,
+      execution_route_id: route.execution_route_id ?? null,
+      strategy_bot_id: route.strategy_bot_id ?? null,
+      route_link_status: route.observed_route_id ? "linked_to_observed_route" : "no_matching_observed_route",
+    }));
+
+    console.log(JSON.stringify({
       timestamp: new Date(data.timestamp_ms || Date.now()).toISOString(),
       status: "observed",
       source: data.source,
@@ -67,21 +102,18 @@ async function scoutOnce() {
       feeds: data.feeds ?? [],
       persisted_observations: data.observer_execution_links?.observation_persisted ?? 0,
       public_observations: data.public_observation_persisted ?? 0,
-      route_count: Array.isArray(data.routes) ? data.routes.length : 0,
-      routes: (data.routes ?? []).map((r) => ({
-        chain: r.chain,
-        pair: r.pair,
-        buy_exchange: r.buyExchange,
-        sell_exchange: r.sellExchange,
-        spread_pct: r.spreadPct,
-        latency_ms: r.latency,
-        execution_route_id: r.execution_route_id ?? null,
-      })),
+      routes: routeSummaries,
+      observed_opportunity_route: {
+        table: "strategy_observations",
+        linked_observation_count: linkedObservations.filter((row) => row.observed_route_id).length,
+        unlinked_observation_count: linkedObservations.filter((row) => !row.observed_route_id).length,
+        query_error: observedError?.message ?? null,
+        observations: linkedObservations,
+      },
       feed_health: data.feed_health ?? [],
       chain_rpc_health: data.chain_rpc_health ?? [],
-      note: "Observation only. Spread is not realized profit; no trade was submitted.",
-    };
-    console.log(JSON.stringify(summary));
+      note: "Observed spreads are not realized profit. No trade was submitted.",
+    }));
   } catch (error) {
     console.error(new Date().toISOString(), "scout_error", error instanceof Error ? error.message : String(error));
   } finally {
@@ -89,7 +121,7 @@ async function scoutOnce() {
   }
 }
 
-console.log(`ArbiVault market scout starting; interval=${intervalSeconds}s; execution disabled.`);
+console.log(`ArbiVault market scout starting; interval=${intervalSeconds}s; observed-route tracking enabled; execution disabled.`);
 await scoutOnce();
 while (!stopping) {
   await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
