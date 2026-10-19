@@ -31,3 +31,23 @@ jobs:
         run: forge build --sizes
       - name: Run Sepolia executor safety tests
         run: forge test --match-path test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol -vv
+
+      - name: Check configured Sepolia protocol/token bytecode
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpc="https://ethereum-sepolia-rpc.publicnode.com"
+          chain_id="$(cast chain-id --rpc-url "$rpc")"
+          test "$chain_id" = "11155111"
+          for address in \
+            0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951 \
+            0xeE567Fe1712Faf6149d80dA1E6934E354124CfE3 \
+            0xeaBcE3E74EF41FB40024a21Cc2ee2F5dDc615791 \
+            0xC558DBdd856501FCd9aaF1E62eae57A9F0629a3c \
+            0x94a9D9AC8a22534E3FaCa9F4e7F2E2cf85d5E4C8; do
+            code="$(cast code "$address" --rpc-url "$rpc")"
+            if [[ -z "$code" || "$code" == "0x" ]]; then
+              echo "::error::No Sepolia bytecode at configured address $address"
+              exit 1
+            fi
+          done
