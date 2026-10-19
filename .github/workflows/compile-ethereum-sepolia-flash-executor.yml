@@ -32,6 +32,30 @@ jobs:
       - name: Run Sepolia executor safety tests
         run: forge test --match-path test/ArbiVaultEthereumSepoliaFlashExecutor.t.sol -vv
 
+      - name: Estimate Sepolia deployment gas and cost (no transaction broadcast)
+        shell: bash
+        run: |
+          set -euo pipefail
+          rpc="https://ethereum-sepolia-rpc.publicnode.com"
+          chain_id="$(cast chain-id --rpc-url "$rpc")"
+          test "$chain_id" = "11155111"
+          artifact="out/ArbiVaultEthereumSepoliaFlashExecutor.sol/ArbiVaultEthereumSepoliaFlashExecutor.json"
+          bytecode="$(jq -er '.bytecode.object | select(type == "string" and length > 0)' "$artifact")"
+          # Nonzero estimate-only recipient; no wallet or transaction is used.
+          hot_wallet="0x0000000000000000000000000000000000000001"
+          pool="0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951"
+          args="$(cast abi-encode "constructor(address,address)" "$pool" "$hot_wallet")"
+          init_code="0x${bytecode#0x}${args#0x}"
+          gas="$(cast rpc --rpc-url "$rpc" eth_estimateGas "{\"data\":\"$init_code\",\"from\":\"0x0000000000000000000000000000000000000001\"}" | tr -d '"')"
+          gas_price="$(cast gas-price --rpc-url "$rpc")"
+          cost_wei="$(cast to-dec "$(cast --to-uint256 "$gas" 2>/dev/null)")"
+          cost_wei="$(python3 -c 'import sys; print(int(sys.argv[1],0)*int(sys.argv[2],0))' "$gas" "$gas_price")"
+          cost_eth="$(python3 -c 'import sys; print(f"{int(sys.argv[1])/10**18:.8f}")' "$cost_wei")"
+          echo "Estimated Sepolia deployment gas: $gas"
+          echo "Current gas price (wei): $gas_price"
+          echo "Estimated deployment cost: $cost_eth Sepolia ETH (test ETH; not USD)"
+          echo "No transaction was broadcast."
+
       - name: Check configured Sepolia protocol/token bytecode
         shell: bash
         run: |
