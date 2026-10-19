@@ -1,6 +1,6 @@
 {
   "buildCommand": "pnpm typecheck && pnpm lint && pnpm audit --prod && pnpm build",
-  "installCommand": "pnpm install --lockfile-only && pnpm install --frozen-lockfile",
+  "installCommand": "pnpm install --frozen-lockfile",
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
