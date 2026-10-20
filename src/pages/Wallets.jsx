@@ -205,8 +205,8 @@ export default function Wallets() {
                     <span>{wallet?.data_quality_status === 'needs_review' ? 'Reported balance' : 'Balance'}</span>
                     <span>{formatAmount(wallet?.last_balance)} {wallet ? chain.asset : ''}</span>
                   </div>
-                  {ownershipConfirmed && <div className="mt-2 font-mono text-[0.55rem] text-[#00FF87]">Ownership confirmed · previous address</div>}
-                  {wallet?.data_quality_status === 'needs_review' && <div className="mt-1 font-mono text-[0.55rem] text-[#FFB800]">Balance review pending · trading disabled</div>}
+                  {ownershipConfirmed && <div className="mt-2 font-mono text-[0.55rem] text-[#00FF87]">Verified · ownership of previous address</div>}
+                  {wallet?.data_quality_status === 'needs_review' && <div className="mt-1 font-mono text-[0.55rem] text-[#FFB800]">Balance not independently checked · trading disabled</div>}
                   <button
                     onClick={() => wallet?.address && copyAddress(wallet.address)}
                     disabled={!wallet}
