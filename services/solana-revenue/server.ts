@@ -54,7 +54,7 @@ function clients() {
 
 function safeError(res: express.Response, error: unknown) {
   const message = error instanceof Error ? error.message : "Unknown error";
-  if (message === "Revenue service is not configured" || message.startsWith("SOLANA_")) {
+  if (message === "Revenue service is not configured" || message.startsWith("SOLANA_") || message.startsWith("Invalid public key")) {
     return res.status(503).json({ error: "Revenue service is not ready" });
   }
   // Do not expose database, RPC, or SDK internals to clients.
@@ -92,7 +92,7 @@ app.post("/invoices", async (_req, res) => {
       return res.status(503).json({ error: "A current eligible report is unavailable; no invoice was created" });
     }
 
-    // Only the public key is used as a unique reference. No wallet signer is created or retained.
+    // Use a fresh keypair only to derive a unique public reference; never store or use its private key.
     const referenceKeyPair = await generateKeyPair();
     const reference = await getAddressFromPublicKey(referenceKeyPair.publicKey);
     const id = randomUUID();
@@ -180,7 +180,7 @@ app.post("/verify", async (req, res) => {
     if (found.signature !== signature) return res.status(400).json({ error: "Transaction does not match this invoice reference" });
     await merchant.pay.validateTransfer(signature, {
       recipient: cfg.treasury,
-      amount: cfg.amountSol,
+      amount: Number(BigInt(row.expected_lamports.toString())) / 1_000_000_000,
       reference,
     });
 
