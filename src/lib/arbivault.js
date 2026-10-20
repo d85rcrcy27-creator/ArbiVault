@@ -45,7 +45,8 @@ export async function createBotSkill({ name, description = '', conditions = [], 
 export async function updateBotSkill(id, updates) {
   const { data, error } = await supabase.from('bot_skills').update(updates).eq('id', id).select().single()
   if (error) throw error
-  await supabase.rpc('sync_strategy_bot_for_skill', { p_skill_id: id })
+  const { error: syncError } = await supabase.rpc('sync_strategy_bot_for_skill', { p_skill_id: id })
+  if (syncError) throw new Error(`Bot skill saved, but linked strategy bot sync failed: ${syncError.message}`)
   return data
 }
 export async function deleteBotSkill(id) {
