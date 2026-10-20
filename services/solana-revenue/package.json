@@ -1,0 +1,28 @@
+{
+  "name": "arbivault-solana-revenue",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/pay": "^0.2.5",
+    "@solana/web3.js": "^1.98.4",
+    "@supabase/supabase-js": "^2.57.4",
+    "bignumber.js": "^9.3.1",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
