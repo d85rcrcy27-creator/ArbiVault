@@ -1,5 +1,3 @@
-const NOTIONAL = 10000;
-
 export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute }) {
   const maxSpread = Math.max(...routes.map((r) => r.spreadPct), 0.01);
 
@@ -11,7 +9,6 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {routes.map((r) => {
-          const profit = (NOTIONAL * r.spreadPct) / 100;
           const active = selectedRoute === r.id;
           return (
             <button
@@ -44,11 +41,11 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
                     style={{ width: `${Math.min(100, (r.spreadPct / maxSpread) * 100)}%` }}
                   />
                 </div>
-                <span className="w-16 shrink-0 text-right font-mono text-[0.625rem] text-[#00FF87]">
-                  +${profit.toFixed(2)}
+                <span className="w-24 shrink-0 text-right font-mono text-[0.55rem] text-[#FFB800]">
+                  GROSS SPREAD
                 </span>
                 <span className="w-auto shrink-0 text-right font-mono text-[0.55rem] text-[#5a6080]">
-                  OBSERVED · {Number(r.latency || 0)}ms
+                  QUOTE · {Number(r.latency || 0)}ms
                 </span>
               </div>
             </button>
