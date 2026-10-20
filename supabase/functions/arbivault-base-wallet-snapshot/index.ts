@@ -178,7 +178,7 @@ Deno.serve(async (req: Request) => {
       network: {
         block_number: previewBlock ?? Number(blockNumber),
         gas_price_wei: gasPriceWeiText,
-        gas_price_gwei: previewNumber("gas_price_gwei") ?? gasPriceGwei,
+        gas_price_gwei: previewNumber(gasPreview, "gas_price_gwei") ?? gasPriceGwei,
         base_fee_wei: baseFeePerGas?.toString() ?? null,\n        base_fee_gwei: previewNumber(gasPreview, "base_fee_gwei") ?? (baseFeePerGas === null ? null : Number(formatUnits(baseFeePerGas, 9))),
         max_priority_fee_wei: priorityFeePerGas?.toString() ?? null,
         max_priority_fee_gwei: previewNumber(gasPreview, "priority_fee_gwei", "max_priority_fee_gwei") ?? (priorityFeePerGas === null ? null : Number(formatUnits(priorityFeePerGas, 9))),
