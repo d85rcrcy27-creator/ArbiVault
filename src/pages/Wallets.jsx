@@ -192,18 +192,21 @@ export default function Wallets() {
           <div className="grid gap-3 md:grid-cols-3">
             {CHAINS.map((chain) => {
               const wallet = wallets.find((w) => w.chain === chain.id && w.status === 'active' && (w.wallet_role === 'trading_hot' || (chain.id === 'solana' && w.data_quality_status === 'needs_review')))
+              const ownershipConfirmed = chain.id === 'solana' && wallet?.data_quality_status === 'needs_review'
+              const tradingReady = wallet?.is_hot && wallet?.wallet_role === 'trading_hot' && wallet?.data_quality_status === 'verified'
               return (
                 <div key={chain.id} className="rounded border border-[#232738] bg-[#090A0F] p-3">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-xs font-semibold uppercase">{chain.asset}</span>
-                    {wallet?.is_hot && wallet?.wallet_role === 'trading_hot' && wallet?.data_quality_status === 'verified' ? <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF87]" /> : <Clock3 className="h-3.5 w-3.5 text-[#FFB800]" />}
+                    {tradingReady || ownershipConfirmed ? <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF87]" /> : <Clock3 className="h-3.5 w-3.5 text-[#FFB800]" />}
                   </div>
                   <div className="mt-2 font-mono text-[0.57rem] text-[#8a90b0]">{short(wallet?.address)}</div>
                   <div className="mt-2 flex items-center justify-between font-mono text-[0.55rem] text-[#5a6080]">
                     <span>{wallet?.data_quality_status === 'needs_review' ? 'Reported balance' : 'Balance'}</span>
                     <span>{formatAmount(wallet?.last_balance)} {wallet ? chain.asset : ''}</span>
                   </div>
-                  {wallet?.data_quality_status === 'needs_review' && <div className="mt-2 font-mono text-[0.55rem] text-[#FFB800]">Imported · verification required · trading disabled</div>}
+                  {ownershipConfirmed && <div className="mt-2 font-mono text-[0.55rem] text-[#00FF87]">Ownership confirmed · previous address</div>}
+                  {wallet?.data_quality_status === 'needs_review' && <div className="mt-1 font-mono text-[0.55rem] text-[#FFB800]">Balance review pending · trading disabled</div>}
                   <button
                     onClick={() => wallet?.address && copyAddress(wallet.address)}
                     disabled={!wallet}
