@@ -257,12 +257,12 @@ export default function Wallets() {
           {snapshot && (
             <div className="mt-4 space-y-3">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {[
-                  ['BLOCK', Number(snapshot.network?.block_number ?? 0).toLocaleString('en-US')],
-                  ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : String(snapshot.network.gas_price_gwei) + ' Gwei'],
-                  ['BASE FEE', snapshot.network?.base_fee_gwei == null ? 'Unavailable' : String(snapshot.network.base_fee_gwei) + ' Gwei'],
-                  ['PRIORITY FEE', snapshot.network?.max_priority_fee_gwei == null ? 'Unavailable' : String(snapshot.network.max_priority_fee_gwei) + ' Gwei'],
-                  ['GAS PRICE USD', snapshot.network?.gas_price_usd == null ? 'Unavailable' : '
+                { [
+                  ['BLOCK', snapshot.network?.block_number == null ? 'Unavailable' : Number(snapshot.network.block_number).toLocaleString('en-US')],
+                  ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : `${snapshot.network.gas_price_gwei} Gwei`],
+                  ['BASE FEE', snapshot.network?.base_fee_gwei == null ? 'Unavailable' : `${snapshot.network.base_fee_gwei} Gwei`],
+                  ['PRIORITY FEE', snapshot.network?.max_priority_fee_gwei == null ? 'Unavailable' : `${snapshot.network.max_priority_fee_gwei} Gwei`],
+                  ['GAS PRICE USD', snapshot.network?.gas_price_usd == null ? 'Unavailable' : `$${snapshot.network.gas_price_usd}`],
                   ['DATA', snapshot.network?.preview_status === 'available' ? 'x402 free previews' : 'RPC fallback'],
                 ].map(([label, value]) => <div key={label} className="rounded border border-[#232738] bg-[#090A0F] p-2"><div className="font-mono text-[0.52rem] text-[#5a6080]">{label}</div><div className="mt-1 break-words font-mono text-[0.62rem] text-[#e0e4f0]">{value}</div></div>)}
               </div>
@@ -272,7 +272,16 @@ export default function Wallets() {
                 <div key={w.address} className="rounded border border-[#232738] bg-[#090A0F] p-3">
                   <div className="break-all font-mono text-[0.56rem] text-[#8a90b0]">{w.address}</div>
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div className="font-mono text-[0.58rem]">ETH: {w.balance_eth} {w.balance_usd == null ? '(USD unavailable)' : '· 
+                    <div className="font-mono text-[0.58rem]">ETH: {w.balance_eth ?? 'Unavailable'} {w.balance_usd == null ? '(USD unavailable)' : `· $${w.balance_usd}`}</div>
+                    <div className="font-mono text-[0.58rem]">Native balance source: {w.balance_source || 'Base RPC'}</div>
+                  </div>
+                  {w.tokens?.length > 0 && <div className="mt-2 space-y-1">{w.tokens.map((token) => <div key={token.address} className="break-all font-mono text-[0.56rem]">{token.symbol || short(token.address)}: {token.balance_formatted ?? 'Unavailable'} {token.balance_usd == null ? '' : `· $${token.balance_usd}`}</div>)}</div>}
+                  {w.error && <div className="mt-2 font-mono text-[0.55rem] text-[#FFB800]">{w.error}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
           <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
             <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
               <Plus className="h-3.5 w-3.5" /> Withdrawal Destinations
