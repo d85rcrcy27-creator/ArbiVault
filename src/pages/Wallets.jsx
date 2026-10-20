@@ -261,6 +261,220 @@ export default function Wallets() {
                   ['BLOCK', Number(snapshot.network?.block_number ?? 0).toLocaleString('en-US')],
                   ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : String(snapshot.network.gas_price_gwei) + ' Gwei'],
                   ['BASE FEE', snapshot.network?.base_fee_gwei == null ? 'Unavailable' : String(snapshot.network.base_fee_gwei) + ' Gwei'],
+                  ['PRIORITY FEE', snapshot.network?.max_priority_fee_gwei == null ? 'Unavailable' : String(snapshot.network.max_priority_fee_gwei) + ' Gwei'],
+                  ['GAS PRICE USD', snapshot.network?.gas_price_usd == null ? 'Unavailable' : '
+                  ['DATA', snapshot.network?.preview_status === 'available' ? 'x402 free previews' : 'RPC fallback'],
+                ].map(([label, value]) => <div key={label} className="rounded border border-[#232738] bg-[#090A0F] p-2"><div className="font-mono text-[0.52rem] text-[#5a6080]">{label}</div><div className="mt-1 break-words font-mono text-[0.62rem] text-[#e0e4f0]">{value}</div></div>)}
+              </div>
+              <div className="font-mono text-[0.54rem] text-[#5a6080]">Gas source: {snapshot.network?.gas_source || 'Unavailable'} · Block source: {snapshot.network?.block_source || 'Unavailable'} · Checked {snapshot.checked_at ? new Date(snapshot.checked_at).toLocaleString() : '—'}</div>
+              {snapshot.network?.preview_status !== 'available' && <div className="font-mono text-[0.54rem] text-[#FFB800]">One or both free x402 previews were unavailable; fallback RPC values are used.</div>}
+              {snapshot.wallets?.map((w) => (
+                <div key={w.address} className="rounded border border-[#232738] bg-[#090A0F] p-3">
+                  <div className="break-all font-mono text-[0.56rem] text-[#8a90b0]">{w.address}</div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="font-mono text-[0.58rem]">ETH: {w.balance_eth} {w.balance_usd == null ? '(USD unavailable)' : '· 
+          <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+            <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
+              <Plus className="h-3.5 w-3.5" /> Withdrawal Destinations
+            </div>
+            <form onSubmit={handleAddDestination} className="space-y-2">
+              <select value={destinationForm.chain} onChange={(e) => setDestinationForm({ ...destinationForm, chain: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                {CHAINS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+              <input required value={destinationForm.address} onChange={(e) => setDestinationForm({ ...destinationForm, address: e.target.value })} placeholder="External wallet address" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <input value={destinationForm.label} onChange={(e) => setDestinationForm({ ...destinationForm, label: e.target.value })} placeholder="Label (optional)" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <button disabled={busy} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#00F0FF]/40 bg-[#00F0FF]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#00F0FF] disabled:opacity-40">
+                Add destination
+              </button>
+            </form>
+            <div className="mt-4 space-y-2">
+              {destinations.map((d) => {
+                const ready = d.activation_at && new Date(d.activation_at) <= new Date()
+                return (
+                  <div key={d.id} className="rounded border border-[#232738] bg-[#090A0F] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono text-[0.62rem] font-semibold">{d.label || 'External destination'}</div>
+                        <div className="mt-1 font-mono text-[0.55rem] text-[#5a6080]">{d.chain.toUpperCase()} · {short(d.address)}</div>
+                      </div>
+                      <span className={`font-mono text-[0.55rem] uppercase ${d.status === 'approved' ? 'text-[#00FF87]' : 'text-[#FFB800]'}`}>{d.status}</span>
+                    </div>
+                    {d.status === 'pending' && (
+                      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[0.53rem] text-[#5a6080]">
+                        <span>Activates {new Date(d.activation_at).toLocaleString()}</span>
+                        <button onClick={() => handleActivate(d.id)} disabled={!ready || busy} className="rounded border border-[#00FF87]/30 px-2 py-1 text-[#00FF87] disabled:opacity-30">Activate</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {!destinations.length && <p className="font-mono text-[0.58rem] text-[#3a4060]">No withdrawal destinations configured.</p>}
+            </div>
+          </section>
+
+          <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+            <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
+              <Send className="h-3.5 w-3.5" /> Withdraw Crypto
+            </div>
+            <form onSubmit={handleWithdraw} className="space-y-2">
+              <select required value={withdrawForm.sourceWalletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, sourceWalletId: e.target.value, destinationId: '' })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                <option value="">Select source wallet</option>
+                {eligibleWallets.map((w) => {
+                  const asset = CHAINS.find((c) => c.id === w.chain)?.asset || w.chain
+                  return <option key={w.id} value={w.id}>{asset} · {short(w.address)}</option>
+                })}
+              </select>
+              <select required value={withdrawForm.destinationId} onChange={(e) => setWithdrawForm({ ...withdrawForm, destinationId: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                <option value="">Select approved destination</option>
+                {eligibleDestinations.map((d) => <option key={d.id} value={d.id}>{d.chain.toUpperCase()} · {short(d.address)}{d.is_primary ? ' · PRIMARY' : ''}</option>)}
+              </select>
+              <input required min="0.00000001" step="any" type="number" value={withdrawForm.amount} onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })} placeholder="Amount" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <button disabled={busy || !eligibleDestinations.length || !withdrawForm.sourceWalletId} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#FFB800]/40 bg-[#FFB800]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#FFB800] disabled:opacity-40">
+                <ArrowUpRight className="h-3.5 w-3.5" /> Request withdrawal approval
+              </button>
+            </form>
+            <div className="mt-3 rounded border border-[#232738] bg-[#090A0F] p-2.5 font-mono text-[0.55rem] text-[#5a6080]">
+              Withdrawals do not bypass signer controls. A request must be approved before signing or broadcast.
+            </div>
+            {approvalUri && (
+              <div className="mt-3 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-3">
+                <div className="font-mono text-[0.56rem] uppercase text-[#00F0FF]">Approval challenge created</div>
+                <div className="mt-1 break-all font-mono text-[0.5rem] text-[#8a90b0]">{approvalUri}</div>
+                <button onClick={() => copyAddress(approvalUri)} className="mt-2 flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.55rem] text-[#8a90b0]">
+                  <Copy className="h-3 w-3" /> Copy approval payload
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+
+        <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+          <div className="mb-3 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Withdrawal History</div>
+          <div className="space-y-2">
+            {requests.map((r) => (
+              <div key={r.id} className="grid gap-2 rounded border border-[#232738] bg-[#090A0F] p-3 md:grid-cols-5 md:items-center">
+                <div className="font-mono text-[0.58rem] text-[#e0e4f0]">{r.chain.toUpperCase()} · {formatAmount(r.amount)} {r.asset}</div>
+                <div className="font-mono text-[0.55rem] text-[#5a6080]">{short(r.destination_address)}</div>
+                <div className={`font-mono text-[0.55rem] uppercase ${r.status === 'confirmed' ? 'text-[#00FF87]' : r.status === 'failed' ? 'text-[#FF4D4D]' : 'text-[#FFB800]'}`}>{r.status}</div>
+                <div className="font-mono text-[0.53rem] text-[#5a6080]">{r.requested_at ? new Date(r.requested_at).toLocaleString() : '—'}</div>
+                <div className="text-right font-mono text-[0.5rem] text-[#5a6080]">{r.tx_hash ? short(r.tx_hash) : 'No tx hash yet'}</div>
+              </div>
+            ))}
+            {!requests.length && <p className="font-mono text-[0.58rem] text-[#3a4060]">No withdrawals requested.</p>}
+          </div>
+        </section>
+      </main>
+    </div>
+  )
+}
+ + Number(w.balance_usd).toLocaleString('en-US', { maximumFractionDigits: 2 })}</div>
+                    <div className="font-mono text-[0.58rem] text-[#5a6080]">Native/token source: {w.source}</div>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {w.tokens?.map((t) => <div key={t.contract_address} className="break-all font-mono text-[0.55rem] text-[#8a90b0]">{t.symbol ? t.symbol + ': ' + t.balance_formatted : 'Token query failed: ' + t.contract_address}</div>)}
+                  </div>
+                </div>
+              ))}
+              <div className="font-mono text-[0.54rem] text-[#FFB800]">Read-only snapshot. A preview verdict is not execution authorization; no transaction was signed or broadcast.</div>
+            </div>
+          )}
+        </section>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+            <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
+              <Plus className="h-3.5 w-3.5" /> Withdrawal Destinations
+            </div>
+            <form onSubmit={handleAddDestination} className="space-y-2">
+              <select value={destinationForm.chain} onChange={(e) => setDestinationForm({ ...destinationForm, chain: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                {CHAINS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+              <input required value={destinationForm.address} onChange={(e) => setDestinationForm({ ...destinationForm, address: e.target.value })} placeholder="External wallet address" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <input value={destinationForm.label} onChange={(e) => setDestinationForm({ ...destinationForm, label: e.target.value })} placeholder="Label (optional)" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <button disabled={busy} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#00F0FF]/40 bg-[#00F0FF]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#00F0FF] disabled:opacity-40">
+                Add destination
+              </button>
+            </form>
+            <div className="mt-4 space-y-2">
+              {destinations.map((d) => {
+                const ready = d.activation_at && new Date(d.activation_at) <= new Date()
+                return (
+                  <div key={d.id} className="rounded border border-[#232738] bg-[#090A0F] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono text-[0.62rem] font-semibold">{d.label || 'External destination'}</div>
+                        <div className="mt-1 font-mono text-[0.55rem] text-[#5a6080]">{d.chain.toUpperCase()} · {short(d.address)}</div>
+                      </div>
+                      <span className={`font-mono text-[0.55rem] uppercase ${d.status === 'approved' ? 'text-[#00FF87]' : 'text-[#FFB800]'}`}>{d.status}</span>
+                    </div>
+                    {d.status === 'pending' && (
+                      <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[0.53rem] text-[#5a6080]">
+                        <span>Activates {new Date(d.activation_at).toLocaleString()}</span>
+                        <button onClick={() => handleActivate(d.id)} disabled={!ready || busy} className="rounded border border-[#00FF87]/30 px-2 py-1 text-[#00FF87] disabled:opacity-30">Activate</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              {!destinations.length && <p className="font-mono text-[0.58rem] text-[#3a4060]">No withdrawal destinations configured.</p>}
+            </div>
+          </section>
+
+          <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+            <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
+              <Send className="h-3.5 w-3.5" /> Withdraw Crypto
+            </div>
+            <form onSubmit={handleWithdraw} className="space-y-2">
+              <select required value={withdrawForm.sourceWalletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, sourceWalletId: e.target.value, destinationId: '' })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                <option value="">Select source wallet</option>
+                {eligibleWallets.map((w) => {
+                  const asset = CHAINS.find((c) => c.id === w.chain)?.asset || w.chain
+                  return <option key={w.id} value={w.id}>{asset} · {short(w.address)}</option>
+                })}
+              </select>
+              <select required value={withdrawForm.destinationId} onChange={(e) => setWithdrawForm({ ...withdrawForm, destinationId: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                <option value="">Select approved destination</option>
+                {eligibleDestinations.map((d) => <option key={d.id} value={d.id}>{d.chain.toUpperCase()} · {short(d.address)}{d.is_primary ? ' · PRIMARY' : ''}</option>)}
+              </select>
+              <input required min="0.00000001" step="any" type="number" value={withdrawForm.amount} onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })} placeholder="Amount" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
+              <button disabled={busy || !eligibleDestinations.length || !withdrawForm.sourceWalletId} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#FFB800]/40 bg-[#FFB800]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#FFB800] disabled:opacity-40">
+                <ArrowUpRight className="h-3.5 w-3.5" /> Request withdrawal approval
+              </button>
+            </form>
+            <div className="mt-3 rounded border border-[#232738] bg-[#090A0F] p-2.5 font-mono text-[0.55rem] text-[#5a6080]">
+              Withdrawals do not bypass signer controls. A request must be approved before signing or broadcast.
+            </div>
+            {approvalUri && (
+              <div className="mt-3 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-3">
+                <div className="font-mono text-[0.56rem] uppercase text-[#00F0FF]">Approval challenge created</div>
+                <div className="mt-1 break-all font-mono text-[0.5rem] text-[#8a90b0]">{approvalUri}</div>
+                <button onClick={() => copyAddress(approvalUri)} className="mt-2 flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.55rem] text-[#8a90b0]">
+                  <Copy className="h-3 w-3" /> Copy approval payload
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+
+        <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+          <div className="mb-3 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Withdrawal History</div>
+          <div className="space-y-2">
+            {requests.map((r) => (
+              <div key={r.id} className="grid gap-2 rounded border border-[#232738] bg-[#090A0F] p-3 md:grid-cols-5 md:items-center">
+                <div className="font-mono text-[0.58rem] text-[#e0e4f0]">{r.chain.toUpperCase()} · {formatAmount(r.amount)} {r.asset}</div>
+                <div className="font-mono text-[0.55rem] text-[#5a6080]">{short(r.destination_address)}</div>
+                <div className={`font-mono text-[0.55rem] uppercase ${r.status === 'confirmed' ? 'text-[#00FF87]' : r.status === 'failed' ? 'text-[#FF4D4D]' : 'text-[#FFB800]'}`}>{r.status}</div>
+                <div className="font-mono text-[0.53rem] text-[#5a6080]">{r.requested_at ? new Date(r.requested_at).toLocaleString() : '—'}</div>
+                <div className="text-right font-mono text-[0.5rem] text-[#5a6080]">{r.tx_hash ? short(r.tx_hash) : 'No tx hash yet'}</div>
+              </div>
+            ))}
+            {!requests.length && <p className="font-mono text-[0.58rem] text-[#3a4060]">No withdrawals requested.</p>}
+          </div>
+        </section>
+      </main>
+    </div>
+  )
+}
+ + String(snapshot.network.gas_price_usd) + ' / gas'],
                   ['DATA', snapshot.network?.preview_status === 'available' ? 'x402 free previews' : 'RPC fallback'],
                 ].map(([label, value]) => <div key={label} className="rounded border border-[#232738] bg-[#090A0F] p-2"><div className="font-mono text-[0.52rem] text-[#5a6080]">{label}</div><div className="mt-1 break-words font-mono text-[0.62rem] text-[#e0e4f0]">{value}</div></div>)}
               </div>
