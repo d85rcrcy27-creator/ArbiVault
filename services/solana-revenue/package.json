@@ -1,0 +1,29 @@
+{
+  "name": "arbivault-solana-revenue",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "tsx server.ts",
+    "typecheck": "tsc --noEmit",
+    "smoke": "npm run typecheck && npm test",
+    "test": "NODE_ENV=test node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@solana/kit": "^6.10.0",
+    "@solana/pay": "^1.0.26",
+    "@supabase/supabase-js": "^2.117.2",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.15.30",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}

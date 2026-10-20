@@ -1,0 +1,32 @@
+name: Solana revenue service CI
+
+on:
+  push:
+    branches: [main, feat/native-sol-revenue-collection]
+    paths:
+      - "services/solana-revenue/**"
+      - ".github/workflows/solana-revenue-ci.yml"
+  pull_request:
+    paths:
+      - "services/solana-revenue/**"
+      - ".github/workflows/solana-revenue-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/solana-revenue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: services/solana-revenue/package.json
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run smoke
