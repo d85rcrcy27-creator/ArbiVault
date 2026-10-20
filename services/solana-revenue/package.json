@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "tsx server.ts",
     "start": "tsx server.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "NODE_ENV=test node --import tsx -e \"import('./server.ts').then(({ default: app }) => { if (!app) process.exit(1); console.log('revenue service module loads'); })\""
   },
   "dependencies": {
     "@solana/kit": "^6.10.0",
