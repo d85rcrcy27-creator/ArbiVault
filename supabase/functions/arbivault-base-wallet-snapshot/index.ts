@@ -109,10 +109,19 @@ Deno.serve(async (req: Request) => {
           const response = await fetch(url, {
             headers: { accept: "application/json" }, signal: AbortSignal.timeout(6000),
           });
-          if (!response.ok) throw new Error(`gate_preview_http_${response.status}`);
-          const body = await response.json() as Record<string, unknown>;
-          // An unavailable/quota-exhausted check is never a pass: only treat it as a
-          // result when the gate actually returned a decision and verdict.
+          const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+          // The free trial is 3 real-token checks/day/IP. In production (shared egress
+          // IP, many tokens screened) the trial exhausts fast and the preview returns
+          // HTTP 429 carrying a paid_url. Surface that upgrade path instead of silently
+          // reporting "unavailable", so unattended gating can switch to the metered
+          // route: GET ${X402_BASE_URL}/gate/swap ($0.008 USDC on Base, same response
+          // shape, no daily limit). An exhausted trial is never treated as a pass.
+          if (response.status === 429) {
+            return { __exhausted: true, paid_url: typeof body.paid_url === "string" ? body.paid_url : null };
+          }
+          if (!response.ok) return null;
+          // An unavailable check is never a pass: only treat it as a result when the
+          // gate actually returned a decision and verdict.
           if (typeof body.decision !== "string" || typeof body.verdict !== "string") return null;
           return body;
         } catch {
@@ -214,7 +223,10 @@ Deno.serve(async (req: Request) => {
         preview_decision: typeof gatePreview?.decision === "string" ? gatePreview?.decision ?? null : null,
         preview_risk_score: previewNumber(gatePreview, "risk_score"),
         preview_token: gatePreview && tokens.length > 0 ? tokens[0] : null,
-        preview_source: gatePreview ? "x402 /gate/swap/preview (free)" : (tokens.length === 0 ? "no_token_to_screen" : "unavailable_not_a_pass"),
+        preview_source: gatePreview?.__exhausted
+          ? "x402 free trial exhausted (3/day/IP) - call paid /gate/swap for unmetered gating"
+          : (gatePreview ? "x402 /gate/swap/preview (free)" : (tokens.length === 0 ? "no_token_to_screen" : "unavailable_not_a_pass")),
+        preview_paid_url: (gatePreview && typeof gatePreview.paid_url === "string") ? gatePreview.paid_url : null,
         preview_status: gasPreview && blockPreview ? "available" : "partial_or_fallback",
         eth_usd_price: ethUsd,
         eth_usd_source: ethUsd === null ? null : "Coinbase public spot price",
