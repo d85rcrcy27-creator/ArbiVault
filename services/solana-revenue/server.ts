@@ -240,3 +240,10 @@ app.get("/report/:invoiceId", async (req, res) => {
 });
 
 export default app;
+
+if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
+  const port = Number(process.env.PORT ?? "4567");
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`ArbiVault native SOL revenue API listening on http://127.0.0.1:${port}`);
+  });
+}
