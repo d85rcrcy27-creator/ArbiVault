@@ -131,9 +131,11 @@ Deno.serve(async (req) => {
       .eq("id", attempt.execution_route_id)
       .maybeSingle();
 
-    const fee = confirmation.fee_native ?? attempt.gas_fee ?? 0;
-    const gross = Number(attempt.gross_profit ?? 0);
-    const net = Number(attempt.net_profit ?? (gross - fee));
+    // Network fees are denominated in the chain native asset, not USD. Do not subtract
+    // them from USD profit or manufacture zero-dollar profit when execution accounting is absent.
+    const feeNative = confirmation.fee_native ?? attempt.gas_fee ?? null;
+    const gross = attempt.gross_profit == null ? null : Number(attempt.gross_profit);
+    const net = attempt.net_profit == null ? null : Number(attempt.net_profit);
     const strategy = route?.strategy || "on_chain_execution";
     const pair = route?.pair || null;
 
@@ -160,7 +162,10 @@ Deno.serve(async (req) => {
 
     const metadata = {
       confirmation_source: "arbivault-execution-confirm",
-      pnl_basis: gross !== 0 || attempt.net_profit != null ? "execution_attempt_realized_values" : "realized_only",
+      pnl_basis: gross !== null && net !== null ? "execution_attempt_recorded_values_unverified_by_balance_delta" : "realized_only",
+      realized_pnl_verified: false,
+      network_fee_native: feeNative,
+      network_fee_asset: attempt.chain === "bnb" ? "BNB" : attempt.chain === "solana" ? "SOL" : attempt.chain === "bitcoin" ? "BTC" : null,
       confirmation,
       execution_route_id: attempt.execution_route_id,
     };
@@ -180,7 +185,7 @@ Deno.serve(async (req) => {
         .update({
           status: "executed",
           confirmed_at: now,
-          fees_paid: fee,
+          fees_paid: null,
           net_profit: net,
           gross_profit: gross,
           execution_attempt_id: attempt.id,
@@ -205,7 +210,7 @@ Deno.serve(async (req) => {
           borrowed_amount: null,
           notional_amount: attempt.capital_used || null,
           gross_profit: gross,
-          fees_paid: fee,
+          fees_paid: null,
           net_profit: net,
           execution_time_ms: attempt.broadcast_at && attempt.created_at
             ? Math.max(0, Date.parse(now) - Date.parse(attempt.created_at))
@@ -235,7 +240,7 @@ Deno.serve(async (req) => {
       status: "confirmed",
       confirmed_at: now,
       updated_at: now,
-      gas_fee: fee,
+      gas_fee: feeNative,
       gross_profit: gross,
       net_profit: net,
       failure_reason: null,
@@ -253,7 +258,7 @@ Deno.serve(async (req) => {
       tx_hash: txHash,
       trade_id: trade?.id || null,
       gross_profit: gross,
-      fees_paid: fee,
+      fees_paid: null,
       net_profit: net,
       confirmation,
     });
