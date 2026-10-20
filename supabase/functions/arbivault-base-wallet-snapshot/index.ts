@@ -164,7 +164,7 @@ Deno.serve(async (req: Request) => {
     };
     const gasPriceGwei = Number(formatUnits(gasPrice, 9));
     const previewGasWei = gasPreview?.gas_price_wei;
-    const gasPriceWeiText = typeof previewGasWei === "string" && /^\\d+$/.test(previewGasWei) ? previewGasWei : gasPrice.toString();
+    const gasPriceWeiText = typeof previewGasWei === "string" && previewGasWei.length > 0 ? previewGasWei : gasPrice.toString();
     const previewBlock = previewNumber(blockPreview, "block_number", "latest_block_number");
     const gasPriceUsd = ethUsd === null ? null : Number((Number(formatUnits(gasPrice, 18)) * ethUsd).toFixed(8));
 
