@@ -72,7 +72,7 @@ Deno.serve(async (req: Request) => {
     const client = createPublicClient({ chain: base, transport: http(BASE_RPC_URL, { timeout: 10000, retryCount: 1 }) });
 
     // These two preview endpoints are free and do not trigger an x402 payment challenge.
-    const [gasPreview, blockPreview] = await Promise.all([
+    const [gasPreview, blockPreview, gatePreview] = await Promise.all([
       (async () => {
         try {
           const response = await fetch(`${X402_BASE_URL}/chain/gas-price/preview`, {
@@ -91,6 +91,30 @@ Deno.serve(async (req: Request) => {
           });
           if (!response.ok) throw new Error(`block_preview_http_${response.status}`);
           return await response.json() as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })(),
+      // Pre-trade token-safety gate for the first screened token — free preview,
+      // no wallet, no x402 payment challenge (demo aliases usdc|weth|cbbtc|aero|degen
+      // are unmetered; real 0x tokens allow 3 free checks/day/IP). Populates the
+      // preview_verdict / preview_decision / preview_risk_score fields below so the
+      // snapshot carries a go/hold/block signal before any arb trade. For unmetered
+      // production use, call the paid gate instead:
+      //   GET ${X402_BASE_URL}/gate/swap?token=<addr>&side=buy&notional_usd=<n>  ($0.008 USDC on Base, same shape).
+      (async () => {
+        if (tokens.length === 0) return null;
+        try {
+          const url = `${X402_BASE_URL}/gate/swap/preview?token=${tokens[0]}&side=buy&notional_usd=100`;
+          const response = await fetch(url, {
+            headers: { accept: "application/json" }, signal: AbortSignal.timeout(6000),
+          });
+          if (!response.ok) throw new Error(`gate_preview_http_${response.status}`);
+          const body = await response.json() as Record<string, unknown>;
+          // An unavailable/quota-exhausted check is never a pass: only treat it as a
+          // result when the gate actually returned a decision and verdict.
+          if (typeof body.decision !== "string" || typeof body.verdict !== "string") return null;
+          return body;
         } catch {
           return null;
         }
@@ -186,9 +210,11 @@ Deno.serve(async (req: Request) => {
         gas_price_usd: previewNumber(gasPreview, "gas_price_usd") ?? gasPriceUsd,
         gas_source: gasPreview && gasPreview.gas_price_gwei !== undefined ? "x402 free preview" : "Base public RPC fallback",
         block_source: blockPreview && (blockPreview.block_number !== undefined || blockPreview.latest_block_number !== undefined) ? "x402 free preview" : "Base public RPC fallback",
-        preview_verdict: null,
-        preview_decision: null,
-        preview_risk_score: null,
+        preview_verdict: typeof gatePreview?.verdict === "string" ? gatePreview.verdict : null,
+        preview_decision: typeof gatePreview?.decision === "string" ? gatePreview.decision : null,
+        preview_risk_score: previewNumber(gatePreview, "risk_score"),
+        preview_token: gatePreview && tokens.length > 0 ? tokens[0] : null,
+        preview_source: gatePreview ? "x402 /gate/swap/preview (free)" : (tokens.length === 0 ? "no_token_to_screen" : "unavailable_not_a_pass"),
         preview_status: gasPreview && blockPreview ? "available" : "partial_or_fallback",
         eth_usd_price: ethUsd,
         eth_usd_source: ethUsd === null ? null : "Coinbase public spot price",
