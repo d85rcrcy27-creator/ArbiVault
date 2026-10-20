@@ -87,10 +87,11 @@ Deno.serve(async (req: Request) => {
       previewError = error instanceof Error ? error.message : "x402_preview_unavailable";
     }
 
-    const [blockNumber, gasPrice, baseFeePerGas, ethUsd] = await Promise.all([
+    const [blockNumber, gasPrice, baseFeePerGas, priorityFeePerGas, ethUsd] = await Promise.all([
       client.getBlockNumber(),
       client.getGasPrice(),
       client.getBlock().then((block) => block.baseFeePerGas ?? null),
+      client.estimateMaxPriorityFeePerGas().catch(() => null),
       (async () => {
         // Public price lookup is only for USD display; balances themselves come from Base RPC.
         try {
@@ -152,6 +153,9 @@ Deno.serve(async (req: Request) => {
       return null;
     };
     const gasPriceGwei = Number(formatUnits(gasPrice, 9));
+    const previewGasWei = preview?.gas_price_wei;
+    const gasPriceWeiText = typeof previewGasWei === "string" && /^\\d+$/.test(previewGasWei) ? previewGasWei : gasPrice.toString();
+    const previewBlock = previewNumber("block_number", "latest_block_number");
     const gasPriceUsd = ethUsd === null ? null : Number((Number(formatUnits(gasPrice, 18)) * ethUsd).toFixed(8));
 
     return json({
@@ -162,10 +166,12 @@ Deno.serve(async (req: Request) => {
       run_cost_note: "Configured estimate per batch run; no per-wallet or per-token RPC markup. No payment is collected by this function.",
       checked_at: new Date().toISOString(),
       network: {
-        block_number: previewNumber("block_number", "latest_block_number") ?? Number(blockNumber),
-        gas_price_wei: previewNumber("gas_price_wei")?.toString() ?? gasPrice.toString(),
+        block_number: previewBlock ?? Number(blockNumber),
+        gas_price_wei: gasPriceWeiText,
         gas_price_gwei: previewNumber("gas_price_gwei") ?? gasPriceGwei,
-        base_fee_wei: previewNumber("base_fee_wei", "base_fee_per_gas")?.toString() ?? baseFeePerGas?.toString() ?? null,
+        base_fee_wei: typeof preview?.base_fee_wei === "string" && /^\\d+$/.test(preview.base_fee_wei) ? preview.base_fee_wei : baseFeePerGas?.toString() ?? null,
+        max_priority_fee_wei: priorityFeePerGas?.toString() ?? null,
+        max_priority_fee_gwei: priorityFeePerGas === null ? null : Number(formatUnits(priorityFeePerGas, 9)),
         gas_price_usd: previewNumber("gas_price_usd") ?? gasPriceUsd,
         gas_source: preview && (preview.gas_price_wei !== undefined || preview.gas_price_gwei !== undefined) ? "x402 free preview" : "Base public RPC fallback",
         block_source: preview && (preview.block_number !== undefined || preview.latest_block_number !== undefined) ? "x402 free preview" : "Base public RPC fallback",
