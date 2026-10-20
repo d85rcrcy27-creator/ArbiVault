@@ -135,6 +135,34 @@ function safeAccepts(requirements: any, policy: ReturnType<typeof requiredPolicy
   return safe;
 }
 
+function validatePaymentSignature(signature: string, safeOptions: PaymentRequirement[]) {
+  let payment: any;
+  try {
+    const decoded = new TextDecoder().decode(
+      Uint8Array.from(atob(signature), (character) => character.charCodeAt(0)),
+    );
+    payment = JSON.parse(decoded);
+  } catch {
+    throw new Error("x402_payment_signature_invalid");
+  }
+
+  // x402 v2 PaymentPayload binds the signed payload to an accepted requirement.
+  // Do not forward opaque signatures: inspect the selected terms before allowing
+  // the resource server to verify/settle them.
+  const accepted = payment?.accepted;
+  if (!accepted || typeof accepted !== "object") {
+    throw new Error("x402_payment_signature_terms_missing");
+  }
+  const matches = safeOptions.some((option) =>
+    option.scheme === accepted.scheme &&
+    option.network === accepted.network &&
+    String(option.asset || "").toLowerCase() === String(accepted.asset || "").toLowerCase() &&
+    String(option.payTo || "").toLowerCase() === String(accepted.payTo || "").toLowerCase() &&
+    String(option.amount ?? option.maxAmountRequired ?? "") === String(accepted.amount ?? accepted.maxAmountRequired ?? "")
+  );
+  if (!matches) throw new Error("x402_payment_signature_terms_not_approved");
+}
+
 async function readLimited(response: Response): Promise<Uint8Array> {
   const length = Number(response.headers.get("content-length") || "0");
   if (Number.isFinite(length) && length > MAX_RESPONSE_BYTES) {
@@ -253,6 +281,14 @@ Deno.serve(async (req: Request) => {
         accepts,
         message: "Payment authorization required. Sign only one of these approved options, then retry with payment_signature.",
       }, 402);
+    }
+
+    try {
+      validatePaymentSignature(suppliedSignature, accepts);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "x402_payment_signature_invalid";
+      audit({ user_id: userData.user.id, host: url.hostname, state: "payment_signature_rejected", reason });
+      return json({ error: reason }, 403);
     }
 
     const paid = await fetch(url, {
