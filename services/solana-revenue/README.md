@@ -26,7 +26,7 @@ The service refuses payment operations when configuration is missing or invalid.
 
 - `GET /health` — reports readiness without returning secret values.
 - `POST /invoices` — creates a 15-minute invoice and returns a native SOL Pay URL. It snapshots up to 10 newest records marked `compliance_status = eligible`; if the query fails or returns no records, it refuses to sell a report.
-- `POST /verify` — accepts `{ "invoiceId": "...", "signature": "..." }`; checks confirmed on-chain transfer, recipient, exact lamport amount, reference, and expiry before atomically marking the invoice paid. A transaction signature can be consumed only once.
+- `POST /verify` — accepts `{ "invoiceId": "...", "signature": "..." }`; checks confirmed on-chain transfer, recipient, exact lamport amount, and reference before atomically marking the invoice paid. An unpaid checkout expires after 15 minutes; if a valid transfer arrives at the expiry boundary, it is still credited rather than silently discarded. A transaction signature can be consumed only once.
 - `GET /report/:invoiceId` — returns the snapshot only for a paid invoice.
 
 The report is an opportunity snapshot, not a guarantee of profit or a claim that any opportunity is executable. This initial service does not yet generate arbitrage routes or invoke trading executors.
