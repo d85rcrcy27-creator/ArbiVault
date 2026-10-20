@@ -282,6 +282,7 @@ export default function Wallets() {
             </div>
           )}
         </section>
+        <div className="grid gap-4 xl:grid-cols-2">
           <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
             <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
               <Plus className="h-3.5 w-3.5" /> Withdrawal Destinations
