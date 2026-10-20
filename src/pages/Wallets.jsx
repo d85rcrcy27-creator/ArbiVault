@@ -256,7 +256,7 @@ export default function Wallets() {
           {snapshotError && <div className="mt-3 font-mono text-[0.58rem] text-[#FF4D4D]">{snapshotError}</div>}
           {snapshot && (
             <div className="mt-4 space-y-3">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {[
                   ['BLOCK', Number(snapshot.network?.block_number ?? 0).toLocaleString('en-US')],
                   ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : String(snapshot.network.gas_price_gwei) + ' Gwei'],
