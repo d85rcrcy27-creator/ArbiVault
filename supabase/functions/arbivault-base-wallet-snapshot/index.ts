@@ -4,7 +4,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.117.2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
-const X402_PREVIEW_URL = Deno.env.get("X402_BASE_PREVIEW_URL") || "https://x402-data-api.sigrunner.workers.dev/gate/swap/preview?token=weth";
+const X402_BASE_URL = Deno.env.get("X402_BASE_URL") || "https://x402-data-api.sigrunner.workers.dev";
 const BASE_RPC_URL = Deno.env.get("BASE_RPC_URL") || "https://mainnet.base.org";
 const ERC20_ABI = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
@@ -71,21 +71,31 @@ Deno.serve(async (req: Request) => {
   try {
     const client = createPublicClient({ chain: base, transport: http(BASE_RPC_URL, { timeout: 10000, retryCount: 1 }) });
 
-    // Provider preview is free. Its verdict is informational only; it never authorizes a trade.
-    let preview: Record<string, unknown> | null = null;
-    let previewError: string | null = null;
-    try {
-      const response = await fetch(X402_PREVIEW_URL, {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!response.ok) throw new Error(`x402_preview_http_${response.status}`);
-      const payload = await response.json();
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("x402_preview_invalid_json");
-      preview = payload as Record<string, unknown>;
-    } catch (error) {
-      previewError = error instanceof Error ? error.message : "x402_preview_unavailable";
-    }
+    // These two preview endpoints are free and do not trigger an x402 payment challenge.
+    const [gasPreview, blockPreview] = await Promise.all([
+      (async () => {
+        try {
+          const response = await fetch(`${X402_BASE_URL}/chain/gas-price/preview`, {
+            headers: { accept: "application/json" }, signal: AbortSignal.timeout(6000),
+          });
+          if (!response.ok) throw new Error(`gas_preview_http_${response.status}`);
+          return await response.json() as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })(),
+      (async () => {
+        try {
+          const response = await fetch(`${X402_BASE_URL}/chain/block-number/preview`, {
+            headers: { accept: "application/json" }, signal: AbortSignal.timeout(6000),
+          });
+          if (!response.ok) throw new Error(`block_preview_http_${response.status}`);
+          return await response.json() as Record<string, unknown>;
+        } catch {
+          return null;
+        }
+      })(),
+    ]);
 
     const [blockNumber, gasPrice, baseFeePerGas, priorityFeePerGas, ethUsd] = await Promise.all([
       client.getBlockNumber(),
@@ -153,9 +163,9 @@ Deno.serve(async (req: Request) => {
       return null;
     };
     const gasPriceGwei = Number(formatUnits(gasPrice, 9));
-    const previewGasWei = preview?.gas_price_wei;
+    const previewGasWei = gasPreview?.gas_price_wei;
     const gasPriceWeiText = typeof previewGasWei === "string" && /^\\d+$/.test(previewGasWei) ? previewGasWei : gasPrice.toString();
-    const previewBlock = previewNumber("block_number", "latest_block_number");
+    const previewBlock = previewNumber(blockPreview, "block_number", "latest_block_number");
     const gasPriceUsd = ethUsd === null ? null : Number((Number(formatUnits(gasPrice, 18)) * ethUsd).toFixed(8));
 
     return json({
@@ -169,12 +179,12 @@ Deno.serve(async (req: Request) => {
         block_number: previewBlock ?? Number(blockNumber),
         gas_price_wei: gasPriceWeiText,
         gas_price_gwei: previewNumber("gas_price_gwei") ?? gasPriceGwei,
-        base_fee_wei: typeof preview?.base_fee_wei === "string" && /^\\d+$/.test(preview.base_fee_wei) ? preview.base_fee_wei : baseFeePerGas?.toString() ?? null,
+        base_fee_wei: baseFeePerGas?.toString() ?? null,\n        base_fee_gwei: previewNumber(gasPreview, "base_fee_gwei") ?? (baseFeePerGas === null ? null : Number(formatUnits(baseFeePerGas, 9))),
         max_priority_fee_wei: priorityFeePerGas?.toString() ?? null,
-        max_priority_fee_gwei: priorityFeePerGas === null ? null : Number(formatUnits(priorityFeePerGas, 9)),
-        gas_price_usd: previewNumber("gas_price_usd") ?? gasPriceUsd,
-        gas_source: preview && (preview.gas_price_wei !== undefined || preview.gas_price_gwei !== undefined) ? "x402 free preview" : "Base public RPC fallback",
-        block_source: preview && (preview.block_number !== undefined || preview.latest_block_number !== undefined) ? "x402 free preview" : "Base public RPC fallback",
+        max_priority_fee_gwei: previewNumber(gasPreview, "priority_fee_gwei", "max_priority_fee_gwei") ?? (priorityFeePerGas === null ? null : Number(formatUnits(priorityFeePerGas, 9))),
+        gas_price_usd: previewNumber(gasPreview, "gas_price_usd") ?? gasPriceUsd,
+        gas_source: gasPreview && gasPreview.gas_price_gwei !== undefined ? "x402 free preview" : "Base public RPC fallback",
+        block_source: blockPreview && (blockPreview.block_number !== undefined || blockPreview.latest_block_number !== undefined) ? "x402 free preview" : "Base public RPC fallback",
         preview_verdict: preview?.verdict ?? null,
         preview_decision: preview?.decision ?? null,
         preview_risk_score: preview?.risk_score ?? null,
