@@ -12,6 +12,8 @@ import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
 import ResetPassword from '@/pages/ResetPassword'
 import Wallets from '@/pages/Wallets'
+import FlashLoans from '@/pages/FlashLoans'
+import KeyBackup from '@/pages/KeyBackup'
 
 function App() {
   return (
@@ -33,6 +35,8 @@ function App() {
             <Route element={<ProtectedRoute />}>
               <Route path="/" element={<AppErrorBoundary><Home /></AppErrorBoundary>} />
               <Route path="/wallets" element={<Wallets />} />
+              <Route path="/flash-loans" element={<FlashLoans />} />
+              <Route path="/key-backup" element={<KeyBackup />} />
             </Route>
 
             {/* Catch-all */}
