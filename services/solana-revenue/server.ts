@@ -167,16 +167,26 @@ app.post("/verify", async (req, res) => {
       if (row.tx_signature === signature) return res.json({ verified: true, invoiceId, signature, idempotent: true });
       return res.status(409).json({ error: "Invoice has already been paid with another transaction" });
     }
-    if (row.status !== "pending" || Date.parse(row.expires_at) <= Date.now()) {
-      if (row.status === "pending") await db.from("paid_report_invoices").update({ status: "expired" }).eq("id", invoiceId).eq("status", "pending");
+    if (!["pending", "expired"].includes(row.status)) {
       return res.status(410).json({ error: "Invoice is no longer payable" });
     }
+    // Expiry stops an unpaid checkout, but a valid on-chain transfer is still credited
+    // if it arrived late. Never leave a real, verified payment uncredited just because
+    // the customer broadcast near the expiry boundary.
+    const invoiceExpired = Date.parse(row.expires_at) <= Date.now() || row.status === "expired";
     if (row.treasury_address !== cfg.treasury) return res.status(409).json({ error: "Invoice recipient does not match configured treasury" });
 
     const reference = address(row.reference_address);
     // A reference lookup alone is insufficient; validateTransfer also checks the recipient,
     // exact SOL amount, reference, and successful transaction.
-    const found = await merchant.pay.findReference(reference);
+    let found: Awaited<ReturnType<typeof merchant.pay.findReference>>;
+    try {
+      found = await merchant.pay.findReference(reference);
+    } catch {
+      return invoiceExpired
+        ? res.status(410).json({ error: "Invoice expired and no confirmed payment was found" })
+        : res.status(409).json({ error: "No confirmed payment found for this invoice yet" });
+    }
     if (found.signature !== signature) return res.status(400).json({ error: "Transaction does not match this invoice reference" });
     await merchant.pay.validateTransfer(signature, {
       recipient: cfg.treasury,
@@ -188,7 +198,7 @@ app.post("/verify", async (req, res) => {
       .from("paid_report_invoices")
       .update({ status: "paid", tx_signature: signature, verified_at: new Date().toISOString() })
       .eq("id", invoiceId)
-      .eq("status", "pending")
+      .in("status", ["pending", "expired"])
       .is("tx_signature", null)
       .select("id")
       .maybeSingle();
