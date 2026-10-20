@@ -39,6 +39,10 @@ export default function Wallets() {
   const [destinationForm, setDestinationForm] = useState({ chain: 'bnb', address: '', label: '' })
   const [withdrawForm, setWithdrawForm] = useState({ sourceWalletId: '', destinationId: '', amount: '' })
   const [approvalUri, setApprovalUri] = useState('')
+  const [snapshot, setSnapshot] = useState(null)
+  const [snapshotBusy, setSnapshotBusy] = useState(false)
+  const [snapshotError, setSnapshotError] = useState('')
+  const [snapshotTokens, setSnapshotTokens] = useState('0x4200000000000000000000000000000000000006, 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
 
   const load = async () => {
     if (authLoading || !user) return
@@ -150,6 +154,24 @@ export default function Wallets() {
     }
   }
 
+  const runBaseSnapshot = async () => {
+    setSnapshotBusy(true)
+    setSnapshotError('')
+    try {
+      const evmWallets = [...new Set(wallets.filter((w) => ['ethereum', 'bnb'].includes(w.chain) && /^0x[a-fA-F0-9]{40}$/.test(w.address || '')).map((w) => w.address))]
+      if (!evmWallets.length) throw new Error('No Ethereum/BNB EVM wallet addresses are available in your wallet inventory.')
+      const tokens = [...new Set(snapshotTokens.split(/[\\s,;]+/).map((v) => v.trim()).filter(Boolean))]
+      if (!tokens.every((v) => /^0x[a-fA-F0-9]{40}$/.test(v))) throw new Error('Enter valid ERC-20 contract addresses separated by commas.')
+      const { data, error: invokeError } = await supabase.functions.invoke('arbivault-base-wallet-snapshot', { body: { wallets: evmWallets, tokens } })
+      if (invokeError) throw invokeError
+      if (!data?.ok) throw new Error(data?.error || 'Base wallet snapshot failed.')
+      setSnapshot(data)
+    } catch (e) {
+      setSnapshotError(e.message || 'Unable to query Base balances')
+    } finally {
+      setSnapshotBusy(false)
+    }
+  }
   const copyAddress = async (address) => {
     try {
       await navigator.clipboard.writeText(address)
@@ -191,18 +213,22 @@ export default function Wallets() {
           </div>
           <div className="grid gap-3 md:grid-cols-3">
             {CHAINS.map((chain) => {
-              const wallet = wallets.find((w) => w.chain === chain.id && w.wallet_role === 'trading_hot' && w.status === 'active')
+              const wallet = wallets.find((w) => w.chain === chain.id && w.status === 'active' && (w.wallet_role === 'trading_hot' || (chain.id === 'solana' && w.data_quality_status === 'needs_review')))
+              const ownershipConfirmed = chain.id === 'solana' && wallet?.data_quality_status === 'needs_review'
+              const tradingReady = wallet?.is_hot && wallet?.wallet_role === 'trading_hot' && wallet?.data_quality_status === 'verified'
               return (
                 <div key={chain.id} className="rounded border border-[#232738] bg-[#090A0F] p-3">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-xs font-semibold uppercase">{chain.asset}</span>
-                    {wallet ? <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF87]" /> : <Clock3 className="h-3.5 w-3.5 text-[#FFB800]" />}
+                    {tradingReady || ownershipConfirmed ? <CheckCircle2 className="h-3.5 w-3.5 text-[#00FF87]" /> : <Clock3 className="h-3.5 w-3.5 text-[#FFB800]" />}
                   </div>
                   <div className="mt-2 font-mono text-[0.57rem] text-[#8a90b0]">{short(wallet?.address)}</div>
                   <div className="mt-2 flex items-center justify-between font-mono text-[0.55rem] text-[#5a6080]">
-                    <span>Balance</span>
+                    <span>{wallet?.data_quality_status === 'needs_review' ? 'Reported balance' : 'Balance'}</span>
                     <span>{formatAmount(wallet?.last_balance)} {wallet ? chain.asset : ''}</span>
                   </div>
+                  {ownershipConfirmed && <div className="mt-2 font-mono text-[0.55rem] text-[#00FF87]">Verified · ownership of previous address</div>}
+                  {wallet?.data_quality_status === 'needs_review' && <div className="mt-1 font-mono text-[0.55rem] text-[#FFB800]">Balance not independently checked · trading disabled</div>}
                   <button
                     onClick={() => wallet?.address && copyAddress(wallet.address)}
                     disabled={!wallet}
@@ -216,6 +242,46 @@ export default function Wallets() {
           </div>
         </section>
 
+        <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
+          <div className="mb-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Base Network Snapshot</div>
+          <p className="mb-3 font-mono text-[0.58rem] text-[#5a6080]">One batch run queries Base gas/block data and native/ERC-20 balances for the EVM addresses in your inventory. Read-only; never signs or broadcasts.</p>
+          <label className="mb-1 block font-mono text-[0.55rem] uppercase text-[#8a90b0]">ERC-20 contract addresses (comma-separated)</label>
+          <textarea value={snapshotTokens} onChange={(e) => setSnapshotTokens(e.target.value)} rows={2} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-[0.58rem] text-[#e0e4f0]" />
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button onClick={runBaseSnapshot} disabled={snapshotBusy || loading || !wallets.some((w) => ['ethereum', 'bnb'].includes(w.chain) && /^0x[a-fA-F0-9]{40}$/.test(w.address || ''))} className="rounded border border-[#00F0FF]/40 bg-[#00F0FF]/5 px-3 py-2 font-mono text-[0.6rem] font-bold uppercase text-[#00F0FF] disabled:opacity-40">
+              {snapshotBusy ? 'Querying…' : 'Run snapshot'}
+            </button>
+            <span className="font-mono text-[0.55rem] text-[#5a6080]">Estimated run cost: $0.001 · no payment collected here</span>
+          </div>
+          {snapshotError && <div className="mt-3 font-mono text-[0.58rem] text-[#FF4D4D]">{snapshotError}</div>}
+          {snapshot && (
+            <div className="mt-4 space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                { [
+                  ['BLOCK', snapshot.network?.block_number == null ? 'Unavailable' : Number(snapshot.network.block_number).toLocaleString('en-US')],
+                  ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : `${snapshot.network.gas_price_gwei} Gwei`],
+                  ['BASE FEE', snapshot.network?.base_fee_gwei == null ? 'Unavailable' : `${snapshot.network.base_fee_gwei} Gwei`],
+                  ['PRIORITY FEE', snapshot.network?.max_priority_fee_gwei == null ? 'Unavailable' : `${snapshot.network.max_priority_fee_gwei} Gwei`],
+                  ['GAS PRICE USD', snapshot.network?.gas_price_usd == null ? 'Unavailable' : `$${snapshot.network.gas_price_usd}`],
+                  ['DATA', snapshot.network?.preview_status === 'available' ? 'x402 free previews' : 'RPC fallback'],
+                ].map(([label, value]) => <div key={label} className="rounded border border-[#232738] bg-[#090A0F] p-2"><div className="font-mono text-[0.52rem] text-[#5a6080]">{label}</div><div className="mt-1 break-words font-mono text-[0.62rem] text-[#e0e4f0]">{value}</div></div>)}
+              </div>
+              <div className="font-mono text-[0.54rem] text-[#5a6080]">Gas source: {snapshot.network?.gas_source || 'Unavailable'} · Block source: {snapshot.network?.block_source || 'Unavailable'} · Checked {snapshot.checked_at ? new Date(snapshot.checked_at).toLocaleString() : '—'}</div>
+              {snapshot.network?.preview_status !== 'available' && <div className="font-mono text-[0.54rem] text-[#FFB800]">One or both free x402 previews were unavailable; fallback RPC values are used.</div>}
+              {snapshot.wallets?.map((w) => (
+                <div key={w.address} className="rounded border border-[#232738] bg-[#090A0F] p-3">
+                  <div className="break-all font-mono text-[0.56rem] text-[#8a90b0]">{w.address}</div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div className="font-mono text-[0.58rem]">ETH: {w.balance_eth ?? 'Unavailable'} {w.balance_usd == null ? '(USD unavailable)' : `· $${w.balance_usd}`}</div>
+                    <div className="font-mono text-[0.58rem]">Native balance source: {w.balance_source || 'Base RPC'}</div>
+                  </div>
+                  {w.tokens?.length > 0 && <div className="mt-2 space-y-1">{w.tokens.map((token) => <div key={token.address} className="break-all font-mono text-[0.56rem]">{token.symbol || short(token.address)}: {token.balance_formatted ?? 'Unavailable'} {token.balance_usd == null ? '' : `· $${token.balance_usd}`}</div>)}</div>}
+                  {w.error && <div className="mt-2 font-mono text-[0.55rem] text-[#FFB800]">{w.error}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
         <div className="grid gap-4 xl:grid-cols-2">
           <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
             <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">

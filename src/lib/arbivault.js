@@ -66,7 +66,7 @@ export async function recordSimulatedTrade(trade) {
   return data
 }
 export async function listTrades(limit = 100) {
-  const { data, error } = await supabase.from('trades').select('*').neq('execution_mode', 'simulated').order('created_at', { ascending: false }).limit(limit)
+  const { data, error } = await supabase.from('trades').select('*').eq('status', 'executed').eq('execution_mode', 'on_chain').not('tx_hash', 'is', null).order('confirmed_at', { ascending: false }).limit(limit)
   if (error) throw error
   return data || []
 }

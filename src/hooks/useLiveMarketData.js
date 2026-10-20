@@ -42,7 +42,7 @@ function normalizeTrade(row) {
     buyExchange: row.metadata?.buyExchange || '—',
     sellExchange: row.metadata?.sellExchange || '—',
     spreadPct: Number(row.metadata?.spreadPct || 0),
-    pnl: Number(row.net_profit || 0),
+    pnl: row.net_profit === null || row.net_profit === undefined || row.metadata?.pnl_basis === 'realized_only' && row.net_profit === null ? null : Number(row.net_profit),
     ts: new Date(row.created_at).getTime(),
     strategy: row.strategy || 'Unknown',
     executionMode: row.execution_mode,
@@ -161,11 +161,16 @@ export function useLiveMarketData() {
     throw new Error('Browser execution is disabled; use the server-side execution bot')
   }, [])
 
-  // Only confirmed live trades contribute to P&L.
-  const livePnl = +trades
-    .filter((trade) => trade.status === 'executed' && trade.executionMode === 'on_chain' && !!trade.txid)
-    .reduce((sum, trade) => sum + trade.pnl, 0)
-    .toFixed(2)
+  // Only confirmed live trades with independently recorded P&L contribute to the total.
+  const pnlVerifiedTrades = trades.filter((trade) =>
+    trade.status === 'executed' &&
+    trade.executionMode === 'on_chain' &&
+    !!trade.txid &&
+    Number.isFinite(trade.pnl)
+  )
+  const livePnl = pnlVerifiedTrades.length
+    ? Number(pnlVerifiedTrades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2))
+    : null
 
   return { routes, marketSnapshot, chainRpcHealth, signerHealth, testnetHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
