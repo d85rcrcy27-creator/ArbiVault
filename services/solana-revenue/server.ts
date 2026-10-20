@@ -1,9 +1,8 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
-import BigNumber from "bignumber.js";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { encodeURL, findReference, validateTransfer } from "@solana/pay";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { address, generateKeyPair, getAddressFromPublicKey } from "@solana/kit";
+import { createMerchantClient } from "@solana/pay";
 import { randomUUID } from "node:crypto";
 
 type Invoice = {
@@ -14,9 +13,7 @@ type Invoice = {
   expected_lamports: number | string;
   status: "pending" | "paid" | "expired" | "refunded";
   tx_signature: string | null;
-  payer_address: string | null;
   report_snapshot: unknown[];
-  payment_url: string | null;
   expires_at: string;
   verified_at: string | null;
 };
@@ -30,16 +27,19 @@ function config() {
   const url = process.env.SUPABASE_URL?.trim();
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   const rpcUrl = process.env.SOLANA_RPC_URL?.trim();
-  const treasury = process.env.SOLANA_TREASURY_ADDRESS?.trim();
-  const price = process.env.SOLANA_REPORT_PRICE_LAMPORTS?.trim();
+  const treasuryText = process.env.SOLANA_TREASURY_ADDRESS?.trim();
+  const priceText = process.env.SOLANA_REPORT_PRICE_LAMPORTS?.trim();
   const network = process.env.SOLANA_NETWORK?.trim();
   const ttl = Number(process.env.SOLANA_INVOICE_TTL_SECONDS ?? "900");
-  if (!url || !serviceKey || !rpcUrl || !treasury || !price) throw new Error("Revenue service is not configured");
+  if (!url || !serviceKey || !rpcUrl || !treasuryText || !priceText) throw new Error("Revenue service is not configured");
   if (network !== "mainnet-beta") throw new Error("SOLANA_NETWORK must be mainnet-beta for this service");
-  if (!/^\d+$/.test(price) || BigInt(price) <= 0n || BigInt(price) > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("SOLANA_REPORT_PRICE_LAMPORTS must be a positive integer");
+  if (!/^\d+$/.test(priceText) || BigInt(priceText) <= 0n || BigInt(priceText) > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("SOLANA_REPORT_PRICE_LAMPORTS must be a positive integer");
   if (!Number.isInteger(ttl) || ttl < 60 || ttl > 3600) throw new Error("SOLANA_INVOICE_TTL_SECONDS must be 60..3600");
-  const treasuryKey = new PublicKey(treasury);
-  return { url, serviceKey, rpcUrl, treasury: treasuryKey, lamports: Number(price), ttl };
+  const treasury = address(treasuryText);
+  const lamports = Number(priceText);
+  const amountSol = lamports / 1_000_000_000;
+  if (!Number.isFinite(amountSol) || amountSol <= 0) throw new Error("Invalid SOL price");
+  return { url, serviceKey, rpcUrl, treasury, lamports, amountSol, ttl };
 }
 
 function clients() {
@@ -48,8 +48,8 @@ function clients() {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { headers: { "X-Application-Name": "ArbiVault-Solana-Revenue" } },
   });
-  const connection = new Connection(cfg.rpcUrl, "confirmed");
-  return { cfg, db, connection };
+  const merchant = createMerchantClient({ rpcUrl: cfg.rpcUrl });
+  return { cfg, db, merchant };
 }
 
 function safeError(res: express.Response, error: unknown) {
@@ -57,6 +57,7 @@ function safeError(res: express.Response, error: unknown) {
   if (message === "Revenue service is not configured" || message.startsWith("SOLANA_")) {
     return res.status(503).json({ error: "Revenue service is not ready" });
   }
+  // Do not expose database, RPC, or SDK internals to clients.
   return res.status(500).json({ error: "Request could not be completed" });
 }
 
@@ -83,7 +84,7 @@ app.get("/health", (_req, res) => {
 
 app.post("/invoices", async (_req, res) => {
   try {
-    const { cfg, db } = clients();
+    const { cfg, db, merchant } = clients();
     let reportSnapshot: unknown[];
     try {
       reportSnapshot = await loadRealReport(db);
@@ -91,7 +92,9 @@ app.post("/invoices", async (_req, res) => {
       return res.status(503).json({ error: "A current eligible report is unavailable; no invoice was created" });
     }
 
-    const reference = Keypair.generate().publicKey;
+    // Only the public key is used as a unique reference. No wallet signer is created or retained.
+    const referenceKeyPair = await generateKeyPair();
+    const reference = await getAddressFromPublicKey(referenceKeyPair.publicKey);
     const id = randomUUID();
     const expiresAt = new Date(Date.now() + cfg.ttl * 1000).toISOString();
     const { data: inserted, error: insertError } = await db
@@ -99,8 +102,8 @@ app.post("/invoices", async (_req, res) => {
       .insert({
         id,
         product_id: "premium_opportunity_report",
-        reference_address: reference.toBase58(),
-        treasury_address: cfg.treasury.toBase58(),
+        reference_address: reference,
+        treasury_address: cfg.treasury,
         expected_lamports: String(cfg.lamports),
         status: "pending",
         report_snapshot: reportSnapshot,
@@ -110,9 +113,9 @@ app.post("/invoices", async (_req, res) => {
       .single();
     if (insertError || !inserted) throw new Error("Could not create invoice");
 
-    const paymentUrl = encodeURL({
+    const paymentUrl = merchant.pay.encodeURL({
       recipient: cfg.treasury,
-      amount: new BigNumber(cfg.lamports).dividedBy(1_000_000_000),
+      amount: cfg.amountSol,
       reference,
       label: "ArbiVault",
       message: "Premium opportunity report",
@@ -132,11 +135,11 @@ app.post("/invoices", async (_req, res) => {
       network: "mainnet-beta",
       asset: "SOL",
       amountLamports: cfg.lamports,
-      amountSOL: new BigNumber(cfg.lamports).dividedBy(1_000_000_000).toFixed(9),
-      recipient: cfg.treasury.toBase58(),
+      amountSOL: cfg.amountSol.toFixed(9),
+      recipient: cfg.treasury,
       expiresAt,
       paymentUrl,
-      instructions: "Pay the exact amount to the displayed recipient. Then submit the returned transaction signature to POST /verify.",
+      instructions: "Pay the exact amount to the displayed recipient. Then submit the transaction signature to POST /verify.",
     });
   } catch (error) {
     return safeError(res, error);
@@ -151,7 +154,7 @@ app.post("/verify", async (req, res) => {
   }
 
   try {
-    const { cfg, db, connection } = clients();
+    const { cfg, db, merchant } = clients();
     const { data: invoice, error: invoiceError } = await db
       .from("paid_report_invoices")
       .select("*")
@@ -168,31 +171,22 @@ app.post("/verify", async (req, res) => {
       if (row.status === "pending") await db.from("paid_report_invoices").update({ status: "expired" }).eq("id", invoiceId).eq("status", "pending");
       return res.status(410).json({ error: "Invoice is no longer payable" });
     }
-    if (row.treasury_address !== cfg.treasury.toBase58()) return res.status(409).json({ error: "Invoice recipient does not match configured treasury" });
+    if (row.treasury_address !== cfg.treasury) return res.status(409).json({ error: "Invoice recipient does not match configured treasury" });
 
-    const reference = new PublicKey(row.reference_address);
-    const referenceTx = await findReference(connection, reference, { finality: "confirmed" });
-    if (referenceTx.signature !== signature) return res.status(400).json({ error: "Transaction does not match this invoice reference" });
-
-    const status = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true });
-    const signatureStatus = status.value[0];
-    if (!signatureStatus || signatureStatus.err || !["confirmed", "finalized"].includes(signatureStatus.confirmationStatus ?? "")) {
-      return res.status(409).json({ error: "Transaction is not successfully confirmed" });
-    }
-
-    await validateTransfer(connection, signature, {
+    const reference = address(row.reference_address);
+    // A reference lookup alone is insufficient; validateTransfer also checks the recipient,
+    // exact SOL amount, reference, and successful transaction.
+    const found = await merchant.pay.findReference(reference);
+    if (found.signature !== signature) return res.status(400).json({ error: "Transaction does not match this invoice reference" });
+    await merchant.pay.validateTransfer(signature, {
       recipient: cfg.treasury,
-      amount: new BigNumber(row.expected_lamports.toString()).dividedBy(1_000_000_000),
+      amount: cfg.amountSol,
       reference,
     });
 
-    const tx = await connection.getParsedTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-    if (!tx || tx.meta?.err) return res.status(409).json({ error: "Confirmed transfer could not be verified" });
-    const payer = tx.transaction.message.accountKeys.find((key) => key.signer)?.pubkey.toBase58() ?? null;
-
     const { data: updated, error: updateError } = await db
       .from("paid_report_invoices")
-      .update({ status: "paid", tx_signature: signature, payer_address: payer, verified_at: new Date().toISOString() })
+      .update({ status: "paid", tx_signature: signature, verified_at: new Date().toISOString() })
       .eq("id", invoiceId)
       .eq("status", "pending")
       .is("tx_signature", null)
@@ -200,17 +194,14 @@ app.post("/verify", async (req, res) => {
       .maybeSingle();
 
     if (updateError) {
-      // A unique signature conflict means this transaction was already consumed by another invoice.
       if (updateError.code === "23505") return res.status(409).json({ error: "Transaction signature has already been consumed" });
       throw new Error("Could not record verified payment");
     }
     if (!updated) return res.status(409).json({ error: "Invoice changed during verification; reload its status" });
 
-    return res.json({ verified: true, invoiceId, signature, network: "mainnet-beta", asset: "SOL", recipient: cfg.treasury.toBase58() });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-    if (/not found|not confirmed|reference/i.test(message)) return res.status(400).json({ error: "Payment could not be verified for this invoice" });
-    return safeError(res, error);
+    return res.json({ verified: true, invoiceId, signature, network: "mainnet-beta", asset: "SOL", recipient: cfg.treasury });
+  } catch {
+    return res.status(400).json({ error: "Payment could not be verified for this invoice" });
   }
 });
 
@@ -239,11 +230,11 @@ app.get("/report/:invoiceId", async (req, res) => {
   }
 });
 
-export default app;
-
 if (process.env.VERCEL !== "1" && process.env.NODE_ENV !== "test") {
   const port = Number(process.env.PORT ?? "4567");
   app.listen(port, "127.0.0.1", () => {
     console.log(`ArbiVault native SOL revenue API listening on http://127.0.0.1:${port}`);
   });
 }
+
+export default app;
