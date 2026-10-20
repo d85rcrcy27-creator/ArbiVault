@@ -5,7 +5,7 @@ export default function TradeLog({ trades = [] }) {
     <div className="flex h-full flex-col rounded border border-[#232738] bg-[#0C0E16]">
       <div className="flex items-center justify-between border-b border-[#232738] px-4 py-3">
         <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Trade Log</span>
-        <span className="font-mono text-[0.625rem] text-[#5a6080]">{trades.length} filled</span>
+        <span className="font-mono text-[0.625rem] text-[#5a6080]">{trades.length} confirmed on-chain</span>
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {trades.length === 0 ? (
