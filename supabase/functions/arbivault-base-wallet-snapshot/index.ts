@@ -152,9 +152,9 @@ Deno.serve(async (req: Request) => {
       };
     }));
 
-    const previewNumber = (...keys: string[]) => {
+    const previewNumber = (source: Record<string, unknown> | null, ...keys: string[]) => {
       for (const key of keys) {
-        const value = preview?.[key];
+        const value = source?.[key];
         if (typeof value === "string" || typeof value === "number") {
           const parsed = Number(value);
           if (Number.isFinite(parsed)) return parsed;
@@ -185,10 +185,10 @@ Deno.serve(async (req: Request) => {
         gas_price_usd: previewNumber(gasPreview, "gas_price_usd") ?? gasPriceUsd,
         gas_source: gasPreview && gasPreview.gas_price_gwei !== undefined ? "x402 free preview" : "Base public RPC fallback",
         block_source: blockPreview && (blockPreview.block_number !== undefined || blockPreview.latest_block_number !== undefined) ? "x402 free preview" : "Base public RPC fallback",
-        preview_verdict: preview?.verdict ?? null,
-        preview_decision: preview?.decision ?? null,
-        preview_risk_score: preview?.risk_score ?? null,
-        preview_error: previewError,
+        preview_verdict: null,
+        preview_decision: null,
+        preview_risk_score: null,
+        preview_status: gasPreview && blockPreview ? "available" : "partial_or_fallback",
         eth_usd_price: ethUsd,
         eth_usd_source: ethUsd === null ? null : "Coinbase public spot price",
       },
