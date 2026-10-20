@@ -42,7 +42,7 @@ function normalizeTrade(row) {
     buyExchange: row.metadata?.buyExchange || '—',
     sellExchange: row.metadata?.sellExchange || '—',
     spreadPct: Number(row.metadata?.spreadPct || 0),
-    pnl: Number(row.net_profit || 0),
+    pnl: row.net_profit === null || row.net_profit === undefined || row.metadata?.pnl_basis === 'realized_only' && row.net_profit === null ? null : Number(row.net_profit),
     ts: new Date(row.created_at).getTime(),
     strategy: row.strategy || 'Unknown',
     executionMode: row.execution_mode,
@@ -163,7 +163,7 @@ export function useLiveMarketData() {
 
   // Only confirmed live trades contribute to P&L.
   const livePnl = +trades
-    .filter((trade) => trade.status === 'executed' && trade.executionMode === 'on_chain' && !!trade.txid)
+    .filter((trade) => trade.status === 'executed' && trade.executionMode === 'on_chain' && !!trade.txid && Number.isFinite(trade.pnl))
     .reduce((sum, trade) => sum + trade.pnl, 0)
     .toFixed(2)
 
