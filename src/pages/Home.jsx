@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import UtilityBar from '@/components/arbitrage/UtilityBar'
 import PulseMatrix from '@/components/arbitrage/PulseMatrix'
 import SkillsCreator from '@/components/arbitrage/SkillsCreator'
@@ -70,7 +70,11 @@ export default function Home() {
   </div>
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
     <UtilityBar globalLatency={globalLatency} livePnl={livePnl} engineStatus={engineStatus} onToggleEngine={toggleEngine} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
-    <div className="px-4 pt-4"><div className="max-w-xl rounded border border-[#232738] bg-[#0C0E16] p-4">
+
+    <nav aria-label="Tools" className="grid grid-cols-1 gap-2 px-4 pt-4 sm:grid-cols-2">
+      <Link to="/flash-loans" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Flash Loan Explorer</span><span className="mt-1 block text-xs text-[#8a90b0]">Review recorded borrow, repayment and profit data</span></Link>
+      <Link to="/key-backup" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Wallet Key Backup</span><span className="mt-1 block text-xs text-[#8a90b0]">Review secure backup and recovery guidance</span></Link>
+    </nav>    <div className="px-4 pt-4"><div className="max-w-xl rounded border border-[#232738] bg-[#0C0E16] p-4">
       <div className="mb-3 flex items-center justify-between"><div className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Public Venue Feeds</div><div className="font-mono text-[0.55rem] uppercase text-[#00FF87]">MARKET DATA FEEDS</div></div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{PUBLIC_VENUES.map(([name, kind]) => <div key={name} className="rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2"><div className="font-mono text-[0.62rem] font-semibold text-[#e0e4f0]">{name}</div><div className="mt-1 font-mono text-[0.48rem] uppercase tracking-wider text-[#5a6080]">{kind}</div></div>)}</div>
     </div></div>
