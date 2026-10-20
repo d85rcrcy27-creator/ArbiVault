@@ -260,12 +260,12 @@ export default function Wallets() {
                 {[
                   ['BLOCK', Number(snapshot.network?.block_number ?? 0).toLocaleString('en-US')],
                   ['GAS PRICE', snapshot.network?.gas_price_gwei == null ? 'Unavailable' : String(snapshot.network.gas_price_gwei) + ' Gwei'],
-                  ['BASE FEE', snapshot.network?.base_fee_wei ? String(snapshot.network.base_fee_wei) + ' wei' : 'Unavailable'],
-                  ['PREVIEW', snapshot.network?.preview_verdict || snapshot.network?.preview_decision || 'Unavailable'],
+                  ['BASE FEE', snapshot.network?.base_fee_gwei == null ? 'Unavailable' : String(snapshot.network.base_fee_gwei) + ' Gwei'],
+                  ['DATA', snapshot.network?.preview_status === 'available' ? 'x402 free previews' : 'RPC fallback'],
                 ].map(([label, value]) => <div key={label} className="rounded border border-[#232738] bg-[#090A0F] p-2"><div className="font-mono text-[0.52rem] text-[#5a6080]">{label}</div><div className="mt-1 break-words font-mono text-[0.62rem] text-[#e0e4f0]">{value}</div></div>)}
               </div>
               <div className="font-mono text-[0.54rem] text-[#5a6080]">Gas source: {snapshot.network?.gas_source || 'Unavailable'} · Block source: {snapshot.network?.block_source || 'Unavailable'} · Checked {snapshot.checked_at ? new Date(snapshot.checked_at).toLocaleString() : '—'}</div>
-              {snapshot.network?.preview_error && <div className="font-mono text-[0.54rem] text-[#FFB800]">x402 preview unavailable; network values use fallback where possible.</div>}
+              {snapshot.network?.preview_status !== 'available' && <div className="font-mono text-[0.54rem] text-[#FFB800]">One or both free x402 previews were unavailable; fallback RPC values are used.</div>}
               {snapshot.wallets?.map((w) => (
                 <div key={w.address} className="rounded border border-[#232738] bg-[#090A0F] p-3">
                   <div className="break-all font-mono text-[0.56rem] text-[#8a90b0]">{w.address}</div>
