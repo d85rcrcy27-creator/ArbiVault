@@ -1,0 +1,30 @@
+-- Add covering indexes for foreign keys identified by Supabase performance advisors.
+-- Additive only: no row data or wallet/signing policy is changed.
+create index if not exists signing_auth_challenges_request_idx on public.arbivault_signing_auth_challenges(signing_request_id);
+create index if not exists audit_log_owner_idx on public.audit_log(owner_id);
+create index if not exists bot_skills_config_idx on public.bot_skills(bot_config_id);
+create index if not exists bot_wallet_bindings_owner_idx on public.bot_wallet_bindings(owner_id);
+create index if not exists bot_wallet_bindings_wallet_idx on public.bot_wallet_bindings(wallet_id);
+create index if not exists execution_attempts_adapter_idx on public.execution_attempts(adapter_id);
+create index if not exists execution_attempts_owner_idx on public.execution_attempts(owner_id);
+create index if not exists flash_executor_hot_wallet_idx on public.flash_executor_deployments(hot_wallet_id);
+create index if not exists profit_recipient_audit_recipient_idx on public.profit_recipient_audit_events(recipient_id);
+create index if not exists reconciliation_events_payment_idx on public.reconciliation_events(payment_id);
+create index if not exists reconciliation_events_trade_idx on public.reconciliation_events(trade_id);
+create index if not exists reconciliation_events_wallet_idx on public.reconciliation_events(wallet_id);
+create index if not exists revenue_locks_owner_idx on public.revenue_locks(owner_id);
+create index if not exists revenue_paths_proof_payment_idx on public.revenue_paths(proof_payment_id);
+create index if not exists security_alerts_signing_req_idx on public.security_alerts(signing_request_id);
+create index if not exists security_alerts_wallet_idx on public.security_alerts(wallet_id);
+create index if not exists security_alerts_wallet_tx_idx on public.security_alerts(wallet_transaction_id);
+create index if not exists signing_requests_wallet_tx_idx on public.signing_requests(wallet_transaction_id);
+create index if not exists strategy_proposal_runs_owner_idx on public.strategy_proposal_runs(owner_id);
+create index if not exists strategy_proposal_runs_proposal_owner_idx on public.strategy_proposal_runs(proposal_id, owner_id);
+create index if not exists strategy_proposals_reviewed_by_idx on public.strategy_proposals(reviewed_by);
+create index if not exists trades_bot_config_idx on public.trades(bot_config_id);
+create index if not exists trades_bot_skill_idx on public.trades(bot_skill_id);
+create index if not exists transfer_auth_approved_wallet_idx on public.transfer_authorizations(approved_wallet_id);
+create index if not exists transfer_auth_source_wallet_idx on public.transfer_authorizations(source_wallet_id);
+create index if not exists transfer_auth_wallet_tx_idx on public.transfer_authorizations(wallet_transaction_id);
+create index if not exists transfers_from_wallet_idx on public.transfers(from_wallet_id);
+create index if not exists transfers_owner_idx on public.transfers(owner_id);
