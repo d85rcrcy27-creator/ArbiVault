@@ -214,9 +214,12 @@ export default function Wallets() {
             <div className="mt-0.5 font-mono text-[0.58rem] text-[#5a6080]">Real wallet inventory · approved destinations · withdrawal requests</div>
           </div>
         </div>
-        <button onClick={load} disabled={loading || authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-40" title="Refresh">
-          <RefreshCw className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate('/transactions')} className="rounded border border-[#232738] px-3 py-2 font-mono text-[0.58rem] uppercase text-[#00F0FF] hover:border-[#00F0FF]/40">Transactions</button>
+          <button onClick={load} disabled={loading || authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-40" title="Refresh">
+            <RefreshCw className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       <main className="space-y-4 p-4 md:p-6">
