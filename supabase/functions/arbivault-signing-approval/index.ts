@@ -149,25 +149,18 @@ Deno.serve(async (req) => {
         return json({ error: "challenge_expired" }, 410);
       }
 
-      const now = new Date().toISOString();
-      const update = action === "approve"
-        ? {
-            status: "authorized",
-            biometric_verified: true,
-            authorization_credential_id: "supabase-passkey",
-            approved_at: now,
-            approval_method: "passkey_qr",
-          }
-        : {
-            status: "rejected",
-            rejected_at: now,
-            expires_at: now,
-          };
+      // A QR bearer token is not a WebAuthn assertion. Keep approval fail-closed
+      // until the transaction-bound WebAuthn verifier is implemented and tested.
+      if (action === "approve") {
+        return json({ error: "cryptographic_passkey_verification_not_configured", signing_blocked: true }, 501);
+      }
 
+      const now = new Date().toISOString();
       const { data: updated, error: updateError } = await admin
         .from("signing_requests")
-        .update(update)
+        .update({ status: "rejected", rejected_at: now, expires_at: now })
         .eq("id", requestId)
+        .eq("owner_id", user.id)
         .eq("status", "pending")
         .select("id,status,approved_at,rejected_at,biometric_verified")
         .single();
