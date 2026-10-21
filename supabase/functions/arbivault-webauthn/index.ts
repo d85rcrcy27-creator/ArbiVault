@@ -44,7 +44,16 @@ Deno.serve(async (req) => {
         admin.from("arbivault_passkey_credentials").select("id,credential_id,created_at,last_used_at,device_type,backed_up,transports").eq("owner_id", user.id).order("created_at", { ascending: true }),
       ]);
       if (pendingResult.error || credentialRows.error) return json({ error: "passkey_inventory_lookup_failed" }, 500);
-      return json({ ok: true, pending_requests: pendingResult.data || [], credentials: credentialRows.data || [] });
+      const requestRows = pendingResult.data || [];
+      const transactionIds = requestRows.map((row: any) => row.wallet_transaction_id).filter(Boolean);
+      let transactions: any[] = [];
+      if (transactionIds.length) {
+        const { data, error } = await admin.from("wallet_transactions").select("id,amount,asset,transaction_class,chain,source_wallet_id").in("id", transactionIds).eq("owner_id", user.id);
+        if (error) return json({ error: "transaction_details_lookup_failed" }, 500);
+        transactions = data || [];
+      }
+      const transactionMap = new Map(transactions.map((row: any) => [row.id, row]));
+      return json({ ok: true, pending_requests: requestRows.map((row: any) => ({ ...row, transaction: transactionMap.get(row.wallet_transaction_id) || null })), credentials: credentialRows.data || [] });
     }
 
     if (action === "registration_options") {
