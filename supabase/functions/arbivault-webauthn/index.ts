@@ -116,13 +116,13 @@ Deno.serve(async (req) => {
       const now = new Date().toISOString();
       const { data: consumed, error: consumeError } = await admin.from("arbivault_signing_auth_challenges").update({ used_at: now, attempts: Number(challenge.attempts || 0) + 1 }).eq("id", challengeId).eq("owner_id", user.id).is("used_at", null).select("id").maybeSingle();
       if (consumeError || !consumed) return json({ error: "approval_challenge_already_used" }, 409);
+      if (request.wallet_transaction_id) {
+        const { data: transferAuth, error: syncError } = await admin.from("transfer_authorizations").update({ authorization_status: "authorized", biometric_verified: true, approved_at: now }).eq("wallet_transaction_id", request.wallet_transaction_id).eq("owner_id", user.id).eq("payload_hash", request.payload_hash).eq("authorization_status", "pending").select("id").maybeSingle();
+        if (syncError || !transferAuth) return json({ error: "transfer_authorization_not_pending_or_sync_failed" }, 409);
+      }
       const { data: authorized, error: authError } = await admin.from("signing_requests").update({ status: "authorized", biometric_verified: true, approved_at: now, authorization_credential_id: credential.credential_id, approval_method: "webauthn_transaction_bound" }).eq("id", requestId).eq("owner_id", user.id).eq("status", "pending").eq("biometric_verified", false).select("id,status,biometric_verified,approved_at,authorization_credential_id").maybeSingle();
       if (authError || !authorized) return json({ error: "signing_request_authorization_race_or_failure" }, 409);
       await admin.from("arbivault_passkey_credentials").update({ sign_count: Number(verified.authenticationInfo.newCounter), last_used_at: now }).eq("id", credential.id).eq("owner_id", user.id);
-      if (request.wallet_transaction_id) {
-        const { error: syncError } = await admin.from("transfer_authorizations").update({ authorization_status: "authorized", biometric_verified: true, approved_at: now }).eq("wallet_transaction_id", request.wallet_transaction_id).eq("owner_id", user.id).eq("payload_hash", request.payload_hash).eq("authorization_status", "pending");
-        if (syncError) return json({ ok: true, signing_request: authorized, warning: "transfer_authorization_record_sync_failed" }, 202);
-      }
       return json({ ok: true, signing_request: authorized });
     }
     return json({ error: "unknown_action" }, 400);
