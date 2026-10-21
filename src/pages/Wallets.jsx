@@ -164,8 +164,8 @@ export default function Wallets() {
         setRequests((prev) => [result.transaction, ...prev.filter((item) => item.id !== result.transaction.id)].slice(0, 25))
       }
       setMessage(transferMode === 'internal'
-        ? 'Internal transfer request created. Human approval is required before signing or broadcast.'
-        : 'Withdrawal request created. Balance changes only after an on-chain transaction is confirmed; human approval is required before signing or broadcast.')
+        ? 'Internal transfer request created; no funds moved. Signing remains blocked until cryptographic passkey verification is configured.'
+        : 'Withdrawal request created; no funds moved. Signing remains blocked until cryptographic passkey verification is configured.')
       setWithdrawForm((prev) => ({ ...prev, amount: '' }))
       await load()
     } catch (e) {
