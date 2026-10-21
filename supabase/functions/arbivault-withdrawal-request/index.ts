@@ -7,9 +7,12 @@ const admin = createClient(url, serviceKey);
 const cors = {
   "content-type": "application/json",
   "cache-control": "no-store",
-  "access-control-allow-origin": "https://arbivault.vercel.app",
-  "access-control-allow-headers": "authorization, apikey, content-type",
+  // This function authenticates every non-OPTIONS request with Supabase Auth.
+  // Wildcard origin is intentional: Vercel preview hostnames rotate per deployment.
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers": "authorization, apikey, x-client-info, content-type",
   "access-control-allow-methods": "POST, OPTIONS",
+  "vary": "Origin",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -134,14 +137,16 @@ Deno.serve(async (req) => {
       return json({ ok: true, destination: data });
     }
 
-    if (action === "create_withdrawal") {
+    const internalTransfer = action === "create_transfer";
+    if (action === "create_withdrawal" || internalTransfer) {
       const sourceWalletId = String(body.source_wallet_id || "");
       const destinationId = String(body.destination_id || "");
+      const destinationWalletId = String(body.destination_wallet_id || "");
       const amount = Number(body.amount);
       const asset = String(body.asset || "").toUpperCase();
 
-      if (!sourceWalletId || !destinationId || !Number.isFinite(amount) || amount <= 0) {
-        return json({ error: "invalid_withdrawal_request" }, 400);
+      if (!sourceWalletId || (!internalTransfer && !destinationId) || (internalTransfer && !destinationWalletId) || !Number.isFinite(amount) || amount <= 0) {
+        return json({ error: internalTransfer ? "invalid_transfer_request" : "invalid_withdrawal_request" }, 400);
       }
 
       const { data: wallet, error: walletError } = await admin
@@ -156,22 +161,44 @@ Deno.serve(async (req) => {
         return json({ error: "source_wallet_not_authorized" }, 403);
       }
 
-      const { data: destination, error: destinationError } = await admin
-        .from("approved_wallets")
-        .select("id,owner_id,chain,address,status,activation_at")
-        .eq("id", destinationId)
-        .eq("owner_id", user.id)
-        .maybeSingle();
+      let destinationAddress = "";
+      let destinationIdForRecords: string | null = null;
 
-      if (destinationError) return json({ error: "destination_lookup_failed" }, 500);
-      if (!destination || destination.status !== "approved") {
-        return json({ error: "destination_not_active" }, 403);
-      }
-      if (destination.chain !== wallet.chain) {
-        return json({ error: "chain_mismatch" }, 400);
-      }
-      if (!destination.activation_at || new Date(destination.activation_at) > new Date()) {
-        return json({ error: "destination_activation_pending", activation_at: destination.activation_at }, 409);
+      if (internalTransfer) {
+        if (destinationWalletId === sourceWalletId) {
+          return json({ error: "source_and_destination_must_differ" }, 400);
+        }
+        const { data: destinationWallet, error: destinationError } = await admin
+          .from("wallets")
+          .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+          .eq("id", destinationWalletId)
+          .eq("owner_id", user.id)
+          .maybeSingle();
+
+        if (destinationError) return json({ error: "destination_wallet_lookup_failed" }, 500);
+        if (!destinationWallet || destinationWallet.status !== "active" || destinationWallet.is_hot !== true || destinationWallet.wallet_role !== "trading_hot") {
+          return json({ error: "destination_wallet_not_authorized" }, 403);
+        }
+        if (destinationWallet.chain !== wallet.chain) return json({ error: "chain_mismatch" }, 400);
+        destinationAddress = destinationWallet.address;
+      } else {
+        const { data: destination, error: destinationError } = await admin
+          .from("approved_wallets")
+          .select("id,owner_id,chain,address,status,activation_at")
+          .eq("id", destinationId)
+          .eq("owner_id", user.id)
+          .maybeSingle();
+
+        if (destinationError) return json({ error: "destination_lookup_failed" }, 500);
+        if (!destination || destination.status !== "approved") {
+          return json({ error: "destination_not_active" }, 403);
+        }
+        if (destination.chain !== wallet.chain) return json({ error: "chain_mismatch" }, 400);
+        if (!destination.activation_at || new Date(destination.activation_at) > new Date()) {
+          return json({ error: "destination_activation_pending", activation_at: destination.activation_at }, 409);
+        }
+        destinationAddress = destination.address;
+        destinationIdForRecords = destination.id;
       }
 
       const normalizedAsset = asset || (
@@ -183,8 +210,9 @@ Deno.serve(async (req) => {
       const snapshot = {
         source_wallet_id: wallet.id,
         source_address: wallet.address,
-        destination_id: destination.id,
-        destination_address: destination.address,
+        destination_id: destinationIdForRecords,
+        destination_wallet_id: internalTransfer ? destinationWalletId : null,
+        destination_address: destinationAddress,
         chain: wallet.chain,
         asset: normalizedAsset,
         amount,
@@ -197,14 +225,14 @@ Deno.serve(async (req) => {
         .insert({
           owner_id: user.id,
           source_wallet_id: wallet.id,
-          approved_wallet_id: destination.id,
-          destination_address: destination.address,
+          approved_wallet_id: destinationIdForRecords,
+          destination_address: destinationAddress,
           chain: wallet.chain,
           asset: normalizedAsset,
           amount,
           status: "requested",
           requested_at: new Date().toISOString(),
-          transaction_class: "withdrawal",
+          transaction_class: internalTransfer ? "transfer" : "withdrawal",
           transaction_payload: snapshot,
         })
         .select("id,chain,asset,amount,status,destination_address,requested_at")
@@ -218,8 +246,8 @@ Deno.serve(async (req) => {
           owner_id: user.id,
           wallet_transaction_id: tx.id,
           source_wallet_id: wallet.id,
-          approved_wallet_id: destination.id,
-          destination_address: destination.address,
+          approved_wallet_id: destinationIdForRecords,
+          destination_address: destinationAddress,
           chain: wallet.chain,
           asset: normalizedAsset,
           amount,
@@ -245,7 +273,7 @@ Deno.serve(async (req) => {
           signer_type: "withdrawal_signer",
           chain: wallet.chain,
           source_wallet_id: wallet.id,
-          destination_address: destination.address,
+          destination_address: destinationAddress,
           payload_hash: payloadHash,
           status: "pending",
           biometric_required: true,
@@ -266,7 +294,9 @@ Deno.serve(async (req) => {
         authorization,
         signing_request: signingRequest,
         approval_uri: `arbivault://approve/${signingRequest.id}?token=${rawToken}`,
-        message: "Withdrawal created. Human approval is required before signing or broadcast.",
+        message: internalTransfer
+          ? "Internal wallet transfer request created. Human approval is required before signing or broadcast."
+          : "Withdrawal created. Human approval is required before signing or broadcast.",
       });
     }
 
