@@ -113,10 +113,18 @@ const ETH_ATOMIC_ALLOWED_TARGETS = new Set([ETH_UNISWAP_V2_ROUTER.toLowerCase(),
 const MAX_SLIPPAGE_BPS = 100;
 const MAX_PRICE_IMPACT_PCT = 5;
 
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "authorization, apikey, content-type, x-client-info, x-arbivault-cron-token",
+  "access-control-max-age": "86400",
+  "cache-control": "no-store",
+};
+
 function json(value: unknown, status = 200) {
   return Response.json(value, {
     status,
-    headers: { "cache-control": "no-store" },
+    headers: CORS_HEADERS,
   });
 }
 
@@ -1247,6 +1255,9 @@ async function buildPancake(
 }
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
   if (req.method !== "POST" || !(await authorized(req))) {
     return json({ error: "unauthorized" }, 401);
   }
