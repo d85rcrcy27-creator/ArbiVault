@@ -10,3 +10,6 @@ alter table public.arbivault_signing_auth_challenges
     'pin_assertion'::text,
     'transaction_approval'::text
   ]));
+
+alter table public.arbivault_signing_auth_challenges
+  add column if not exists payload_hash text;
