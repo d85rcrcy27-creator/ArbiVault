@@ -94,11 +94,32 @@ export async function scoutPublicData({ sources = [], skillId = null, persist = 
 }
 
 
+async function edgeFunctionErrorMessage(error, fallback) {
+  const context = error?.context
+  if (context && typeof context.clone === 'function') {
+    try {
+      const payload = await context.clone().json()
+      const code = payload?.error || payload?.code
+      const detail = payload?.detail
+      const activationAt = payload?.activation_at
+      if (code === 'destination_activation_pending') {
+        return activationAt
+          ? `Destination activation is pending until ${new Date(activationAt).toLocaleString()}. No transaction was broadcast.`
+          : 'Destination activation is still pending. No transaction was broadcast.'
+      }
+      if (code) return detail ? `${code}: ${detail}` : code
+    } catch {
+      // Fall through to the SDK's request error if the response is not JSON.
+    }
+  }
+  return error?.message || fallback
+}
+
 export async function addApprovedDestination({ chain, address, label, makePrimary = false }) {
   const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
     body: { action: 'add_destination', chain, address, label, make_primary: makePrimary },
   })
-  if (error) throw error
+  if (error) throw new Error(await edgeFunctionErrorMessage(error, 'Unable to add destination'))
   if (!data?.ok) throw new Error(data?.error || 'Unable to add destination')
   return data
 }
@@ -107,7 +128,7 @@ export async function activateApprovedDestination(destinationId, makePrimary = f
   const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
     body: { action: 'activate_destination', destination_id: destinationId, make_primary: makePrimary },
   })
-  if (error) throw error
+  if (error) throw new Error(await edgeFunctionErrorMessage(error, 'Unable to activate destination'))
   if (!data?.ok) throw new Error(data?.error || 'Unable to activate destination')
   return data
 }
@@ -122,7 +143,7 @@ export async function createWithdrawal({ sourceWalletId, destinationId, amount, 
       asset,
     },
   })
-  if (error) throw error
+  if (error) throw new Error(await edgeFunctionErrorMessage(error, 'Unable to create withdrawal'))
   if (!data?.ok) throw new Error(data?.error || 'Unable to create withdrawal')
   return data
 }
@@ -137,7 +158,7 @@ export async function createWalletTransfer({ sourceWalletId, destinationWalletId
       asset,
     },
   })
-  if (error) throw error
+  if (error) throw new Error(await edgeFunctionErrorMessage(error, 'Unable to create wallet transfer'))
   if (!data?.ok) throw new Error(data?.error || 'Unable to create wallet transfer')
   return data
 }
