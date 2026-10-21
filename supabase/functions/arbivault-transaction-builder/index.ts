@@ -113,10 +113,18 @@ const ETH_ATOMIC_ALLOWED_TARGETS = new Set([ETH_UNISWAP_V2_ROUTER.toLowerCase(),
 const MAX_SLIPPAGE_BPS = 100;
 const MAX_PRICE_IMPACT_PCT = 5;
 
+const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-allow-headers": "authorization, apikey, content-type, x-client-info, x-arbivault-cron-token",
+  "access-control-max-age": "86400",
+  "cache-control": "no-store",
+};
+
 function json(value: unknown, status = 200) {
   return Response.json(value, {
     status,
-    headers: { "cache-control": "no-store" },
+    headers: CORS_HEADERS,
   });
 }
 
@@ -210,6 +218,24 @@ async function sha256(value: string) {
   return Array.from(new Uint8Array(bytes))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function builderRouteCompatible(route: { chain: string; pair: string; route_type: string; transaction_builder: string }) {
+  if (route.transaction_builder === "jupiter_swap_v2") {
+    return route.chain === "solana" && ["SOL/USDC", "SOL/USDT"].includes(route.pair);
+  }
+  if (route.transaction_builder === "pancakeswap_v2") {
+    return route.chain === "bnb" && route.pair === "BNB/USDT";
+  }
+  if (route.transaction_builder === "uniswap_v2") {
+    return route.chain === "ethereum" && route.pair === "ETH/USDC";
+  }
+  if (route.transaction_builder === "aave_v3_atomic_flash_loan_v1") {
+    return route.route_type === "flash_liquidity" &&
+      ((route.chain === "bnb" && route.pair === "BNB/USDT") ||
+       (route.chain === "ethereum" && route.pair === "ETH/USDC"));
+  }
+  return false;
 }
 
 function routeAssets(chain: string, pair: string, side: string) {
@@ -1229,6 +1255,9 @@ async function buildPancake(
 }
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
   if (req.method !== "POST" || !(await authorized(req))) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -1276,7 +1305,16 @@ Deno.serve(async (req) => {
     const isAtomicFlashRoute =
       route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
       route.route_type === "flash_liquidity";
-    const quoteOnlyMode = body.mode === "flash_quote";
+    if (!builderRouteCompatible(route)) {
+      return json({
+        error: "route_builder_chain_pair_mismatch",
+        chain: route.chain,
+        pair: route.pair,
+        route_type: route.route_type,
+        transaction_builder: route.transaction_builder,
+      }, 409);
+    }
+    const quoteOnlyMode = body.mode === "flash_quote" || body.mode === "quote";
     // Pending executor routes may continue read-only quotes while builder_enabled=false.
     // Every other request still fails closed until the route is explicitly enabled.
     if (
