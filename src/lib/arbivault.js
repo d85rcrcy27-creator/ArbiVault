@@ -126,3 +126,18 @@ export async function createWithdrawal({ sourceWalletId, destinationId, amount, 
   if (!data?.ok) throw new Error(data?.error || 'Unable to create withdrawal')
   return data
 }
+
+export async function createWalletTransfer({ sourceWalletId, destinationWalletId, amount, asset }) {
+  const { data, error } = await supabase.functions.invoke('arbivault-withdrawal-request', {
+    body: {
+      action: 'create_transfer',
+      source_wallet_id: sourceWalletId,
+      destination_wallet_id: destinationWalletId,
+      amount: Number(amount),
+      asset,
+    },
+  })
+  if (error) throw error
+  if (!data?.ok) throw new Error(data?.error || 'Unable to create wallet transfer')
+  return data
+}
