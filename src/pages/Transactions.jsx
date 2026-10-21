@@ -52,7 +52,7 @@ export default function Transactions() {
   const [search, setSearch] = useState('')
 
   const load = useCallback(async () => {
-    if (authLoading || !user) return
+    if (authLoading || !user?.id) return
     setLoading(true)
     setError('')
     try {
