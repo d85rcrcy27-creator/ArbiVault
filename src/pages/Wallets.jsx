@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowUpRight, CheckCircle2, Clock3, Copy, Plus, RefreshCw, Send, ShieldCheck } from 'lucide-react'
 import WalletBootstrap from '@/components/arbitrage/WalletBootstrap'
-import { addApprovedDestination, activateApprovedDestination, createWithdrawal } from '@/lib/arbivault'
+import { addApprovedDestination, activateApprovedDestination, createWalletTransfer, createWithdrawal } from '@/lib/arbivault'
 import { getAuthenticatedSession, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/AuthContext'
 import { useNavigate } from 'react-router-dom'
@@ -35,7 +35,8 @@ export default function Wallets() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [destinationForm, setDestinationForm] = useState({ chain: 'bnb', address: '', label: '' })
-  const [withdrawForm, setWithdrawForm] = useState({ sourceWalletId: '', destinationId: '', amount: '' })
+  const [withdrawForm, setWithdrawForm] = useState({ sourceWalletId: '', destinationId: '', destinationWalletId: '', amount: '' })
+  const [transferMode, setTransferMode] = useState('external')
   const [approvalUri, setApprovalUri] = useState('')
   const [snapshot, setSnapshot] = useState(null)
   const [snapshotBusy, setSnapshotBusy] = useState(false)
@@ -61,7 +62,7 @@ export default function Wallets() {
         supabase.from('wallet_transactions')
           .select('id,chain,asset,amount,status,destination_address,requested_at,activated_at,confirmed_at,tx_hash,failure_reason,transaction_class')
           .eq('owner_id', ownerId)
-          .eq('transaction_class', 'withdrawal')
+          .in('transaction_class', ['withdrawal', 'transfer'])
           .order('created_at', { ascending: false })
           .limit(25),
       ])
@@ -92,6 +93,9 @@ export default function Wallets() {
   const selectedSource = wallets.find((w) => w.id === withdrawForm.sourceWalletId)
   const eligibleDestinations = destinations.filter(
     (d) => d.status === 'approved' && (!selectedSource || d.chain === selectedSource.chain),
+  )
+  const eligibleInternalWallets = eligibleWallets.filter(
+    (w) => w.id !== selectedSource?.id && (!selectedSource || w.chain === selectedSource.chain),
   )
 
   const handleAddDestination = async (event) => {
@@ -142,17 +146,26 @@ export default function Wallets() {
     try {
       const source = wallets.find((w) => w.id === withdrawForm.sourceWalletId)
       const asset = CHAINS.find((c) => c.id === source?.chain)?.asset
-      const result = await createWithdrawal({
-        sourceWalletId: withdrawForm.sourceWalletId,
-        destinationId: withdrawForm.destinationId,
-        amount: withdrawForm.amount,
-        asset,
-      })
+      const result = transferMode === 'internal'
+        ? await createWalletTransfer({
+            sourceWalletId: withdrawForm.sourceWalletId,
+            destinationWalletId: withdrawForm.destinationWalletId,
+            amount: withdrawForm.amount,
+            asset,
+          })
+        : await createWithdrawal({
+            sourceWalletId: withdrawForm.sourceWalletId,
+            destinationId: withdrawForm.destinationId,
+            amount: withdrawForm.amount,
+            asset,
+          })
       setApprovalUri(result.approval_uri || '')
       if (result.transaction) {
         setRequests((prev) => [result.transaction, ...prev.filter((item) => item.id !== result.transaction.id)].slice(0, 25))
       }
-      setMessage('Withdrawal request created. Balance changes only after an on-chain transaction is confirmed; human approval is required before signing or broadcast.')
+      setMessage(transferMode === 'internal'
+        ? 'Internal transfer request created; no funds moved. Signing remains blocked until cryptographic passkey verification is configured.'
+        : 'Withdrawal request created; no funds moved. Signing remains blocked until cryptographic passkey verification is configured.')
       setWithdrawForm((prev) => ({ ...prev, amount: '' }))
       await load()
     } catch (e) {
@@ -332,27 +345,38 @@ export default function Wallets() {
 
           <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
             <div className="mb-4 flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
-              <Send className="h-3.5 w-3.5" /> Withdraw Crypto
+              <Send className="h-3.5 w-3.5" /> Withdraw / Transfer Crypto
             </div>
             <form onSubmit={handleWithdraw} className="space-y-2">
-              <select required value={withdrawForm.sourceWalletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, sourceWalletId: e.target.value, destinationId: '' })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+              <select value={transferMode} onChange={(e) => { setTransferMode(e.target.value); setWithdrawForm((prev) => ({ ...prev, destinationId: '', destinationWalletId: '' })) }} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                <option value="external">Send to approved external destination</option>
+                <option value="internal">Transfer to another hot wallet</option>
+              </select>
+              <select required value={withdrawForm.sourceWalletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, sourceWalletId: e.target.value, destinationId: '', destinationWalletId: '' })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
                 <option value="">Select source wallet</option>
                 {eligibleWallets.map((w) => {
                   const asset = CHAINS.find((c) => c.id === w.chain)?.asset || w.chain
                   return <option key={w.id} value={w.id}>{asset} · {short(w.address)}</option>
                 })}
               </select>
-              <select required value={withdrawForm.destinationId} onChange={(e) => setWithdrawForm({ ...withdrawForm, destinationId: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
-                <option value="">Select approved destination</option>
-                {eligibleDestinations.map((d) => <option key={d.id} value={d.id}>{d.chain.toUpperCase()} · {short(d.address)}{d.is_primary ? ' · PRIMARY' : ''}</option>)}
-              </select>
+              {transferMode === 'internal' ? (
+                <select required value={withdrawForm.destinationWalletId} onChange={(e) => setWithdrawForm({ ...withdrawForm, destinationWalletId: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                  <option value="">Select destination hot wallet on same chain</option>
+                  {eligibleInternalWallets.map((w) => <option key={w.id} value={w.id}>{(CHAINS.find((item) => item.id === w.chain)?.asset || w.chain).toUpperCase()} · {short(w.address)}</option>)}
+                </select>
+              ) : (
+                <select required value={withdrawForm.destinationId} onChange={(e) => setWithdrawForm({ ...withdrawForm, destinationId: e.target.value })} className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]">
+                  <option value="">Select approved destination</option>
+                  {eligibleDestinations.map((d) => <option key={d.id} value={d.id}>{d.chain.toUpperCase()} · {short(d.address)}{d.is_primary ? ' · PRIMARY' : ''}</option>)}
+                </select>
+              )}
               <input required min="0.00000001" step="any" type="number" value={withdrawForm.amount} onChange={(e) => setWithdrawForm({ ...withdrawForm, amount: e.target.value })} placeholder="Amount" className="w-full rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2 font-mono text-xs text-[#e0e4f0]" />
-              <button disabled={busy || !eligibleDestinations.length || !withdrawForm.sourceWalletId} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#FFB800]/40 bg-[#FFB800]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#FFB800] disabled:opacity-40">
-                <ArrowUpRight className="h-3.5 w-3.5" /> Request withdrawal approval
+              <button disabled={busy || !withdrawForm.sourceWalletId || (transferMode === 'internal' ? !eligibleInternalWallets.length || !withdrawForm.destinationWalletId : !eligibleDestinations.length || !withdrawForm.destinationId)} className="flex w-full items-center justify-center gap-1.5 rounded border border-[#FFB800]/40 bg-[#FFB800]/5 px-3 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#FFB800] disabled:opacity-40">
+                <ArrowUpRight className="h-3.5 w-3.5" /> {transferMode === 'internal' ? 'Request internal transfer approval' : 'Request withdrawal approval'}
               </button>
             </form>
             <div className="mt-3 rounded border border-[#232738] bg-[#090A0F] p-2.5 font-mono text-[0.55rem] text-[#5a6080]">
-              Withdrawals do not bypass signer controls. A request must be approved before signing or broadcast.
+              Transfers and withdrawals do not bypass signer controls. A request must be approved before signing or broadcast. Internal transfers are restricted to another active hot wallet on the same chain.
             </div>
             {approvalUri && (
               <div className="mt-3 rounded border border-[#00F0FF]/30 bg-[#00F0FF]/5 p-3">
@@ -367,11 +391,11 @@ export default function Wallets() {
         </div>
 
         <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
-          <div className="mb-3 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Withdrawal History</div>
+          <div className="mb-3 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Transfer & Withdrawal History</div>
           <div className="space-y-2">
             {requests.map((r) => (
               <div key={r.id} className="grid gap-2 rounded border border-[#232738] bg-[#090A0F] p-3 md:grid-cols-5 md:items-center">
-                <div className="font-mono text-[0.58rem] text-[#e0e4f0]">{r.chain.toUpperCase()} · {formatAmount(r.amount)} {r.asset}</div>
+                <div className="font-mono text-[0.58rem] text-[#e0e4f0]">{r.chain.toUpperCase()} · {formatAmount(r.amount)} {r.asset}<span className="ml-2 text-[0.5rem] text-[#5a6080]">{r.transaction_class === 'transfer' ? 'INTERNAL TRANSFER' : 'WITHDRAWAL'}</span></div>
                 <div className="font-mono text-[0.55rem] text-[#5a6080]">{short(r.destination_address)}</div>
                 <div className={`font-mono text-[0.55rem] uppercase ${r.status === 'confirmed' ? 'text-[#00FF87]' : r.status === 'failed' ? 'text-[#FF4D4D]' : 'text-[#FFB800]'}`}>{r.status}</div>
                 <div className="font-mono text-[0.53rem] text-[#5a6080]">{r.requested_at ? new Date(r.requested_at).toLocaleString() : '—'}</div>
