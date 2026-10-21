@@ -120,7 +120,7 @@ Deno.serve(async (req) => {
       if (authError || !authorized) return json({ error: "signing_request_authorization_race_or_failure" }, 409);
       await admin.from("arbivault_passkey_credentials").update({ sign_count: Number(verified.authenticationInfo.newCounter), last_used_at: now }).eq("id", credential.id).eq("owner_id", user.id);
       if (request.wallet_transaction_id) {
-        const { error: syncError } = await admin.from("transfer_authorizations").update({ authorization_status: "approved", biometric_verified: true, approved_at: now }).eq("wallet_transaction_id", request.wallet_transaction_id).eq("owner_id", user.id).eq("payload_hash", request.payload_hash).eq("authorization_status", "pending");
+        const { error: syncError } = await admin.from("transfer_authorizations").update({ authorization_status: "authorized", biometric_verified: true, approved_at: now }).eq("wallet_transaction_id", request.wallet_transaction_id).eq("owner_id", user.id).eq("payload_hash", request.payload_hash).eq("authorization_status", "pending");
         if (syncError) return json({ ok: true, signing_request: authorized, warning: "transfer_authorization_record_sync_failed" }, 202);
       }
       return json({ ok: true, signing_request: authorized });
