@@ -8,8 +8,6 @@ import { useNavigate } from 'react-router-dom'
 
 const CHAINS = [
   { id: 'bnb', label: 'BNB Smart Chain', asset: 'BNB' },
-  { id: 'xrp', label: 'XRP Ledger', asset: 'XRP' },
-  { id: 'xrp', label: 'XRP Ledger', asset: 'XRP' },
   { id: 'ethereum', label: 'Ethereum', asset: 'ETH' },
   { id: 'solana', label: 'Solana', asset: 'SOL' },
   { id: 'bitcoin', label: 'Bitcoin', asset: 'BTC' },
@@ -103,6 +101,10 @@ export default function Wallets() {
     setMessage('')
     try {
       const result = await addApprovedDestination(destinationForm)
+      // Reflect the server-confirmed destination immediately; then reconcile all lists from Supabase.
+      if (result.destination) {
+        setDestinations((prev) => [result.destination, ...prev.filter((item) => item.id !== result.destination.id)])
+      }
       setDestinationForm((prev) => ({ ...prev, address: '', label: '' }))
       setMessage(result.existing ? 'Destination already exists.' : 'Destination added. It must pass the activation delay before withdrawal.')
       await load()
@@ -118,7 +120,10 @@ export default function Wallets() {
     setError('')
     setMessage('')
     try {
-      await activateApprovedDestination(id, false)
+      const result = await activateApprovedDestination(id, false)
+      if (result.destination) {
+        setDestinations((prev) => prev.map((item) => item.id === result.destination.id ? result.destination : item))
+      }
       setMessage('Destination activated and available for withdrawals.')
       await load()
     } catch (e) {
@@ -144,7 +149,10 @@ export default function Wallets() {
         asset,
       })
       setApprovalUri(result.approval_uri || '')
-      setMessage('Withdrawal request created. Human approval is required before signing or broadcast.')
+      if (result.transaction) {
+        setRequests((prev) => [result.transaction, ...prev.filter((item) => item.id !== result.transaction.id)].slice(0, 25))
+      }
+      setMessage('Withdrawal request created. Balance changes only after an on-chain transaction is confirmed; human approval is required before signing or broadcast.')
       setWithdrawForm((prev) => ({ ...prev, amount: '' }))
       await load()
     } catch (e) {
