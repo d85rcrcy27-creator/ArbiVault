@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ExternalLink, RefreshCw, Search, ShieldCheck, Clock3, CheckCircle2, XCircle } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { getAuthenticatedSession, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/AuthContext'
 
@@ -134,7 +134,10 @@ export default function Transactions() {
             <div className="mt-0.5 font-mono text-[0.58rem] text-[#5a6080]">Attempted · approval status · network settlement</div>
           </div>
         </div>
-        <button onClick={load} disabled={loading || authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-40" title="Refresh activity"><RefreshCw className="h-4 w-4" /></button>
+        <div className="flex items-center gap-3">
+          <Link to="/security/passkeys" className="rounded border border-[#232738] px-3 py-2 font-mono text-[0.58rem] uppercase text-[#00F0FF] hover:border-[#00F0FF]/40">Passkey approval</Link>
+          <button onClick={load} disabled={loading || authLoading} className="text-[#5a6080] hover:text-[#00F0FF] disabled:opacity-40" title="Refresh activity"><RefreshCw className="h-4 w-4" /></button>
+        </div>
       </header>
       <main className="space-y-4 p-4 md:p-6">
         {error && <div className="rounded border border-[#FF4D4D]/30 bg-[#FF4D4D]/5 p-3 font-mono text-xs text-[#FF4D4D]">{error}</div>}

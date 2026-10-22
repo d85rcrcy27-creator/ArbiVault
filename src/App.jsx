@@ -15,6 +15,7 @@ import Wallets from '@/pages/Wallets'
 import Transactions from '@/pages/Transactions'
 import FlashLoans from '@/pages/FlashLoans'
 import KeyBackup from '@/pages/KeyBackup'
+import SigningPasskeys from '@/pages/SigningPasskeys'
 
 function App() {
   return (
@@ -39,6 +40,7 @@ function App() {
               <Route path="/transactions" element={<Transactions />} />
               <Route path="/flash-loans" element={<FlashLoans />} />
               <Route path="/key-backup" element={<KeyBackup />} />
+              <Route path="/security/passkeys" element={<SigningPasskeys />} />
             </Route>
 
             {/* Catch-all */}
