@@ -529,7 +529,7 @@ Deno.serve(async (req) => {
           String(wallet.address || '').toLowerCase() === String(adapter.signer_key_ref || '').toLowerCase()
         )
       )
-      const matches = mappedAdapters.filter((adapter: any) => {
+      const healthyBindings = mappedAdapters.filter((adapter: any) => {
         const contracts = Array.isArray(adapter.allowed_contracts)
           ? adapter.allowed_contracts.map((value: unknown) => String(value).toLowerCase())
           : []
@@ -540,22 +540,29 @@ Deno.serve(async (req) => {
         return adapter.configured === true &&
           adapter.health_status === 'healthy' &&
           adapter.read_only === false &&
-          adapter.can_broadcast === true &&
-          adapter.automatic_signing === true &&
           adapter.signing_boundary === 'internal_vault' &&
           routePolicyReady
       })
-      const reason = matches.length > 0 ? 'ready'
+      // Keep signer identity/health separate from permission to broadcast.
+      // The dashboard must not report a correctly bound signer as "down"
+      // simply because executor deployment or automatic trade authorization
+      // is not ready yet.
+      const executableAdapters = healthyBindings.filter((adapter: any) =>
+        adapter.can_broadcast === true && adapter.automatic_signing === true
+      )
+      const reason = executableAdapters.length > 0 ? 'ready'
         : activeWallets.length === 0 ? 'no_active_trading_hot_wallet'
         : walletsWithStoredSecrets.length === 0 ? 'active_wallet_secret_not_registered'
         : mappedAdapters.length === 0 ? 'signer_not_bound_to_active_wallet'
+        : healthyBindings.length > 0 ? 'signer_healthy_execution_not_ready'
         : 'signer_adapter_policy_or_health_failed'
       return {
         chain,
-        configured: matches.length > 0,
-        healthy: matches.length > 0,
-        broadcast_capable: matches.some((adapter: any) => adapter.can_broadcast === true),
-        automatic_signing: matches.some((adapter: any) => adapter.automatic_signing === true),
+        configured: healthyBindings.length > 0,
+        healthy: healthyBindings.length > 0,
+        broadcast_capable: healthyBindings.some((adapter: any) => adapter.can_broadcast === true),
+        automatic_signing: healthyBindings.some((adapter: any) => adapter.automatic_signing === true),
+        execution_ready: executableAdapters.length > 0,
         active_wallet_count: activeWallets.length,
         wallet_with_secret_count: walletsWithStoredSecrets.length,
         reason,
