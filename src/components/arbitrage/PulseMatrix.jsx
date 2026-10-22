@@ -9,7 +9,10 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
     <div className="flex h-full flex-col rounded border border-[#232738] bg-[#0C0E16]">
       <div className="flex items-center justify-between border-b border-[#232738] px-4 py-3">
         <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Pulse Matrix</span>
-        <span className="font-mono text-[0.625rem] text-[#5a6080]">{routes.length} live routes</span>
+        <span className="font-mono text-[0.625rem] text-[#5a6080]">{routes.length} quote candidates</span>
+      </div>
+      <div className="border-b border-[#232738] px-4 py-2 font-mono text-[0.55rem] leading-relaxed text-[#8a90b0]">
+        Quote discovery only — a spread is not an executable route or a confirmed trade. Use Flash-Loan Route Control to select an on-chain route and view its execution status.
       </div>
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {routes.map((r) => {

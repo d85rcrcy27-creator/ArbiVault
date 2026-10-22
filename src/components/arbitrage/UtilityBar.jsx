@@ -1,4 +1,4 @@
-import { Activity, TrendingUp, Cpu, Zap } from 'lucide-react';
+import { Activity, TrendingUp, Cpu } from 'lucide-react';
 
 const FEEDS = [
   { id: 'binance', name: 'BIN' },
@@ -11,7 +11,7 @@ const FEEDS = [
 
 const SPONSOR_URL = 'https://github.com/sponsors/d85rcrcy27-creator?metadata_campaign=arbivault_market_efficiency';
 
-export default function UtilityBar({ globalLatency, livePnl = null, engineStatus, onToggleEngine, status, connected, onOpenWallets }) {
+export default function UtilityBar({ globalLatency, livePnl = null, engineStatus, engineStatusDetail, status, connected, onOpenWallets }) {
   const latencyColor = globalLatency === 0 ? 'text-[#5a6080]' : globalLatency < 60 ? 'text-[#00FF87]' : globalLatency < 120 ? 'text-[#FFB800]' : 'text-[#FF4D4D]';
   const pnlKnown = Number.isFinite(Number(livePnl)) && livePnl !== null
   const pnlPositive = pnlKnown && Number(livePnl) >= 0;
@@ -90,19 +90,30 @@ export default function UtilityBar({ globalLatency, livePnl = null, engineStatus
           >
             Wallets
           </button>
-          <button
-            onClick={onToggleEngine}
-            className="group flex items-center gap-2 rounded border border-[#232738] bg-[#12141D] px-3 py-1.5 transition-colors hover:border-[#00F0FF]/40 hover:bg-[#1A1D2B]"
+          <div
+            role="status"
+            aria-live="polite"
+            title={engineStatusDetail || 'Server-side route execution status'}
+            className="flex max-w-[15rem] items-center gap-2 rounded border border-[#232738] bg-[#12141D] px-3 py-1.5"
           >
-            <Cpu className={`h-3.5 w-3.5 ${engineStatus === 'ACTIVE' ? 'text-[#00FF87]' : 'text-[#5a6080]'}`} />
-            <div className="flex flex-col items-start">
-              <span className="font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Engine</span>
-              <span className={`font-mono text-xs font-semibold ${engineStatus === 'ACTIVE' ? 'text-[#00FF87]' : 'text-[#FFB800]'}`}>
-                {engineStatus}
+            <Cpu className={`h-3.5 w-3.5 ${
+              ['BROADCAST', 'LAST TX CONFIRMED'].includes(engineStatus) ? 'text-[#00FF87]' :
+              ['BLOCKED'].includes(engineStatus) ? 'text-[#FF4D4D]' :
+              ['ARMED', 'WAITING SIGNER', 'WORKER STALE', 'TX HASH RECORDED'].includes(engineStatus) ? 'text-[#FFB800]' :
+              'text-[#5a6080]'
+            }`} />
+            <div className="flex min-w-0 flex-col items-start">
+              <span className="font-mono text-[0.625rem] uppercase tracking-wider text-[#5a6080]">Execution</span>
+              <span className={`font-mono text-[0.62rem] font-semibold uppercase ${
+                ['BROADCAST', 'LAST TX CONFIRMED'].includes(engineStatus) ? 'text-[#00FF87]' :
+                engineStatus === 'BLOCKED' ? 'text-[#FF4D4D]' :
+                ['ARMED', 'WAITING SIGNER', 'WORKER STALE', 'TX HASH RECORDED'].includes(engineStatus) ? 'text-[#FFB800]' :
+                'text-[#8a90b0]'
+              }`}>
+                {engineStatus || 'UNKNOWN'}
               </span>
             </div>
-            <Zap className={`h-3 w-3 ${engineStatus === 'ACTIVE' ? 'text-[#00FF87] glow-emerald' : 'text-[#5a6080]'}`} />
-          </button>
+          </div>
           </div>
         </div>
       </div>

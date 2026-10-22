@@ -55,7 +55,9 @@ async function invoke(action, extra = {}) {
     try {
       const detail = await error.context?.json?.();
       if (detail?.error) message = detail.error;
-    } catch {}
+    } catch (parseError) {
+      message = message || String(parseError);
+    }
     throw new Error(message);
   }
   if (!data?.ok) throw new Error(data?.error || "Passkey request failed");
