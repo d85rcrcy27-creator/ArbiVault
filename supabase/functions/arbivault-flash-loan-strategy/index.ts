@@ -869,13 +869,18 @@ export default {
                 Array.isArray(flashQuote.best?.data) &&
                 flashQuote.best.data.length === 2
               ) {
+                const gasCostRaw = String(flashQuote.best.estimated_gas_cost_raw || '')
+                if (!/^\d+$/.test(gasCostRaw)) throw new Error('flash_network_fee_raw_invalid')
+                const decimals = isEthereumFlash ? 6 : 18
+                const minNetRaw = BigInt(Math.ceil(minNetProfitUsd * (10 ** decimals)))
+                const contractMinProfitRaw = (BigInt(gasCostRaw) + minNetRaw).toString()
                 flashBuild = await callTransactionBuilder({
                   route_id: executionRoute.id,
                   source_wallet_id: wallet.id,
                   side: 'sell',
                   amount_raw: amountRaw,
                   flash_loan_asset: flashQuote.best.asset,
-                  min_profit_raw: flashQuote.best.min_profit_raw,
+                  min_profit_raw: contractMinProfitRaw,
                   targets: flashQuote.best.targets,
                   values_raw: flashQuote.best.values_raw,
                   data: flashQuote.best.data,
