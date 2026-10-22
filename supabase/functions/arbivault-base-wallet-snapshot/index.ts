@@ -1,11 +1,39 @@
-import { createPublicClient, http, parseAbi, formatUnits, isAddress } from "npm:viem@2.39.0";
+import { createPublicClient, createWalletClient, http, parseAbi, formatUnits, isAddress } from "npm:viem@2.39.0";
 import { base } from "npm:viem@2.39.0/chains";
+import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
+import { wrapFetchWithPayment } from "npm:x402-fetch@1.2.0";
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const X402_BASE_URL = Deno.env.get("X402_BASE_URL") || "https://x402-data-api.sigrunner.workers.dev";
 const BASE_RPC_URL = Deno.env.get("BASE_RPC_URL") || "https://mainnet.base.org";
+// Optional. When set to a 0x Base EOA private key holding a little USDC, an exhausted
+// free token-safety trial falls through to the metered /gate/swap ($0.008 USDC on Base,
+// no daily limit) so unattended gating keeps returning a real verdict at any volume.
+// Unset (the default) means no paid call is ever made and behavior is unchanged.
+const X402_PRIVATE_KEY = Deno.env.get("X402_PRIVATE_KEY") || "";
+
+// Signs a gasless EIP-3009 USDC authorization and calls the paid gate. Same response
+// shape as the free preview, so the reporting below needs no special-casing. Returns
+// null (never a pass) on any error. Only ever invoked when X402_PRIVATE_KEY is set.
+async function paidGate(token: string): Promise<Record<string, unknown> | null> {
+  if (!X402_PRIVATE_KEY) return null;
+  try {
+    const account = privateKeyToAccount(X402_PRIVATE_KEY as `0x${string}`);
+    const walletClient = createWalletClient({ account, chain: base, transport: http(BASE_RPC_URL) });
+    const payFetch = wrapFetchWithPayment(fetch, walletClient);
+    const url = `${X402_BASE_URL}/gate/swap?token=${token}&side=buy&notional_usd=100`;
+    const response = await payFetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20000) });
+    if (!response.ok) return null;
+    const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (typeof body.decision !== "string" || typeof body.verdict !== "string") return null;
+    body.__paid = true;
+    return body;
+  } catch {
+    return null;
+  }
+}
 const ERC20_ABI = parseAbi([
   "function balanceOf(address owner) view returns (uint256)",
   "function decimals() view returns (uint8)",
@@ -117,6 +145,10 @@ Deno.serve(async (req: Request) => {
           // route: GET ${X402_BASE_URL}/gate/swap ($0.008 USDC on Base, same response
           // shape, no daily limit). An exhausted trial is never treated as a pass.
           if (response.status === 429) {
+            // Free trial exhausted. If a wallet is configured, pay per call so gating
+            // keeps working at any volume; otherwise surface the upgrade path as before.
+            const paid = await paidGate(tokens[0]);
+            if (paid) return paid;
             return { __exhausted: true, paid_url: typeof body.paid_url === "string" ? body.paid_url : null };
           }
           if (!response.ok) return null;
@@ -223,8 +255,10 @@ Deno.serve(async (req: Request) => {
         preview_decision: typeof gatePreview?.decision === "string" ? gatePreview?.decision ?? null : null,
         preview_risk_score: previewNumber(gatePreview, "risk_score"),
         preview_token: gatePreview && tokens.length > 0 ? tokens[0] : null,
-        preview_source: gatePreview?.__exhausted
-          ? "x402 free trial exhausted (3/day/IP) - call paid /gate/swap for unmetered gating"
+        preview_source: gatePreview?.__paid
+          ? "x402 /gate/swap (paid, $0.008 USDC on Base, no daily limit)"
+          : gatePreview?.__exhausted
+          ? "x402 free trial exhausted (3/day/IP) - set X402_PRIVATE_KEY to call paid /gate/swap for unmetered gating"
           : (gatePreview ? "x402 /gate/swap/preview (free)" : (tokens.length === 0 ? "no_token_to_screen" : "unavailable_not_a_pass")),
         preview_paid_url: (gatePreview && typeof gatePreview.paid_url === "string") ? gatePreview.paid_url : null,
         preview_status: gasPreview && blockPreview ? "available" : "partial_or_fallback",
