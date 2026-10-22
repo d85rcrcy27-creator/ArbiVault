@@ -427,6 +427,49 @@ async function sha256(value: string) {
     .join('')
 }
 
+
+// Fee policy for flash-loan routes: amounts are valued in the stablecoin profit
+// asset (USDT/USDC) and represented as USD-equivalent amounts for accounting.
+function rawStablecoinUsd(raw: unknown, decimals: number): number | null {
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null
+  const amount = Number(BigInt(raw)) / (10 ** decimals)
+  return Number.isFinite(amount) ? amount : null
+}
+
+function makeFlashFeeAccounting(chain: string, best: any): Record<string, unknown> {
+  const decimals = chain === 'ethereum' ? 6 : 18
+  const gross = rawStablecoinUsd(best?.gross_profit_raw, decimals)
+  const premium = rawStablecoinUsd(best?.flash_premium_raw, decimals)
+  const networkFee = rawStablecoinUsd(best?.estimated_gas_cost_raw, decimals)
+  const net = rawStablecoinUsd(best?.estimated_net_profit_raw, decimals)
+  return {
+    pnl_currency: 'USD',
+    gross_profit_usd: gross,
+    flash_loan_fee_usd: premium,
+    estimated_network_fee_usd: networkFee,
+    estimated_net_profit_usd: net,
+    estimated_total_cost_usd: premium === null || networkFee === null ? null : premium + networkFee,
+    x402_resource_fee_usd: 0,
+    x402_fee_source: 'no_paid_x402_request_in_flash_execution_path',
+    gas_asset: chain === 'bnb' ? 'BNB' : chain === 'ethereum' ? 'ETH' : null,
+    network_fee_valuation_asset: chain === 'bnb' ? 'USDT' : chain === 'ethereum' ? 'USDC' : null,
+    fee_estimate_source: 'transaction-builder-live-router-quote',
+    fee_accounting_status: gross !== null && premium !== null && networkFee !== null && net !== null
+      ? 'preflight_estimate'
+      : 'fee_or_pnl_estimate_unavailable',
+  }
+}
+
+function maxNetworkFeeBudgetUsd(strategyBot: any): number {
+  const configured = strategyBot?.max_gas_budget
+  if (configured !== null && configured !== undefined && configured !== '') {
+    const value = Number(configured)
+    if (Number.isFinite(value) && value >= 0) return value
+  }
+  const envValue = Number(Deno.env.get('ARBIVAULT_MAX_NETWORK_FEE_USD') || '5')
+  return Number.isFinite(envValue) && envValue >= 0 ? envValue : 5
+}
+
 export default {
   fetch: async (req: Request) => {
     if (req.method !== 'POST' || !(await authorized(req))) {
@@ -720,6 +763,7 @@ export default {
           let dexPreflight: any = null
           let flashQuote: any = null
           let flashBuild: any = null
+          let flashFeeAccounting: any = null
           let builderError: string | null = null
           const multiLegBuilderConfigured =
             executionRoute.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
@@ -797,20 +841,46 @@ export default {
                 executor_configured: flashQuote.executor_configured === true,
               }
 
+              flashFeeAccounting = makeFlashFeeAccounting(executionRoute.chain, flashQuote.best)
+              const configuredMinProfit = Number(strategyBot?.min_profit_threshold)
+              const minNetProfitUsd = Number.isFinite(configuredMinProfit) && configuredMinProfit > 0
+                ? configuredMinProfit
+                : 1
+              const maxGasBudgetUsd = maxNetworkFeeBudgetUsd(strategyBot)
+              executionContext.flash_fee_accounting = {
+                ...flashFeeAccounting,
+                max_network_fee_budget_usd: maxGasBudgetUsd,
+                minimum_net_profit_usd: minNetProfitUsd,
+                fee_policy: 'reject_if_gas_estimate_missing_over_budget_or_net_profit_below_threshold',
+              }
+              if (flashFeeAccounting.estimated_network_fee_usd == null || flashFeeAccounting.estimated_net_profit_usd == null) {
+                builderError = 'flash_network_fee_or_net_profit_estimate_unavailable'
+              } else if (Number(flashFeeAccounting.estimated_network_fee_usd) > maxGasBudgetUsd) {
+                builderError = 'flash_network_fee_exceeds_max_gas_budget_usd'
+              } else if (Number(flashFeeAccounting.estimated_net_profit_usd) < minNetProfitUsd) {
+                builderError = 'flash_net_profit_below_min_profit_threshold'
+              }
+
               if (
+                !builderError &&
                 flashQuote.profitable === true &&
                 networkFlashDiagnostic?.ready_for_flash_transaction_test === true &&
                 flashQuote.best?.executor_configured === true &&
                 Array.isArray(flashQuote.best?.data) &&
                 flashQuote.best.data.length === 2
               ) {
+                const gasCostRaw = String(flashQuote.best.estimated_gas_cost_raw || '')
+                if (!/^\d+$/.test(gasCostRaw)) throw new Error('flash_network_fee_raw_invalid')
+                const decimals = isEthereumFlash ? 6 : 18
+                const minNetRaw = BigInt(Math.ceil(minNetProfitUsd * (10 ** decimals)))
+                const contractMinProfitRaw = (BigInt(gasCostRaw) + minNetRaw).toString()
                 flashBuild = await callTransactionBuilder({
                   route_id: executionRoute.id,
                   source_wallet_id: wallet.id,
                   side: 'sell',
                   amount_raw: amountRaw,
                   flash_loan_asset: flashQuote.best.asset,
-                  min_profit_raw: flashQuote.best.min_profit_raw,
+                  min_profit_raw: contractMinProfitRaw,
                   targets: flashQuote.best.targets,
                   values_raw: flashQuote.best.values_raw,
                   data: flashQuote.best.data,
@@ -930,7 +1000,23 @@ export default {
             observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain,
             execution_mode: 'on_chain', status: 'validated',
             opportunity_payload_hash: opportunityHash, transaction_payload_hash: txPayloadHash,
-            capital_used: 0, failure_reason: null,
+            capital_used: 0,
+            gross_profit: flashFeeAccounting?.gross_profit_usd ?? null,
+            net_profit: flashFeeAccounting?.estimated_net_profit_usd ?? null,
+            gas_fee: null,
+            gas_asset: flashFeeAccounting?.gas_asset ?? (executionRoute.chain === 'bnb' ? 'BNB' : executionRoute.chain === 'ethereum' ? 'ETH' : null),
+            estimated_network_fee_usd: flashFeeAccounting?.estimated_network_fee_usd ?? null,
+            network_fee_usd: null,
+            flash_loan_fee_usd: flashFeeAccounting?.flash_loan_fee_usd ?? null,
+            x402_resource_fee_usd: 0,
+            pnl_currency: 'USD',
+            fee_breakdown: flashFeeAccounting || {
+              pnl_currency: 'USD',
+              x402_resource_fee_usd: 0,
+              x402_fee_source: 'no_paid_x402_request_attributed_to_execution',
+              fee_accounting_status: 'no_flash_fee_quote',
+            },
+            failure_reason: null,
             validated_at: now.toISOString(), wallet_id: wallet.id,
           }).select('id').single()
           if (attemptError) throw attemptError
