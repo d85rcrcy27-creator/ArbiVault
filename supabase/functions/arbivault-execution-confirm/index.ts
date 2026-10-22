@@ -106,7 +106,7 @@ async function checkConfirmation(chain: string, txHash: string) {
     } catch {
       // Confirmation remains valid if transaction history is lagging; fee stays unknown.
     }
-    const succeeded = !status.err && (!status.err || Object.keys(status.err).length === 0);
+    const succeeded = status.err == null;
     return {
       confirmed: true,
       succeeded,
