@@ -236,17 +236,20 @@ Deno.serve(async (req) => {
         if (label.includes("profit")) return sample.estimatedNetProfitUsd > threshold;
         return false;
       };
-      const qualifying = builtSamples.filter((sample: any) =>
+      // A negative observed spread is a no-arbitrage market condition, not a trade loss.
+      // Keep it in the observation count, but never book it as a hypothetical trade PnL.
+      const positiveSpreadSamples = builtSamples.filter((sample: any) => sample.spreadPct > 0);
+      const qualifying = positiveSpreadSamples.filter((sample: any) =>
         skillConditions.every((condition: any) => conditionPasses(condition, sample))
       );
       const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
       // Potential profit is reported separately from strategy-qualified results.
       // These estimates use recorded observations; they are not executable or realized PnL.
-      const potentialProfitable = builtSamples.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
-      const potentialGrossPnl = builtSamples.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0);
-      const potentialNetPnl = builtSamples.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
-      const bestSample = builtSamples.reduce((best: any, sample: any) =>
+      const potentialProfitable = positiveSpreadSamples.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
+      const potentialGrossPnl = positiveSpreadSamples.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0);
+      const potentialNetPnl = positiveSpreadSamples.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
+      const bestSample = positiveSpreadSamples.reduce((best: any, sample: any) =>
         !best || sample.estimatedNetProfitUsd > best.estimatedNetProfitUsd ? sample : best, null);
       const observedTimes = builtSamples.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
       const observedSpanDays = observedTimes.length
@@ -434,7 +437,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    const qualifying = samples.filter((row: any) => row.spread >= threshold);
+    // Negative spread observations mean no positive arbitrage spread was present;
+    // they remain in historical sample statistics but are not counted as executed losses.
+    const positiveSpreadSamples = samples.filter((row: any) => row.spread > 0);
+    const qualifying = positiveSpreadSamples.filter((row: any) => row.spread >= threshold);
     const profitable = qualifying.filter((row: any) => row.spread > COST_PCT);
     const grossPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
     const netPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - COST_PCT)) / 100, 0);
@@ -442,10 +448,10 @@ Deno.serve(async (req) => {
     // Potential-profit diagnostics are calculated across every recorded sample,
     // separately from the strategy-qualified backtest. They are hypothetical and
     // must not be presented as realized PnL or executable opportunities.
-    const potentialProfitable = samples.filter((row: any) => row.spread > COST_PCT);
-    const potentialGrossPnl = samples.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
-    const potentialNetPnl = samples.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - COST_PCT)) / 100, 0);
-    const bestSample = samples.reduce((best: any, row: any) => !best || row.spread > best.spread ? row : best, null);
+    const potentialProfitable = positiveSpreadSamples.filter((row: any) => row.spread > COST_PCT);
+    const potentialGrossPnl = positiveSpreadSamples.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
+    const potentialNetPnl = positiveSpreadSamples.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - COST_PCT)) / 100, 0);
+    const bestSample = positiveSpreadSamples.reduce((best: any, row: any) => !best || row.spread > best.spread ? row : best, null);
     const bestSampleNetProfit = bestSample ? NOTIONAL * (bestSample.spread - COST_PCT) / 100 : null;
 
     return json({
