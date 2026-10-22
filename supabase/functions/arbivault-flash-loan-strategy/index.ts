@@ -733,9 +733,14 @@ export default {
           candidate.enabled === true &&
           candidate.strategy_bot_id === bot.id &&
           candidate.route_type === 'flash_liquidity' &&
-          candidate.builder_enabled === true &&
           candidate.transaction_builder === 'aave_v3_atomic_flash_loan_v1' &&
-          candidate.discovery_only !== true
+          (
+            // Discovery-only atomic flash routes may obtain real quotes and cost
+            // estimates, but the downstream execution gate must keep them from
+            // creating attempts or signing requests.
+            candidate.discovery_only === true ||
+            (candidate.builder_enabled === true && candidate.discovery_only !== true)
+          )
         )
 
         for (const executionRoute of executionCandidates) {
