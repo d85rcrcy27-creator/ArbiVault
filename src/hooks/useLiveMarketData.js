@@ -57,7 +57,8 @@ export function useLiveMarketData() {
   const [signerHealth, setSignerHealth] = useState([])
   const [testnetHealth, setTestnetHealth] = useState(null)
   const [trades, setTrades] = useState([])
-  const [engineStatus, setEngineStatus] = useState('ACTIVE')
+  const [engineStatus, setEngineStatus] = useState('UNKNOWN')
+  const [engineStatusDetail, setEngineStatusDetail] = useState('Reading server-side execution status…')
   const [status, setStatus] = useState('connecting')
   const [connected, setConnected] = useState({ binance: false, bybit: false, okx: false, kraken: false, kucoin: false, gateio: false })
   const [globalLatency, setGlobalLatency] = useState(0)
@@ -109,6 +110,138 @@ export function useLiveMarketData() {
       return next
     })
   }, [])
+
+  const refreshExecutionStatus = useCallback(async () => {
+    try {
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError || !authData?.user?.id) throw new Error('Sign in to read execution status')
+
+      const { data: routeResponse, error: routeError } = await supabase.functions.invoke('arbivault-route-control', {
+        body: { action: 'list' },
+      })
+      if (routeError) throw routeError
+      if (!routeResponse?.ok) throw new Error(routeResponse?.error || 'Route status unavailable')
+
+      const strategy = routeResponse.strategy || null
+      const routes = Array.isArray(routeResponse.routes) ? routeResponse.routes : []
+      const routeIds = routes.map((route) => route.id).filter(Boolean)
+      let attempts = []
+      if (routeIds.length) {
+        const { data, error } = await supabase
+          .from('execution_attempts')
+          .select('id,execution_route_id,status,tx_hash,failure_reason,created_at,broadcast_at,confirmed_at')
+          .eq('owner_id', authData.user.id)
+          .eq('execution_mode', 'on_chain')
+          .in('execution_route_id', routeIds)
+          .order('created_at', { ascending: false })
+          .limit(100)
+        if (error) throw error
+        attempts = data || []
+      }
+
+      const { data: runs, error: runError } = await supabase
+        .from('bot_execution_runs')
+        .select('started_at,completed_at,status,output,error')
+        .eq('owner_id', authData.user.id)
+        .eq('workflow', 'execution')
+        .order('started_at', { ascending: false })
+        .limit(1)
+      if (runError) throw runError
+      const latestRun = runs?.[0] || null
+
+      const strategyActive = strategy?.enabled === true &&
+        strategy?.execution_enabled === true &&
+        strategy?.flash_loan_enabled === true
+      const activeRoute = strategyActive
+        ? routes.find((route) => route.enabled === true &&
+          route.discovery_only !== true &&
+          route.builder_enabled === true)
+        : null
+
+      if (!strategy) {
+        setEngineStatus('NO ROUTE')
+        setEngineStatusDetail('No flash-loan route is configured for this account.')
+        return
+      }
+
+      if (!strategyActive) {
+        setEngineStatus('PAUSED')
+        setEngineStatusDetail('The server-side flash-loan strategy is paused. Market quotes may still be visible; they do not indicate trading.')
+        return
+      }
+
+      if (!activeRoute) {
+        setEngineStatus('NO ROUTE')
+        setEngineStatusDetail('The strategy is enabled, but no execution route is armed.')
+        return
+      }
+
+      const latestAttempt = attempts.find((attempt) => attempt.execution_route_id === activeRoute.id)
+      if (latestAttempt?.tx_hash && latestAttempt.status === 'broadcast') {
+        setEngineStatus('BROADCAST')
+        setEngineStatusDetail(`${activeRoute.chain.toUpperCase()} ${activeRoute.pair}: transaction hash recorded; waiting for chain confirmation.`)
+        return
+      }
+      if (latestAttempt?.tx_hash && latestAttempt.status === 'confirmed') {
+        setEngineStatus('LAST TX CONFIRMED')
+        setEngineStatusDetail(`${activeRoute.chain.toUpperCase()} ${activeRoute.pair}: last recorded transaction has a confirmed status. This is history, not a claim a new trade is running.`)
+        return
+      }
+      if (latestAttempt?.tx_hash) {
+        setEngineStatus('TX HASH RECORDED')
+        setEngineStatusDetail(`${activeRoute.chain.toUpperCase()} ${activeRoute.pair}: transaction hash exists with status ${latestAttempt.status || 'unknown'}; check the explorer for the latest chain state.`)
+        return
+      }
+
+      const runAgeMs = latestRun?.started_at ? Date.now() - new Date(latestRun.started_at).getTime() : Infinity
+      const results = Array.isArray(latestRun?.output?.results) ? latestRun.output.results : []
+      let opportunity = null
+      for (const result of results) {
+        const found = (Array.isArray(result?.opportunities) ? result.opportunities : [])
+          .find((item) => item?.execution_route_id === activeRoute.id)
+        if (found) {
+          opportunity = found
+          break
+        }
+      }
+
+      if (opportunity?.broadcast === 'awaiting_authorized_signing' ||
+          opportunity?.signing === 'pending_human_authorization') {
+        setEngineStatus('WAITING SIGNER')
+        setEngineStatusDetail('The worker prepared a candidate but no transaction has been broadcast. This is not a live trade.')
+        return
+      }
+
+      const blocker = opportunity?.execution_gate && opportunity.execution_gate !== 'eligible'
+        ? opportunity.execution_gate
+        : activeRoute.builder_status && activeRoute.builder_status !== 'ready_for_explicit_preflight'
+          ? activeRoute.builder_status
+          : null
+      if (blocker) {
+        setEngineStatus('BLOCKED')
+        setEngineStatusDetail(`${activeRoute.chain.toUpperCase()} ${activeRoute.pair}: ${String(blocker).replace(/_/g, ' ')}. No live transaction was confirmed.`)
+        return
+      }
+
+      if (!Number.isFinite(runAgeMs) || runAgeMs > 90000) {
+        setEngineStatus('WORKER STALE')
+        setEngineStatusDetail(`Route is armed, but no recent worker heartbeat is visible${latestRun?.started_at ? ` (last seen ${new Date(latestRun.started_at).toLocaleTimeString()})` : ''}. No live trade is confirmed.`)
+        return
+      }
+
+      setEngineStatus('ARMED')
+      setEngineStatusDetail(`${activeRoute.chain.toUpperCase()} ${activeRoute.pair} is selected. The worker is checking live quotes and preflight; no transaction hash means no live trade yet.`)
+    } catch (error) {
+      setEngineStatus('UNKNOWN')
+      setEngineStatusDetail(error instanceof Error ? error.message : 'Unable to read server-side execution status.')
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshExecutionStatus()
+    const timer = window.setInterval(refreshExecutionStatus, 10000)
+    return () => window.clearInterval(timer)
+  }, [refreshExecutionStatus])
 
   const loadMarket = useCallback(async () => {
     try {
@@ -172,5 +305,5 @@ export function useLiveMarketData() {
     ? Number(pnlVerifiedTrades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2))
     : null
 
-  return { routes, marketSnapshot, chainRpcHealth, signerHealth, testnetHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, setEngineStatus, marketControls, setMarketControls, refreshMarket: loadMarket }
+  return { routes, marketSnapshot, chainRpcHealth, signerHealth, testnetHealth, trades, globalLatency, livePnl, executeRoute, status, connected, engineStatus, engineStatusDetail, marketControls, setMarketControls, refreshMarket: loadMarket }
 }
