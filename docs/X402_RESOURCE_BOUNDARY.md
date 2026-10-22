@@ -27,3 +27,16 @@ x402 is the payment boundary between ArbiVault and independently operated Intern
 ## Implementation status
 
 This document records the intended boundary only. The initial proxy-style Edge Function was removed because it conflated resource fetching with an application-hosted proxy and did not integrate the production Turnkey signer. The x402 client and Turnkey signing adapter must be implemented and tested as separate modules before enabling live resource payments. No production payments are enabled by this change.
+## Flash-loan fee attribution
+
+Flash-loan accounting keeps three costs separate:
+
+- The flash-loan premium, reported in the same USD-equivalent unit as the USDT/USDC profit estimate.
+- Network gas, stored as the exact native fee (BNB, ETH, SOL, or BTC) and valued separately in USD when a live asset price is available. If a price is unavailable, P&L must not subtract a native-token number from USD profit; the preflight USD estimate may be shown explicitly as a fallback.
+- A paid x402 resource charge, included only when the payment is explicitly attributable to that execution attempt. Free gas/block/token-safety previews are not x402 charges. No fixed $0.008 fee is imputed to every flash-loan transaction.
+
+The flash-loan preflight rejects the candidate when the network-fee estimate exceeds the strategy bot's max_gas_budget (USD-equivalent budget) or when the estimated net profit is below min_profit_threshold. The default network-fee budget is $5 USD when no per-bot budget is configured; operators can override it with ARBIVAULT_MAX_NETWORK_FEE_USD. A per-bot value takes precedence.
+
+x402 resource payment is not gas sponsorship. The transaction sender must still have native gas assets (or use a separately configured, supported gas-sponsorship system). Accounting for gas against net profit prevents over-reporting earnings but does not remove the network's native-token fee requirement.
+
+Actual network fees are captured from receipts/status metadata where supported. Flash-loan executor receipts use the emitted settlement event for the premium/profit values; the UI/database must still mark wallet-balance reconciliation as unverified until token balance deltas are checked. When fee inputs are missing, net profit remains unknown (NULL) rather than displaying fabricated zero profit.
