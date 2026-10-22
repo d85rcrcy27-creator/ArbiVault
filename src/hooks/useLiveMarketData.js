@@ -85,7 +85,7 @@ export function useLiveMarketData() {
       .from('bot_execution_runs')
       .select('started_at,output')
       .eq('owner_id', user.id)
-      .eq('workflow', 'execution')
+      .eq('workflow', 'flash_loan_strategy')
       .order('started_at', { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -143,7 +143,7 @@ export function useLiveMarketData() {
         .from('bot_execution_runs')
         .select('started_at,completed_at,status,output,error')
         .eq('owner_id', authData.user.id)
-        .eq('workflow', 'execution')
+        .eq('workflow', 'flash_loan_strategy')
         .order('started_at', { ascending: false })
         .limit(1)
       if (runError) throw runError
