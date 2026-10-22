@@ -98,50 +98,108 @@ async function fetchJson(input: string) {
   }
 }
 
-async function quote(exchange: string, pair: typeof PAIRS[number]) {
-  const started = performance.now()
-  try {
-    if (exchange === 'binance') {
-      const j = await fetchJson(`https://api.binance.com/api/v3/ticker/bookTicker?symbol=${pair.symbol}`)
-      return { exchange, bid: Number(j.bidPrice), ask: Number(j.askPrice), latencyMs: Math.round(performance.now() - started) }
-    }
-    if (exchange === 'bybit') {
-      const j = await fetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${pair.symbol}`)
-      const t = j?.result?.list?.[0]
-      return t ? { exchange, bid: Number(t.bid1Price), ask: Number(t.ask1Price), latencyMs: Math.round(performance.now() - started) } : null
-    }
-    if (exchange === 'okx') {
-      const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
-      const t = j?.data?.[0]
-      return t ? { exchange, bid: Number(t.bidPx), ask: Number(t.askPx), latencyMs: Math.round(performance.now() - started) } : null
-    }
-    if (exchange === 'coinbase') {
-      const j = await fetchJson(`https://api.exchange.coinbase.com/products/${pair.coinbase}/ticker`)
-      return { exchange, bid: Number(j.bid), ask: Number(j.ask), latencyMs: Math.round(performance.now() - started) }
-    }
-    if (exchange === 'bitget') {
-      const j = await fetchJson(`https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol=${pair.bitget}`)
-      const t = Array.isArray(j?.data) ? j.data[0] : null
-      return t ? { exchange, bid: Number(t.bidPr), ask: Number(t.askPr), latencyMs: Math.round(performance.now() - started) } : null
-    }
-    if (exchange === 'kraken') {
-      const j = await fetchJson(`https://api.kraken.com/0/public/Ticker?pair=${pair.kraken}`)
-      const t = Object.values(j?.result || {})[0] as any
-      return t ? { exchange, bid: Number(t.b?.[0]), ask: Number(t.a?.[0]), latencyMs: Math.round(performance.now() - started) } : null
-    }
-    if (exchange === 'kucoin') {
-      const j = await fetchJson(`https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${pair.kucoin}`)
-      const t = j?.data
-      return t ? { exchange, bid: Number(t.bestBid), ask: Number(t.bestAsk), latencyMs: Math.round(performance.now() - started) } : null
-    }
-    const j = await fetchJson(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair.gateio}`)
-    const t = j?.[0]
-    return t ? { exchange, bid: Number(t.highest_bid), ask: Number(t.lowest_ask), latencyMs: Math.round(performance.now() - started) } : null
-  } catch {
-    return null
+type CexQuote = { exchange: string; bid: number; ask: number; latencyMs: number }
+type CexQuoteResult = CexQuote | { exchange: string; error: string; latencyMs: number }
+
+function makeCexQuote(exchange: string, bidValue: unknown, askValue: unknown, started: number): CexQuote {
+  const bid = Number(bidValue)
+  const ask = Number(askValue)
+  if (!Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) {
+    throw new Error("invalid_bid_ask")
+  }
+  // Crossed/invalid quotes must never be allowed to create a false arbitrage edge.
+  if (bid > ask) throw new Error("crossed_bid_ask")
+  return { exchange, bid, ask, latencyMs: Math.round(performance.now() - started) }
+}
+
+function requireCexApiSuccess(exchange: string, body: any) {
+  if (exchange === 'bybit' && Number(body?.retCode) !== 0) {
+    throw new Error("bybit_api_error_" + String(body?.retCode ?? "missing_code"))
+  }
+  if (exchange === 'okx' && String(body?.code) !== "0") {
+    throw new Error("okx_api_error_" + String(body?.code ?? "missing_code"))
+  }
+  if (exchange === 'bitget' && body?.code !== undefined &&
+      !["00000", "0", 0].includes(body.code)) {
+    throw new Error("bitget_api_error_" + String(body.code).slice(0, 24))
+  }
+  if (exchange === 'kucoin' && body?.code !== undefined &&
+      String(body.code) !== "200000") {
+    throw new Error("kucoin_api_error_" + String(body.code).slice(0, 24))
+  }
+  if (exchange === 'binance' && body?.code !== undefined && Number(body.code) !== 0) {
+    throw new Error("binance_api_error_" + String(body.code).slice(0, 24))
+  }
+  if (exchange === 'kraken' && Array.isArray(body?.error) && body.error.length > 0) {
+    throw new Error("kraken_api_error")
   }
 }
 
+async function quote(exchange: string, pair: typeof PAIRS[number]): Promise<CexQuoteResult> {
+  const started = performance.now()
+  try {
+    if (exchange === 'binance') {
+      // Binance recommends its market-data-only host for unauthenticated public feeds.
+      const j = await fetchJson(`https://data-api.binance.vision/api/v3/ticker/bookTicker?symbol=${pair.symbol}`)
+      requireCexApiSuccess(exchange, j)
+      return makeCexQuote(exchange, j.bidPrice, j.askPrice, started)
+    }
+    if (exchange === 'bybit') {
+      const j = await fetchJson(`https://api.bybit.com/v5/market/tickers?category=spot&symbol=${pair.symbol}`)
+      requireCexApiSuccess(exchange, j)
+      const t = j?.result?.list?.[0]
+      if (!t) throw new Error("bybit_ticker_missing")
+      return makeCexQuote(exchange, t.bid1Price, t.ask1Price, started)
+    }
+    if (exchange === 'okx') {
+      const j = await fetchJson(`https://www.okx.com/api/v5/market/ticker?instId=${pair.okx}`)
+      requireCexApiSuccess(exchange, j)
+      const t = j?.data?.[0]
+      if (!t) throw new Error("okx_ticker_missing")
+      return makeCexQuote(exchange, t.bidPx, t.askPx, started)
+    }
+    if (exchange === 'coinbase') {
+      const j = await fetchJson(`https://api.exchange.coinbase.com/products/${pair.coinbase}/ticker`)
+      return makeCexQuote(exchange, j.bid, j.ask, started)
+    }
+    if (exchange === 'bitget') {
+      // UTA market-data endpoint. It remains read-only; it is not an order executor.
+      const j = await fetchJson(`https://api.bitget.com/api/v3/market/tickers?category=SPOT&symbol=${pair.bitget}`)
+      requireCexApiSuccess(exchange, j)
+      const t = Array.isArray(j?.data) ? j.data[0] : null
+      if (!t) throw new Error("bitget_ticker_missing")
+      return makeCexQuote(exchange, t.bidPr, t.askPr, started)
+    }
+    if (exchange === 'kraken') {
+      const j = await fetchJson(`https://api.kraken.com/0/public/Ticker?pair=${pair.kraken}`)
+      requireCexApiSuccess(exchange, j)
+      const t = Object.values(j?.result || {})[0] as any
+      if (!t) throw new Error("kraken_ticker_missing")
+      return makeCexQuote(exchange, t.b?.[0], t.a?.[0], started)
+    }
+    if (exchange === 'kucoin') {
+      const j = await fetchJson(`https://api.kucoin.com/api/v1/market/orderbook/level1?symbol=${pair.kucoin}`)
+      requireCexApiSuccess(exchange, j)
+      const t = j?.data
+      if (!t) throw new Error("kucoin_ticker_missing")
+      return makeCexQuote(exchange, t.bestBid, t.bestAsk, started)
+    }
+    if (exchange === 'gateio') {
+      const j = await fetchJson(`https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${pair.gateio}`)
+      const t = j?.[0]
+      if (!t) throw new Error("gateio_ticker_missing")
+      return makeCexQuote(exchange, t.highest_bid, t.lowest_ask, started)
+    }
+    throw new Error("unsupported_exchange_adapter")
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "adapter_request_failed"
+    return {
+      exchange,
+      error: message.slice(0, 80),
+      latencyMs: Math.round(performance.now() - started),
+    }
+  }
+}
 async function timedFetchJson(url: string, body?: unknown, timeoutMs = 2200) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -316,15 +374,17 @@ async function rpcHealth() {
 }
 
 async function buildRoute(pair: typeof PAIRS[number]) {
-  const quotes = (await Promise.all(EXCHANGES.map((exchange) => quote(exchange, pair))))
-    .filter((item): item is { exchange: string; bid: number; ask: number; latencyMs: number } =>
-      !!item && Number.isFinite(item.bid) && Number.isFinite(item.ask) && item.ask > 0
-    )
+  const quoteResults = await Promise.all(EXCHANGES.map((exchange) => quote(exchange, pair)))
+  const quotes = quoteResults.filter((item): item is CexQuote => !("error" in item))
+  const feedErrors = quoteResults
+    .filter((item): item is Extract<CexQuoteResult, { error: string }> => "error" in item)
+    .map(({ exchange, error }) => ({ exchange, error }))
 
   const snapshot = {
     chain: pair.chain,
     pair: pair.pair,
     quotes,
+    feed_errors: feedErrors,
     quote_count: quotes.length,
     timestamp_ms: Date.now(),
     best_buy: null as { exchange: string; price: number } | null,
@@ -365,7 +425,6 @@ async function buildRoute(pair: typeof PAIRS[number]) {
     snapshot,
   }
 }
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { status: 200, headers: corsHeaders })
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
@@ -543,10 +602,8 @@ Deno.serve(async (req) => {
           adapter.signing_boundary === 'internal_vault' &&
           routePolicyReady
       })
-      // Keep signer identity/health separate from permission to broadcast.
-      // The dashboard must not report a correctly bound signer as "down"
-      // simply because executor deployment or automatic trade authorization
-      // is not ready yet.
+      // A valid signer can be healthy while execution remains disabled.
+      // Report identity/binding health separately from broadcast readiness.
       const executableAdapters = healthyBindings.filter((adapter: any) =>
         adapter.can_broadcast === true && adapter.automatic_signing === true
       )
@@ -584,10 +641,18 @@ Deno.serve(async (req) => {
       live_quote_count: successfulQuotes.length,
       live_pair_count: snapshots.filter((snapshot) => snapshot.quote_count > 0).length,
       feeds,
-      feed_health: EXCHANGES.map((exchange) => ({
-        exchange,
-        live_pairs: snapshots.filter((snapshot: any) => (snapshot.quotes || []).some((quote: any) => quote.exchange === exchange)).length,
-      })),
+      feed_health: EXCHANGES.map((exchange) => {
+        const exchangeErrors = snapshots
+          .flatMap((snapshot: any) => snapshot.feed_errors || [])
+          .filter((item: any) => item.exchange === exchange)
+        return {
+          exchange,
+          live_pairs: snapshots.filter((snapshot: any) => (snapshot.quotes || []).some((quote: any) => quote.exchange === exchange)).length,
+          failed_pairs: exchangeErrors.length,
+          sample_error: exchangeErrors[0]?.error || null,
+          mode: 'public_market_data_read_only',
+        }
+      }),
       chain_rpc_health: rpc,
       signer_health,
       source: 'public_exchange_order_books',
