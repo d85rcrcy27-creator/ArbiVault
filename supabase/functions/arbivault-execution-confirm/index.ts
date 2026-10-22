@@ -342,9 +342,11 @@ Deno.serve(async (req) => {
     const settlementPnl = await flashSettlementUsd(attempt.chain, confirmation.flash_settlement);
     const preflightGross = finiteNumber(attempt.gross_profit);
     const gross = settlementPnl?.gross_profit_usd ?? preflightGross;
+    const isFlashRoute = route?.route_type === "flash_liquidity"
+      || oldBreakdown.fee_estimate_source === "transaction-builder-live-router-quote";
     const premiumUsd = settlementPnl?.flash_loan_fee_usd
       ?? finiteNumber(attempt.flash_loan_fee_usd)
-      ?? (route?.route_type === "flash_liquidity" ? null : 0);
+      ?? (isFlashRoute ? null : 0);
     const net = gross === null || networkFeeUsd === null || premiumUsd === null
       ? null
       : gross - premiumUsd - networkFeeUsd - x402FeeUsd;
