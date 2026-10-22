@@ -206,7 +206,7 @@ export default function BotFleet() {
         .from('bot_execution_runs')
         .select('id,started_at,completed_at,status,output,error')
         .eq('owner_id', authData.user.id)
-        .eq('workflow', 'execution')
+        .eq('workflow', 'flash_loan_strategy')
         .order('started_at', { ascending: false })
         .limit(1)
       if (runError) {
