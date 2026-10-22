@@ -27,6 +27,7 @@ x402 is the payment boundary between ArbiVault and independently operated Intern
 ## Implementation status
 
 This document records the intended boundary only. The initial proxy-style Edge Function was removed because it conflated resource fetching with an application-hosted proxy and did not integrate the production Turnkey signer. The x402 client and Turnkey signing adapter must be implemented and tested as separate modules before enabling live resource payments. No production payments are enabled by this change.
+
 ## Flash-loan fee attribution
 
 Flash-loan accounting keeps three costs separate:
