@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { decodeEventLog, parseAbi } from "npm:viem@2.39.0";
+import { decodeEventLog, keccak256, parseAbi, type Hex } from "npm:viem@2.39.0";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -14,6 +14,8 @@ const BSC_USDT = "0x55d398326f99059ff775485246999027b3197955";
 const ETH_USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
 const BSC_WBNB = "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c";
 const ETH_WETH = "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2";
+const BSC_SOURCE_BLOB_SHA = "7b8771f3b262813f746bc16c5436c95d2740fb04";
+const ETH_SOURCE_BLOB_SHA = "4f260f58ffe7201cc478db7752f4622d8df571ac";
 
 async function authorized(req: Request) {
   const supplied = req.headers.get("x-arbivault-cron-token");
@@ -86,12 +88,33 @@ function hasExactPayoutTransfer(receipt: any, settlement: Record<string, string>
 async function verifiedExecutorAddress(chain: string): Promise<string | null> {
   const { data, error } = await supabase
     .from("flash_executor_deployments")
-    .select("executor_address,status,source_verified,payout_audited")
+    .select("chain,chain_id,executor_address,status,source_verified,payout_audited,contract_source_blob_sha,runtime_bytecode_hash")
     .eq("chain", chain)
     .maybeSingle();
   if (error || !data || data.status !== "verified" || data.source_verified !== true || data.payout_audited !== true) return null;
+  const expectedChainId = chain === "ethereum" ? 1 : 56;
+  const expectedSource = chain === "ethereum" ? ETH_SOURCE_BLOB_SHA : BSC_SOURCE_BLOB_SHA;
   const address = String(data.executor_address || "");
-  return /^0x[a-fA-F0-9]{40}$/.test(address) ? address : null;
+  if (!/^0x[a-fA-F0-9]{40}$/.test(address) ||
+      Number(data.chain_id) !== expectedChainId ||
+      String(data.contract_source_blob_sha || "") !== expectedSource ||
+      !/^0x[0-9a-fA-F]{64}$/.test(String(data.runtime_bytecode_hash || ""))) return null;
+  const endpoint = chain === "ethereum"
+    ? Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com"
+    : Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org";
+  try {
+    const [chainIdRaw, bytecodeRaw] = await Promise.all([
+      rpc(endpoint, "eth_chainId", []),
+      rpc(endpoint, "eth_getCode", [address, "latest"]),
+    ]);
+    if (Number(BigInt(String(chainIdRaw))) !== expectedChainId) return null;
+    const bytecode = String(bytecodeRaw || "");
+    if (!/^0x[0-9a-fA-F]+$/.test(bytecode) || bytecode.length <= 2) return null;
+    if (keccak256(bytecode as Hex).toLowerCase() !== String(data.runtime_bytecode_hash).toLowerCase()) return null;
+    return address;
+  } catch {
+    return null;
+  }
 }
 
 async function checkConfirmation(chain: string, txHash: string) {
