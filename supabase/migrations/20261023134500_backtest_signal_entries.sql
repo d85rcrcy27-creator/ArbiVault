@@ -42,11 +42,10 @@ as $function$
       and o.observed_at >= p_start_at
       and o.observed_at <= p_end_at
   ),
-  signal_entries as (
+  candidate_observations as (
     select o.*
     from ordered_observations o
     where o.value >= p_min_spread_pct
-      and (o.previous_value is null or o.previous_value < p_min_spread_pct)
   )
   select
     e.id,
@@ -57,7 +56,7 @@ as $function$
     e.metadata,
     e.previous_value,
     volume.volume24h_usd
-  from signal_entries e
+  from candidate_observations e
   left join lateral (
     select
       case
