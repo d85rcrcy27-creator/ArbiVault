@@ -542,7 +542,7 @@ async function diagnoseFlashExecutor() {
   const result: Record<string, unknown> = {
     diagnostic_only: true,
     payout_behavior_verified: false,
-    payout_audit_reason: "Payout routing is verified only when the deployed executor's immutable HOT_WALLET getter matches an active ArbiVault-generated trading hot wallet and source/bytecode are verified. End-to-end payout still requires a confirmed on-chain receipt and balance delta.",
+    payout_audit_reason: "Payout routing requires immutable HOT_WALLET and PROFIT_RECIPIENT getters to match separate, active, same-chain ArbiVault wallets with exact source/runtime verification. End-to-end payout still requires a confirmed on-chain receipt and recipient balance delta.",
     transaction_building_enabled: false,
     bnb: {
       network: "BNB Smart Chain mainnet",
