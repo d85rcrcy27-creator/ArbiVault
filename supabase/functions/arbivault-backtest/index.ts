@@ -257,6 +257,7 @@ Deno.serve(async (req) => {
       const result: any = {
         ok: true,
         supported: true,
+        accounting_version: 2,
         source: "recorded_live_market_observations",
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
         data_methodology: "Up to 10,000 observations are sampled across the full requested window for coverage and range statistics. Profit totals use exact first-crossing signal entries calculated over the complete recorded spread history, with closest CoinGecko 24h volume joined within ten minutes. A signal is not treated as a confirmed trade.",
@@ -390,32 +391,47 @@ Deno.serve(async (req) => {
       observations_above_fee_assumption: samples.filter((row: any) => row.spread > 0.10).length,
     };
 
-    const conditions = Array.isArray(skill?.conditions) ? skill.conditions : [];
+    const conditions = Array.isArray(skill?.conditions)
+      ? skill.conditions
+      : (skill?.conditions && typeof skill.conditions === "object" ? [skill.conditions] : []);
     const spreadCondition = conditions.find((item: any) =>
-      String(item?.label || "").toLowerCase().includes("spread")
+      String(item?.label || "").toLowerCase().includes("spread") &&
+      String(item?.unit || "%").includes("%")
     );
-    const spreadThreshold = spreadCondition ? Number(spreadCondition.value) : null;
-    const riskThreshold = Number(skill?.risk_limits?.min_profit_threshold);
+    const configuredSpreadThreshold = spreadCondition
+      ? Number.parseFloat(String(spreadCondition.value ?? ""))
+      : (Number.isFinite(requestedThreshold) ? requestedThreshold : 0.30);
+    const profitCondition = conditions.find((item: any) =>
+      /profit/i.test(String(item?.label || "")) &&
+      String(item?.unit || "USD").toLowerCase() === "usd"
+    );
 
-    const threshold = skillId
-      ? (Number.isFinite(spreadThreshold)
-          ? spreadThreshold
-          : Number.isFinite(riskThreshold) ? riskThreshold : null)
-      : (Number.isFinite(requestedThreshold) ? requestedThreshold : null);
-
-    const requiresSpread = !!spreadCondition || Number.isFinite(riskThreshold);
-    // Respect the actual backtest controls rather than silently using a $10,000
-    // notional for every skill. Values are assumptions, not realized execution costs.
-    const FEE_PCT = body.round_trip_fee_pct == null ? 0.10 : Number(body.round_trip_fee_pct);
-    const SLIPPAGE_PCT = body.slippage_pct == null ? 0 : Number(body.slippage_pct);
+    // A dollar profit target must never be misread as a spread percentage.
+    const FEE_PCT = body.round_trip_fee_pct == null ? 0.20 : Number(body.round_trip_fee_pct);
+    const SLIPPAGE_PCT = body.slippage_pct == null ? 0.05 : Number(body.slippage_pct);
     const COST_PCT = FEE_PCT + SLIPPAGE_PCT;
-    const requestedNotional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 10000);
-    const NOTIONAL = Number.isFinite(requestedNotional) && requestedNotional > 0 ? requestedNotional : 10000;
-    if (![FEE_PCT, SLIPPAGE_PCT].every((value) => Number.isFinite(value) && value >= 0) || COST_PCT >= 100) {
-      return json({ error: "invalid_cost_assumptions" }, 400);
+    const requestedNotional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 1000);
+    const NOTIONAL = Number.isFinite(requestedNotional) && requestedNotional > 0 ? requestedNotional : 1000;
+    const marketSpreadFloor = body.min_spread_pct == null ? 0.30 : Number(body.min_spread_pct);
+    const conditionProfitFloor = profitCondition ? Number.parseFloat(String(profitCondition.value ?? "")) : Number.NaN;
+    const riskProfitFloor = Number(skill?.risk_limits?.min_profit_threshold);
+    const requestedProfitFloor = body.min_net_profit_usd == null ? Number.NaN : Number(body.min_net_profit_usd);
+    const profitFloors = [conditionProfitFloor, riskProfitFloor, requestedProfitFloor]
+      .filter((value: number) => Number.isFinite(value) && value >= 0);
+    const minimumProfitUsd = profitFloors.length ? Math.max(...profitFloors) : 2;
+    const threshold = Math.max(
+      marketSpreadFloor,
+      Number.isFinite(configuredSpreadThreshold) ? configuredSpreadThreshold : marketSpreadFloor,
+      COST_PCT + (minimumProfitUsd * 100 / NOTIONAL),
+    );
+    if (![FEE_PCT, SLIPPAGE_PCT, COST_PCT, NOTIONAL, marketSpreadFloor, threshold, minimumProfitUsd]
+      .every((value) => Number.isFinite(value)) ||
+      FEE_PCT < 0 || SLIPPAGE_PCT < 0 || COST_PCT >= 100 ||
+      NOTIONAL <= 0 || marketSpreadFloor < 0 || minimumProfitUsd < 0) {
+      return json({ error: "invalid_cost_assumptions_or_notional" }, 400);
     }
 
-    if (!requiresSpread || threshold === null) {
+    if (!samples.length) {
       return json({
         ok: true,
         source: "historical_strategy_training",
@@ -425,48 +441,58 @@ Deno.serve(async (req) => {
         skill_id: skillId || null,
         strategy: skill?.name || null,
         days,
-        threshold_pct: null,
+        threshold_pct: threshold,
         supported: false,
-        reason: "strategy_has_no_spread_profit_backtest_criterion",
+        accounting_version: 2,
+        reason: "no_supported_spread_threshold_for_training_dataset",
         pnl_is_realized: false,
         pnl_is_executable: false,
         source_is_historical_observation_data: true,
         ...spreadStats,
         samples: samples.length,
         trades: 0,
-        wins: 0,
-        losses: 0,
-        winRate: 0,
-        pnl: 0,
+        wins: null,
+        losses: null,
+        winRate: null,
+        pnl: null,
         gross_pnl: 0,
         estimated_net_pnl: 0,
+        strategy_qualified_net_pnl: 0,
+        strategy_qualified_gross_pnl: 0,
+        potential_gross_pnl_all_samples: 0,
+        potential_net_pnl_all_samples: 0,
+        potential_profitable_samples: 0,
         fee_pct: FEE_PCT,
+        round_trip_fee_pct: FEE_PCT,
+        slippage_pct: SLIPPAGE_PCT,
+        total_cost_assumption_pct: COST_PCT,
         notional: NOTIONAL,
+        pnl_is_realized: false,
+        pnl_is_executable: false,
         first_observation: samples[0]?.observed_at || null,
         last_observation: samples[samples.length - 1]?.observed_at || null,
       });
     }
 
-    // Negative spread observations mean no positive arbitrage spread was present;
-    // they remain in historical sample statistics but are not counted as executed losses.
+    // Historical training observations are not executed trades. Only observations
+    // that clear the market spread floor, assumed costs, and net USD floor contribute
+    // to a potential estimate. Never sum fee losses across every below-cost sample.
     const positiveSpreadSamples = samples.filter((row: any) => row.spread > 0);
-    const qualifying = positiveSpreadSamples.filter((row: any) => row.spread >= threshold);
-    const profitable = qualifying.filter((row: any) => row.spread > COST_PCT);
+    const candidates = positiveSpreadSamples.filter((row: any) => row.spread >= threshold);
+    const netForSample = (row: any) => NOTIONAL * (row.spread - COST_PCT) / 100;
+    const qualifying = candidates.filter((row: any) => netForSample(row) >= minimumProfitUsd);
     const grossPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
-    const netPnl = qualifying.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - COST_PCT)) / 100, 0);
+    const netPnl = qualifying.reduce((sum: number, row: any) => sum + netForSample(row), 0);
+    const potentialProfitable = qualifying;
+    const potentialGrossPnl = grossPnl;
+    const potentialNetPnl = netPnl;
+    const bestSample = qualifying.reduce((best: any, row: any) => !best || row.spread > best.spread ? row : best, null);
+    const bestSampleNetProfit = bestSample ? netForSample(bestSample) : null;
 
-    // Potential-profit diagnostics are calculated across every recorded sample,
-    // separately from the strategy-qualified backtest. They are hypothetical and
-    // must not be presented as realized PnL or executable opportunities.
-    const potentialProfitable = positiveSpreadSamples.filter((row: any) => row.spread > COST_PCT);
-    const potentialGrossPnl = positiveSpreadSamples.reduce((sum: number, row: any) => sum + (NOTIONAL * row.spread) / 100, 0);
-    const potentialNetPnl = positiveSpreadSamples.reduce((sum: number, row: any) => sum + (NOTIONAL * (row.spread - COST_PCT)) / 100, 0);
-    const bestSample = positiveSpreadSamples.reduce((best: any, row: any) => !best || row.spread > best.spread ? row : best, null);
-    const bestSampleNetProfit = bestSample ? NOTIONAL * (bestSample.spread - COST_PCT) / 100 : null;
-
-    return json({
+    const result: any = {
       ok: true,
       source: "historical_strategy_training",
+      accounting_version: 2,
       data_scope: dataset.dataset_key,
       training_window_start: datasetStart.toISOString(),
       training_window_end: datasetEnd.toISOString(),
@@ -477,20 +503,22 @@ Deno.serve(async (req) => {
       pnl_is_realized: false,
       pnl_is_executable: false,
       source_is_historical_observation_data: true,
-      cost_methodology: "Historical spread-only observations; estimated net profit subtracts the configured round-trip fee and slippage assumptions. Potential totals sum hypothetical sample-level results and are not realized or executable PnL.",
+      cost_methodology: "Historical spread observations are not trades. Totals include only sample opportunities clearing a 0.30% default gross-spread floor (or stricter configured threshold), assumed 0.20% round-trip venue fee, 0.05% slippage reserve, and the configured USD profit floor. No chain gas, order-book depth, or confirmed fills are present.",
       ...spreadStats,
       skill_id: skillId || null,
       strategy: skill?.name || null,
       days,
       threshold_pct: threshold,
+      minimum_net_profit_usd: minimumProfitUsd,
       threshold_reached: qualifying.length > 0,
-      reason: qualifying.length ? "historical_observations_matched_strategy_threshold" : "historical_max_spread_below_strategy_threshold",
+      reason: qualifying.length ? "historical_observations_matched_profitability_floor" : "historical_max_spread_below_profitability_floor",
       samples: samples.length,
       trades: qualifying.length,
-      wins: profitable.length,
-      losses: Math.max(0, qualifying.length - profitable.length),
-      winRate: qualifying.length ? Math.round((profitable.length / qualifying.length) * 100) : 0,
-      pnl: Number(netPnl.toFixed(2)),
+      qualified_historical_samples: qualifying.length,
+      wins: null,
+      losses: null,
+      winRate: null,
+      pnl: null,
       gross_pnl: Number(grossPnl.toFixed(2)),
       estimated_net_pnl: Number(netPnl.toFixed(2)),
       strategy_qualified_net_pnl: Number(netPnl.toFixed(2)),
@@ -502,12 +530,24 @@ Deno.serve(async (req) => {
       best_sample_potential_net_profit_usd: bestSampleNetProfit == null ? null : Number(bestSampleNetProfit.toFixed(2)),
       estimated_not_realized: true,
       fee_pct: FEE_PCT,
+      round_trip_fee_pct: FEE_PCT,
       slippage_pct: SLIPPAGE_PCT,
       total_cost_assumption_pct: COST_PCT,
+      minimum_potential_net_profit_usd: minimumProfitUsd,
+      potential_signal_events: qualifying.length,
+      network_fee_included: false,
+      network_fee_estimate_usd: null,
+      network_fee_policy: "Not included: this is historical training data, not a current executable route or gas quote.",
       notional: NOTIONAL,
       first_observation: samples[0]?.observed_at || null,
       last_observation: samples[samples.length - 1]?.observed_at || null,
-    });
+    };
+    if (skillId && skill) {
+      const { error: saveError } = await admin.from("bot_skills").update({ backtest: result })
+        .eq("id", skillId).eq("owner_id", skill.owner_id);
+      if (saveError) return json({ error: "backtest_result_save_failed", detail: saveError.message }, 500);
+    }
+    return json(result);
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "backtest_error" }, 500);
   }
