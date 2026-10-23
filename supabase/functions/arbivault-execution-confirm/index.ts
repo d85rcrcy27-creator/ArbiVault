@@ -185,21 +185,19 @@ async function valueNetworkFeeUsd(chain: string, confirmation: any, estimatedFee
     if (price !== null) {
       return {
         network_fee_usd: feeNative * price,
+        estimated_network_fee_usd: estimatedFeeUsd,
         network_fee_valuation_source: "confirmed_native_fee_times_live_" + feeAsset + "_spot_price",
       };
     }
   }
-  if (estimatedFeeUsd !== null) {
-    return {
-      network_fee_usd: estimatedFeeUsd,
-      network_fee_valuation_source: feeNative === null
-        ? "preflight_estimate_fallback_actual_fee_unavailable"
-        : "preflight_estimate_fallback_spot_price_unavailable",
-    };
-  }
+  // Do not label an estimate as an actual fee, or calculate realized net profit
+  // from it. Preserve it in the separate estimate field until a live valuation exists.
   return {
     network_fee_usd: null,
-    network_fee_valuation_source: "unavailable_fee_or_price",
+    estimated_network_fee_usd: estimatedFeeUsd,
+    network_fee_valuation_source: feeNative === null
+      ? "actual_fee_unavailable_estimate_retained_separately"
+      : "native_fee_confirmed_usd_price_unavailable_estimate_retained_separately",
   };
 }
 
@@ -279,6 +277,7 @@ Deno.serve(async (req) => {
     const estimatedNetworkFeeUsd = finiteNumber(attempt.estimated_network_fee_usd);
     const feeValue = await valueNetworkFeeUsd(attempt.chain, confirmation, estimatedNetworkFeeUsd);
     const networkFeeUsd = feeValue.network_fee_usd;
+    const estimatedFeeUsd = feeValue.estimated_network_fee_usd ?? estimatedNetworkFeeUsd;
     const feeNative = confirmation.fee_native ?? attempt.gas_fee ?? null;
     const feeAsset = confirmation.fee_asset || attempt.gas_asset || null;
     const x402FeeUsd = finiteNumber(attempt.x402_resource_fee_usd) ?? 0;
@@ -294,6 +293,9 @@ Deno.serve(async (req) => {
         network_fee_native: feeNative,
         network_fee_asset: feeAsset,
         network_fee_valuation_source: feeValue.network_fee_valuation_source,
+        estimated_network_fee_usd: estimatedFeeUsd,
+        stop_loss_usd: finiteNumber(oldBreakdown.stop_loss_usd) ?? -5,
+        loss_limit_breached: networkFeeUsd !== null && networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
         flash_loan_fee_usd: 0,
         x402_resource_fee_usd: x402FeeUsd,
         total_fee_usd: networkFeeUsd === null ? null : networkFeeUsd + x402FeeUsd,
@@ -307,6 +309,7 @@ Deno.serve(async (req) => {
         gas_fee: feeNative,
         gas_asset: feeAsset,
         network_fee_usd: networkFeeUsd,
+        estimated_network_fee_usd: estimatedFeeUsd,
         flash_loan_fee_usd: 0,
         x402_resource_fee_usd: x402FeeUsd,
         fee_breakdown: failureBreakdown,
@@ -341,9 +344,13 @@ Deno.serve(async (req) => {
 
     const settlementPnl = await flashSettlementUsd(attempt.chain, confirmation.flash_settlement);
     const preflightGross = finiteNumber(attempt.gross_profit);
-    const gross = settlementPnl?.gross_profit_usd ?? preflightGross;
     const isFlashRoute = route?.route_type === "flash_liquidity"
       || oldBreakdown.fee_estimate_source === "transaction-builder-live-router-quote";
+    // Successful receipt != proof of profit. Flash-loan realized profit is recorded
+    // only from the executor's settlement event, never from a preflight estimate.
+    const gross = isFlashRoute
+      ? (settlementPnl?.gross_profit_usd ?? null)
+      : preflightGross;
     const premiumUsd = settlementPnl?.flash_loan_fee_usd
       ?? finiteNumber(attempt.flash_loan_fee_usd)
       ?? (isFlashRoute ? null : 0);
@@ -365,7 +372,9 @@ Deno.serve(async (req) => {
       network_fee_asset: feeAsset,
       network_fee_usd: networkFeeUsd,
       network_fee_valuation_source: feeValue.network_fee_valuation_source,
-      estimated_network_fee_usd: estimatedNetworkFeeUsd,
+      estimated_network_fee_usd: estimatedFeeUsd,
+      stop_loss_usd: finiteNumber(oldBreakdown.stop_loss_usd) ?? -5,
+      loss_limit_breached: networkFeeUsd !== null && networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
       x402_resource_fee_usd: x402FeeUsd,
       x402_fee_source: x402FeeUsd > 0
         ? "explicitly_attributed_to_execution_attempt"
@@ -374,15 +383,19 @@ Deno.serve(async (req) => {
       net_profit_usd: net,
       pnl_basis: settlementPnl
         ? settlementPnl.settlement_source
-        : gross !== null
-          ? "preflight_gross_profit_estimate_plus_confirmed_network_fee"
-          : "profit_inputs_unavailable",
+        : isFlashRoute
+          ? "flash_settlement_event_missing_profit_not_recorded"
+          : gross !== null
+            ? "preflight_gross_profit_estimate_plus_confirmed_network_fee"
+            : "profit_inputs_unavailable",
       realized_pnl_verified: false,
-      fee_accounting_status: net === null
-        ? "net_profit_unavailable_missing_fee_or_profit_inputs"
-        : settlementPnl
-          ? "settlement_event_and_confirmed_network_fee_accounted"
-          : "preflight_pnl_and_confirmed_network_fee_accounted",
+      fee_accounting_status: isFlashRoute && !settlementPnl
+        ? "flash_settlement_event_missing_profit_not_recorded"
+        : net === null
+          ? "net_profit_unavailable_missing_actual_fee_or_profit_inputs"
+          : settlementPnl
+            ? "settlement_event_and_confirmed_network_fee_accounted"
+            : "preflight_pnl_and_confirmed_network_fee_accounted",
     };
 
     let skillId: string | null = null;
@@ -431,7 +444,7 @@ Deno.serve(async (req) => {
           confirmed_at: now,
           fees_paid: totalFeesUsd,
           network_fee_usd: networkFeeUsd,
-          estimated_network_fee_usd: estimatedNetworkFeeUsd,
+          estimated_network_fee_usd: estimatedFeeUsd,
           flash_loan_fee_usd: premiumUsd,
           x402_resource_fee_usd: x402FeeUsd,
           pnl_currency: "USD",
@@ -463,7 +476,7 @@ Deno.serve(async (req) => {
           gross_profit: gross,
           fees_paid: totalFeesUsd,
           network_fee_usd: networkFeeUsd,
-          estimated_network_fee_usd: estimatedNetworkFeeUsd,
+          estimated_network_fee_usd: estimatedFeeUsd,
           flash_loan_fee_usd: premiumUsd,
           x402_resource_fee_usd: x402FeeUsd,
           pnl_currency: "USD",
