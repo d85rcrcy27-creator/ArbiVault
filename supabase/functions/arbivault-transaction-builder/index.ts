@@ -211,6 +211,33 @@ function toHex(value: bigint) {
   return `0x${value.toString(16)}`;
 }
 
+async function prepareEvmFee(
+  chain: "bnb" | "ethereum",
+  rpcCall: (method: string, params: unknown[]) => Promise<any>,
+  sender: string,
+  estimatedGas: bigint,
+  gasPrice: bigint,
+  value: bigint,
+) {
+  if (estimatedGas <= 0n || gasPrice <= 0n || value < 0n) {
+    throw new Error(`${chain}_fee_fields_invalid`);
+  }
+  // Add a 20% gas-limit margin to reduce failures from small estimation changes.
+  const gasLimit = (estimatedGas * 120n + 99n) / 100n;
+  const maxNetworkFee = gasLimit * gasPrice;
+  const nativeBalance = toBigInt(String(await rpcCall("eth_getBalance", [sender, "latest"])));
+  const requiredNativeBalance = value + maxNetworkFee;
+  if (nativeBalance < requiredNativeBalance) {
+    throw new Error(`${chain}_native_balance_insufficient_for_value_and_gas`);
+  }
+  return {
+    gasLimit,
+    maxNetworkFee,
+    nativeBalance,
+    requiredNativeBalance,
+  };
+}
+
 async function sha256(value: string) {
   const bytes = await crypto.subtle.digest(
     "SHA-256",
@@ -1010,10 +1037,11 @@ async function buildAtomicFlashLoan(
   });
   const nonce = toBigInt(await executorRpc("eth_getTransactionCount", [owner, "pending"]));
   const gasPrice = toBigInt(await executorRpc("eth_gasPrice", []));
-  const gas = toBigInt(await executorRpc("eth_estimateGas", [{ from: owner, to: executor, data: encoded, value: "0x0" }]));
+  const estimatedGas = toBigInt(await executorRpc("eth_estimateGas", [{ from: owner, to: executor, data: encoded, value: "0x0" }]));
+  const fee = await prepareEvmFee(chain, executorRpc, owner, estimatedGas, gasPrice, 0n);
   const transaction = {
     chainId: expectedChainId, nonce: toHex(nonce), to: executor, value: "0x0",
-    data: encoded, gas: toHex(gas), gasPrice: toHex(gasPrice), from: owner,
+    data: encoded, gas: toHex(fee.gasLimit), gasPrice: toHex(gasPrice), from: owner,
   };
   const serializedPayload = JSON.stringify(transaction);
   return {
@@ -1025,6 +1053,11 @@ async function buildAtomicFlashLoan(
     transaction_format: "evm_json",
     transaction_payload_hash: await sha256(serializedPayload),
     executable: true, atomic: true, builder_signs: false, builder_broadcasts: false,
+    gas_estimate: estimatedGas.toString(), gas_limit: fee.gasLimit.toString(),
+    gas_price_wei: gasPrice.toString(), max_network_fee_wei: fee.maxNetworkFee.toString(),
+    native_balance_wei: fee.nativeBalance.toString(),
+    required_native_balance_wei: fee.requiredNativeBalance.toString(),
+    network_fee_funding_check: "passed",
     repayment_required_in_same_transaction: true,
     reference: chain === "ethereum" ? "Ethereum Aave V3 flashLoanSimple + Uniswap V2 ArbiVault executor" : "BNB Aave V3 flashLoanSimple + PancakeSwap V2/Biswap V2 ArbiVault executor",
   };
@@ -1115,20 +1148,20 @@ async function buildUniswap(
 
   const nonce = BigInt(String(await ethereumRpc("eth_getTransactionCount", [taker, "pending"])));
   const gasPrice = BigInt(String(await ethereumRpc("eth_gasPrice", [])));
-  const gas = BigInt(String(await ethereumRpc("eth_estimateGas", [{
+  const estimatedGas = BigInt(String(await ethereumRpc("eth_estimateGas", [{
     from: taker,
     to: ETH_UNISWAP_V2_ROUTER,
     data,
     value: toHex(value),
   }])));
-  if (gas <= 0n || gasPrice <= 0n) throw new Error("uniswap_fee_fields_invalid");
+  const fee = await prepareEvmFee("ethereum", ethereumRpc, taker, estimatedGas, gasPrice, value);
   const transaction = {
     chainId: 1,
     nonce: toHex(nonce),
     to: ETH_UNISWAP_V2_ROUTER,
     value: toHex(value),
     data,
-    gas: toHex(gas),
+    gas: toHex(fee.gasLimit),
     gasPrice: toHex(gasPrice),
     from: taker,
   };
@@ -1147,6 +1180,13 @@ async function buildUniswap(
     input_amount: amountRaw,
     slippage_bps: slippageBps,
     router: ETH_UNISWAP_V2_ROUTER,
+    gas_estimate: estimatedGas.toString(),
+    gas_limit: fee.gasLimit.toString(),
+    gas_price_wei: gasPrice.toString(),
+    max_network_fee_wei: fee.maxNetworkFee.toString(),
+    native_balance_wei: fee.nativeBalance.toString(),
+    required_native_balance_wei: fee.requiredNativeBalance.toString(),
+    network_fee_funding_check: "passed",
     executable: true,
     broadcast_by_builder: false,
     reference: "Uniswap V2 router",
@@ -1249,7 +1289,7 @@ async function buildPancake(
     });
   }
 
-  const gas = toBigInt(
+  const estimatedGas = toBigInt(
     await rpc("eth_estimateGas", [{
       from: taker,
       to: PANCAKE_V2_ROUTER,
@@ -1257,6 +1297,7 @@ async function buildPancake(
       value: toHex(value),
     }]),
   );
+  const fee = await prepareEvmFee("bnb", rpc, taker, estimatedGas, gasPrice, value);
 
   const transaction = {
     chainId: 56,
@@ -1264,7 +1305,7 @@ async function buildPancake(
     to: PANCAKE_V2_ROUTER,
     value: toHex(value),
     data,
-    gas: toHex(gas),
+    gas: toHex(fee.gasLimit),
     gasPrice: toHex(gasPrice),
     from: taker,
   };
@@ -1285,6 +1326,13 @@ async function buildPancake(
     input_amount: amountRaw,
     slippage_bps: slippageBps,
     router: PANCAKE_V2_ROUTER,
+    gas_estimate: estimatedGas.toString(),
+    gas_limit: fee.gasLimit.toString(),
+    gas_price_wei: gasPrice.toString(),
+    max_network_fee_wei: fee.maxNetworkFee.toString(),
+    native_balance_wei: fee.nativeBalance.toString(),
+    required_native_balance_wei: fee.requiredNativeBalance.toString(),
+    network_fee_funding_check: "passed",
     executable: true,
     broadcast_by_builder: false,
     reference: "PancakeSwap V2 router",
