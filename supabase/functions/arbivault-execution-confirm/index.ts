@@ -295,7 +295,7 @@ Deno.serve(async (req) => {
         network_fee_valuation_source: feeValue.network_fee_valuation_source,
         estimated_network_fee_usd: estimatedFeeUsd,
         stop_loss_usd: finiteNumber(oldBreakdown.stop_loss_usd) ?? -5,
-        loss_limit_breached: networkFeeUsd !== null && networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
+        loss_limit_breached: networkFeeUsd === null ? null : networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
         flash_loan_fee_usd: 0,
         x402_resource_fee_usd: x402FeeUsd,
         total_fee_usd: networkFeeUsd === null ? null : networkFeeUsd + x402FeeUsd,
@@ -374,7 +374,7 @@ Deno.serve(async (req) => {
       network_fee_valuation_source: feeValue.network_fee_valuation_source,
       estimated_network_fee_usd: estimatedFeeUsd,
       stop_loss_usd: finiteNumber(oldBreakdown.stop_loss_usd) ?? -5,
-      loss_limit_breached: networkFeeUsd !== null && networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
+      loss_limit_breached: networkFeeUsd === null ? null : networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
       x402_resource_fee_usd: x402FeeUsd,
       x402_fee_source: x402FeeUsd > 0
         ? "explicitly_attributed_to_execution_attempt"
