@@ -243,6 +243,7 @@ async function prepare(config: ChainConfig, bytecode: Hex) {
       required_with_reserve_wei: requiredWithReserve.toString(), broadcast_attempted: false };
   }
   const nonce = BigInt(String(await rpc(config, "eth_getTransactionCount", [account.address, "pending"])));
+  if (nonce > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error(config.chain + "_deployment_nonce_out_of_safe_range");
   const expectedAddress = getContractAddress({ from: account.address, nonce });
   return { ok: true as const, config, account, initCode, nonce, expectedAddress, gasPrice, gas, balance,
     initCodeHash: keccak256(initCode), deployerAddress: account.address, requiredWithReserve };
@@ -414,7 +415,7 @@ Deno.serve(async (req) => {
   let signed: Hex;
   try {
     signed = await prepared.account.signTransaction({
-      chainId: config.chainId, nonce: prepared.nonce, gas: prepared.gas, gasPrice: prepared.gasPrice,
+      chainId: config.chainId, nonce: Number(prepared.nonce), gas: prepared.gas, gasPrice: prepared.gasPrice,
       data: prepared.initCode, value: 0n, type: "legacy",
     });
   } catch { return fail("deployment_transaction_signing_failed", 500, { broadcast_attempted: false }); }
