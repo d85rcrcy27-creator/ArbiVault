@@ -74,7 +74,7 @@ export default function ProfitDestinations() {
       const recipient = data.recipient
       setMessage(data.existing
         ? 'A destination for this chain already exists.'
-        : 'New chain-specific destination generated and secured. The 24-hour activation delay must pass before it can be activated.')
+        : 'New destination generated, verified against the stored Supabase vault key, and activated immediately. Flash-loan payouts still require a deployed verified executor.')
       if (recipient) setRecipients((previous) => [recipient, ...previous.filter((r) => r.id !== recipient.id)])
       await load()
     } catch (e) {
@@ -90,7 +90,7 @@ export default function ProfitDestinations() {
     setMessage('')
     try {
       await invoke({ action: 'activate', recipient_id: recipientId })
-      setMessage('Destination activated in the recipient registry. Flash-loan payouts still require a deployed and verified executor configured for this address.')
+      setMessage('Destination verified against the stored Supabase vault key and activated immediately. Flash-loan payouts still require a deployed and verified executor configured for this address.')
       await load()
     } catch (e) {
       setError(e.message || 'Destination is not ready for activation')
@@ -134,7 +134,7 @@ export default function ProfitDestinations() {
         {CHAINS.map((chain) => {
           const recipient = currentByChain[chain.id]
           const address = recipient?.wallet?.address || ''
-          const canActivate = recipient?.status === 'pending' && recipient.activation_at && new Date(recipient.activation_at).getTime() <= Date.now()
+          const canActivate = recipient?.status === 'pending'
           return (
             <div key={chain.id} className="rounded border border-[#232738] bg-[#090A0F] p-3">
               <div className="flex items-center justify-between gap-2">
@@ -156,7 +156,7 @@ export default function ProfitDestinations() {
                     </button>
                     {canActivate && (
                       <button onClick={() => activateDestination(chain.id, recipient.id)} disabled={!!busyChain} className="rounded border border-[#00F0FF]/40 bg-[#00F0FF]/5 px-2 py-1.5 font-mono text-[0.55rem] font-bold uppercase text-[#00F0FF] disabled:opacity-40">
-                        {busyChain === chain.id ? 'Activating…' : 'Activate destination'}
+                        {busyChain === chain.id ? 'Verifying…' : 'Verify & activate now'}
                       </button>
                     )}
                   </div>
@@ -174,9 +174,9 @@ export default function ProfitDestinations() {
                   Registered only. This destination will receive flash-loan profits only after a verified executor is deployed/configured for this address.
                 </div>
               )}
-              {recipient?.status === 'pending' && !canActivate && (
+              {recipient?.status === 'pending' && (
                 <div className="mt-3 font-mono text-[0.55rem] text-[#5a6080]">
-                  Waiting for the required activation delay.
+                  Activation has no waiting period; ArbiVault verifies that the stored vault key derives this exact address first.
                 </div>
               )}
             </div>
