@@ -734,6 +734,11 @@ export default {
               ? diagnostic.ethereum
               : diagnostic.bnb
             const executor: any = networkDiagnostic?.executor || {}
+            const routeBot: any = (strategyBots || []).find((item: any) => item.id === candidate.strategy_bot_id) || null
+            const boundWalletIds = botWalletIdsByChain.get(candidate.chain) || new Set<string>()
+            const boundWallet: any = executionEligibleWallets.find((item: any) =>
+              item.chain === candidate.chain && boundWalletIds.has(item.id)
+            ) || null
             let blocker = 'flash_executor_payout_unverified'
 
             if (!networkDiagnostic?.rpc_chain_ok) {
@@ -767,26 +772,61 @@ export default {
             } else {
               blocker = 'ready_for_explicit_preflight'
             }
+            const blockers: string[] = []
+            if (networkDiagnostic?.rpc_chain_ok !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_rpc_unhealthy' : 'bsc_rpc_unhealthy')
+            if (networkDiagnostic?.aave_pool_resolved !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_aave_pool_unresolved' : 'bsc_aave_pool_unresolved')
+            if (executor.configured !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_flash_executor_not_configured' : 'flash_executor_not_configured')
+            if (executor.code_deployed !== true) blockers.push('flash_executor_bytecode_missing')
+            if (executor.pool_matches_expected !== true) blockers.push('flash_executor_pool_mismatch')
+            if (!executor.payout_recipient_address) blockers.push('flash_executor_payout_recipient_unreadable')
+            if (executor.payout_recipient_matches_generated_hot_wallet !== true) blockers.push('flash_executor_payout_wallet_not_verified')
+            if (executor.source_verification?.verified !== true) blockers.push('flash_executor_source_unverified')
+            if (networkDiagnostic?.payout_audited !== true) blockers.push('flash_executor_payout_configuration_not_audited')
+            if (networkDiagnostic?.payout_behavior_verified !== true) blockers.push('flash_executor_payout_behavior_not_verified')
+            if (!boundWallet) blockers.push('strategy_wallet_binding_missing_or_unverified')
+            else if (executor.payout_recipient_address &&
+              String(executor.payout_recipient_address).toLowerCase() !== String(boundWallet.address).toLowerCase()) {
+              blockers.push('flash_executor_hot_wallet_does_not_match_strategy_wallet')
+            }
+            if (!candidate.transaction_builder) blockers.push('flash_transaction_builder_missing')
+            if (candidate.builder_enabled !== true && candidate.payout_test_authorized !== true) blockers.push('flash_transaction_builder_disabled')
+            if (candidate.discovery_only === true) blockers.push('strategy_route_discovery_only')
+            if (!routeBot || routeBot.enabled !== true || routeBot.execution_enabled !== true || routeBot.flash_loan_enabled !== true) {
+              blockers.push('flash_strategy_bot_not_execution_enabled')
+            }
+            if (networkDiagnostic?.ready_for_flash_transaction_test !== true) blockers.push('flash_executor_not_ready_for_payout_test')
+            if (networkDiagnostic?.ready_for_live_trading !== true) blockers.push('flash_executor_not_ready_for_live_trading')
+            const primaryBlocker = blockers[0] || blocker
             return {
               id: candidate.id,
               chain: candidate.chain,
               pair: candidate.pair,
               builder: candidate.transaction_builder,
               builder_enabled: candidate.builder_enabled === true,
+              discovery_only: candidate.discovery_only === true,
+              payout_test_authorized: candidate.payout_test_authorized === true,
+              payout_test_used_at: candidate.payout_test_used_at || null,
+              bound_wallet_id: boundWallet?.id || null,
+              bound_wallet_address: boundWallet?.address || null,
               payout_recipient_address: executor.payout_recipient_address || null,
               payout_recipient_matches_generated_hot_wallet: executor.payout_recipient_matches_generated_hot_wallet === true,
-              matched_generated_wallet_id: executor.matched_generated_wallet_id || null,
-              ready_for_transaction_test: blocker === 'ready_for_explicit_preflight',
-              blocker,
+              payout_behavior_verified: networkDiagnostic?.payout_behavior_verified === true,
+              blockers,
+              ready_for_transaction_test: networkDiagnostic?.ready_for_flash_transaction_test === true && !!boundWallet && String(executor.payout_recipient_address || '').toLowerCase() === String(boundWallet.address || '').toLowerCase(),
+              ready_for_live_trading: networkDiagnostic?.ready_for_live_trading === true && candidate.enabled === true && candidate.discovery_only !== true && candidate.builder_enabled === true && !!boundWallet && String(executor.payout_recipient_address || '').toLowerCase() === String(boundWallet.address || '').toLowerCase(),
+              blocker: primaryBlocker,
             }
           })
 
         // Keep the route catalogue honest without creating fake execution attempts.
         for (const diagnostic of flashRouteDiagnostics) {
           const routeRow = (routes || []).find((candidate: any) => candidate.id === diagnostic.id)
-          if (routeRow && routeRow.builder_status !== diagnostic.blocker) {
+          const statusText = (diagnostic.blockers || []).length
+            ? diagnostic.blockers.join(';').slice(0, 500)
+            : diagnostic.blocker
+          if (routeRow && routeRow.builder_status !== statusText) {
             await supabase.from('arbivault_strategy_routes')
-              .update({ builder_status: diagnostic.blocker, updated_at: new Date().toISOString() })
+              .update({ builder_status: statusText, updated_at: new Date().toISOString() })
               .eq('id', diagnostic.id)
               .eq('builder_status', routeRow.builder_status)
           }
