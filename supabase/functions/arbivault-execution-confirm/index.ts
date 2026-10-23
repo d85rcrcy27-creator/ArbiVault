@@ -74,7 +74,7 @@ function hasExactPayoutTransfer(receipt: any, settlement: Record<string, string>
       !/^0x[a-fA-F0-9]{40}$/.test(settlement.hot_wallet) ||
       !/^0x[a-fA-F0-9]{40}$/.test(settlement.profit_recipient) ||
       !/^0x[a-fA-F0-9]{40}$/.test(settlement.asset) ||
-      !/^\\d+$/.test(settlement.profit_paid_raw) || BigInt(settlement.profit_paid_raw) <= 0n) return false;
+      !/^\d+$/.test(settlement.profit_paid_raw) || BigInt(settlement.profit_paid_raw) <= 0n) return false;
   const expectedFrom = "0x" + settlement.executor_address.slice(2).toLowerCase().padStart(64, "0");
   const expectedTo = "0x" + settlement.profit_recipient.slice(2).toLowerCase().padStart(64, "0");
   return (Array.isArray(receipt?.logs) ? receipt.logs : []).some((log: any) => {
