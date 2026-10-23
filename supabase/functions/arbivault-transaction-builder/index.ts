@@ -531,7 +531,8 @@ async function verifyExecutor(
 
   result.source_verification = await lookupSourcifyVerification(chainId, executor);
   result.payout_audited = result.code_deployed === true &&
-    result.payout_recipient_matches_generated_hot_wallet === true &&
+    result.trading_wallet_matches_generated_hot_wallet === true &&
+    result.payout_recipient_matches_profit_destination === true &&
     result.pool_matches_expected === true &&
     (result.source_verification as any)?.verified === true;
   return result;
@@ -603,7 +604,8 @@ async function diagnoseFlashExecutor() {
     bnb.aave_pool_resolved === true &&
     (bnb.executor as any).configured === true &&
     (bnb.executor as any).code_deployed === true &&
-    (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
+    (bnb.executor as any).trading_wallet_matches_generated_hot_wallet === true &&
+    (bnb.executor as any).payout_recipient_matches_profit_destination === true &&
     (bnb.executor as any).source_verification?.verified === true &&
     BSC_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
@@ -639,7 +641,8 @@ async function diagnoseFlashExecutor() {
     eth.aave_pool_resolved === true &&
     (eth.executor as any).configured === true &&
     (eth.executor as any).code_deployed === true &&
-    (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
+    (eth.executor as any).trading_wallet_matches_generated_hot_wallet === true &&
+    (eth.executor as any).payout_recipient_matches_profit_destination === true &&
     (eth.executor as any).source_verification?.verified === true &&
     ETH_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
 
@@ -651,8 +654,12 @@ async function diagnoseFlashExecutor() {
   result.executor_bytecode_hash = (bnb.executor as any).bytecode_hash || null;
   result.source_verification = (bnb.executor as any).source_verification;
   result.payout_recipient_address = (bnb.executor as any).payout_recipient_address || null;
-  result.payout_recipient_matches_generated_hot_wallet = (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true;
+  result.payout_recipient_matches_generated_hot_wallet = false;
+  result.trading_wallet_address = (bnb.executor as any).trading_wallet_address || null;
+  result.trading_wallet_matches_generated_hot_wallet = (bnb.executor as any).trading_wallet_matches_generated_hot_wallet === true;
+  result.payout_recipient_matches_profit_destination = (bnb.executor as any).payout_recipient_matches_profit_destination === true;
   result.matched_generated_wallet_id = (bnb.executor as any).matched_generated_wallet_id || null;
+  result.matched_profit_recipient_wallet_id = (bnb.executor as any).matched_profit_recipient_wallet_id || null;
   result.aave_pool_resolved = bnb.aave_pool_resolved === true;
   result.aave_pool_address = bnb.aave_pool_address || null;
   result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
@@ -660,8 +667,12 @@ async function diagnoseFlashExecutor() {
   result.ethereum_flash_executor_address = (eth.executor as any).address || null;
   result.ethereum_payout_behavior_verified = false;
   result.ethereum_payout_recipient_address = (eth.executor as any).payout_recipient_address || null;
-  result.ethereum_payout_recipient_matches_generated_hot_wallet = (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true;
+  result.ethereum_payout_recipient_matches_generated_hot_wallet = false;
+  result.ethereum_trading_wallet_address = (eth.executor as any).trading_wallet_address || null;
+  result.ethereum_trading_wallet_matches_generated_hot_wallet = (eth.executor as any).trading_wallet_matches_generated_hot_wallet === true;
+  result.ethereum_payout_recipient_matches_profit_destination = (eth.executor as any).payout_recipient_matches_profit_destination === true;
   result.ethereum_matched_generated_wallet_id = (eth.executor as any).matched_generated_wallet_id || null;
+  result.ethereum_matched_profit_recipient_wallet_id = (eth.executor as any).matched_profit_recipient_wallet_id || null;
   result.ethereum_aave_pool_resolved = eth.aave_pool_resolved === true;
   result.ethereum_aave_pool_address = eth.aave_pool_address || null;
   return result;
