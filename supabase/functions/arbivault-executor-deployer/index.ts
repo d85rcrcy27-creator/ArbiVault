@@ -316,7 +316,14 @@ async function verifyAndRecord(config: ChainConfig, address: string, txHash: str
   if (pool.toLowerCase() !== config.pool.toLowerCase()) throw new Error("executor_pool_getter_mismatch");
   const verification = await sourcifyExact(config, address);
   const sourceVerified = verification.verified === true;
+  const runtimeHash = keccak256(code as Hex).toLowerCase();
+  const registryHash = String(existing.runtime_bytecode_hash || "").toLowerCase();
+  // First successful exact-source verification establishes the registry baseline.
+  // Once a hash exists it is immutable: any later mismatch blocks rather than overwrites.
+  const runtimeHashMatchesRegistry = !registryHash || registryHash === runtimeHash;
+  if (registryHash && !runtimeHashMatchesRegistry) throw new Error("executor_runtime_bytecode_hash_mismatch");
   const payoutAudited = sourceVerified &&
+    runtimeHashMatchesRegistry &&
     hotWallet.toLowerCase() === config.hotWallet.toLowerCase() &&
     profitRecipient.toLowerCase() === config.profitRecipient.toLowerCase() &&
     pool.toLowerCase() === config.pool.toLowerCase() &&
@@ -326,15 +333,13 @@ async function verifyAndRecord(config: ChainConfig, address: string, txHash: str
     String(existing.hot_wallet_id || "") === String(config.walletId) &&
     String(existing.hot_wallet_address || "").toLowerCase() === config.hotWallet.toLowerCase() &&
     Number(existing.chain_id) === config.chainId &&
-    String(existing.contract_source_blob_sha || "") === config.sourceBlobSha &&
-    !!existing.runtime_bytecode_hash &&
-    String(existing.runtime_bytecode_hash).toLowerCase() === keccak256(code as Hex).toLowerCase();
+    String(existing.contract_source_blob_sha || "") === config.sourceBlobSha;
   const { error } = await supabase.from("flash_executor_deployments").update({
     executor_address: address, deployment_tx_hash: txHash || existing.deployment_tx_hash,
     hot_wallet_id: config.walletId, hot_wallet_address: hotWallet,
     profit_recipient_wallet_id: config.profitRecipientWalletId, profit_recipient_address: profitRecipient,
     pool_address: pool, contract_source_blob_sha: config.sourceBlobSha,
-    runtime_bytecode_hash: keccak256(code as Hex), status: sourceVerified && payoutAudited ? "verified" : "deployed_unverified",
+    runtime_bytecode_hash: runtimeHash, status: sourceVerified && payoutAudited ? "verified" : "deployed_unverified",
     source_verified: sourceVerified, payout_audited: payoutAudited, payout_behavior_verified: false,
     failure_code: null, updated_at: new Date().toISOString(),
   }).eq("chain", config.chain);
@@ -343,7 +348,7 @@ async function verifyAndRecord(config: ChainConfig, address: string, txHash: str
     ok: true, chain: config.chain, chain_id: config.chainId, executor_address: address,
     deployment_tx_hash: txHash || existing.deployment_tx_hash, hot_wallet: hotWallet,
     profit_recipient: profitRecipient, pool,
-    runtime_bytecode_bytes: (code.length - 2) / 2, runtime_bytecode_hash: keccak256(code as Hex),
+    runtime_bytecode_bytes: (code.length - 2) / 2, runtime_bytecode_hash: runtimeHash,
     source_verification: verification, payout_audited: payoutAudited,
     payout_behavior_verified: false, status: sourceVerified && payoutAudited ? "verified" : "deployed_unverified",
   };
