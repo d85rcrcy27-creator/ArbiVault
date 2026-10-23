@@ -84,13 +84,13 @@ export default function Home() {
     <div className="px-4 pt-4">{livePanel}</div>
     {isMobile ? <div className="flex flex-col gap-3 p-3">
       <div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => tab.id === 'wallets' ? navigate('/wallets') : setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
-      {mobileTab === 'matrix' && <><div className="h-[22rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</>}
+      {mobileTab === 'matrix' && <><div className="h-[22rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>{depthPanel}</>}
       {mobileTab === 'trades' && <div className="h-[26rem]"><TradeLog trades={trades} /></div>}
-      {mobileTab === 'skills' && <div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} /></div>}
+      {mobileTab === 'skills' && <div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>}
       {mobileTab === 'checks' && <VerificationDashboard routes={routes} marketSnapshot={marketSnapshot} chainRpcHealth={chainRpcHealth} signerHealth={signerHealth} testnetHealth={testnetHealth} onRefresh={refreshMarket} onOpenWallets={() => navigate('/wallets')} />}
     </div> : <div className="space-y-4 p-4">
       <VerificationDashboard routes={routes} marketSnapshot={marketSnapshot} chainRpcHealth={chainRpcHealth} signerHealth={signerHealth} testnetHealth={testnetHealth} onRefresh={refreshMarket} onOpenWallets={() => navigate('/wallets')} />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} /></div></div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div></div>
     </div>}
   </div>
 }
