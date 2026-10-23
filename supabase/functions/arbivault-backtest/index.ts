@@ -16,28 +16,22 @@ const corsHeaders = {
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, "cache-control": "no-store" } });
 
-// Repeated polling observations are not independent trades. Count one entry for
-// a signal per symbol + buy/sell venue route, until it fails or the route has
-// gone unobserved for more than 60 seconds.
+// Repeated quote polls are not independent trades. Count a signal entry once
+// per symbol + buy/sell venue route, and only re-arm after an observed
+// non-qualifying sample. This is intentionally conservative after time sampling:
+// a gap in the sampled data is not proof the opportunity ended.
 function distinctSignalEntries(
   samples: any[],
   predicate: (sample: any) => boolean,
-  rearmGapMs = 60_000,
 ) {
-  const state = new Map<string, { qualifies: boolean; at: number }>();
+  const state = new Map<string, { qualifies: boolean }>();
   const entries: any[] = [];
   for (const sample of samples) {
     const key = String(sample.routeKey || sample.symbol || "unknown");
-    const at = new Date(sample.observed_at).getTime();
     const qualifies = predicate(sample);
     const previous = state.get(key);
-    const gapMs = previous && Number.isFinite(at) && Number.isFinite(previous.at)
-      ? at - previous.at
-      : Infinity;
-    if (qualifies && (!previous || !previous.qualifies || gapMs > rearmGapMs)) {
-      entries.push(sample);
-    }
-    state.set(key, { qualifies, at });
+    if (qualifies && (!previous || !previous.qualifies)) entries.push(sample);
+    state.set(key, { qualifies });
   }
   return entries;
 }
@@ -94,7 +88,6 @@ Deno.serve(async (req) => {
       const endAt = new Date();
       const startAt = new Date(endAt.getTime() - days * 86400000);
       const liveSampleLimit = 10000;
-      const queryPageSize = 1000;
       const { data: sampledLiveRows, error: liveRowsError } = await admin.rpc(
         "sample_arbivault_market_observations",
         {
