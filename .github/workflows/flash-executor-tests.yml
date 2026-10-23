@@ -1,0 +1,41 @@
+name: Flash Executor Contract Tests
+
+on:
+  pull_request:
+    paths:
+      - "contracts/ArbiVault*FlashExecutor.sol"
+      - "test/ArbiVault*FlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-tests.yml"
+  push:
+    branches: [main]
+    paths:
+      - "contracts/ArbiVault*FlashExecutor.sol"
+      - "test/ArbiVault*FlashExecutor.t.sol"
+      - "foundry.toml"
+      - ".github/workflows/flash-executor-tests.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flash-executor-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  foundry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+      - name: Validate formatting
+        run: forge fmt --check
+      - name: Compile flash executors
+        run: forge build --sizes
+      - name: Test BNB and Ethereum executor invariants
+        run: forge test --match-path 'test/ArbiVault*FlashExecutor.t.sol' -vv
