@@ -460,6 +460,40 @@ function makeFlashFeeAccounting(chain: string, best: any): Record<string, unknow
   }
 }
 
+async function maximumTransactionFeeUsd(transactionPayload: unknown, chain: string): Promise<number | null> {
+  if (typeof transactionPayload !== 'string' || !['bnb', 'ethereum'].includes(chain)) return null
+  let transaction: any
+  try { transaction = JSON.parse(transactionPayload) } catch { return null }
+  const parseRaw = (value: unknown): bigint | null => {
+    try {
+      if (typeof value !== 'string' && typeof value !== 'number') return null
+      const text = String(value)
+      if (!/^(0x[0-9a-f]+|[0-9]+)$/i.test(text)) return null
+      return BigInt(text)
+    } catch { return null }
+  }
+  const gas = parseRaw(transaction?.gas)
+  const gasPrice = parseRaw(transaction?.gasPrice)
+  if (gas === null || gasPrice === null || gas <= 0n || gasPrice <= 0n) return null
+  const feeNative = Number(gas * gasPrice) / 1e18
+  if (!Number.isFinite(feeNative) || feeNative <= 0) return null
+  const symbol = chain === 'bnb' ? 'BNBUSDT' : 'ETHUSDT'
+  try {
+    const response = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=' + symbol, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) return null
+    const body = await response.json()
+    const spot = Number(body?.price)
+    if (!Number.isFinite(spot) || spot <= 0) return null
+    // Include 10% headroom for USD valuation movement during broadcast/confirmation.
+    return feeNative * spot * 1.10
+  } catch {
+    return null
+  }
+}
+
 function maxNetworkFeeBudgetUsd(strategyBot: any): number {
   const configured = strategyBot?.max_gas_budget
   if (configured !== null && configured !== undefined && configured !== '') {
@@ -847,11 +881,14 @@ export default {
                 ? configuredMinProfit
                 : 1
               const maxGasBudgetUsd = maxNetworkFeeBudgetUsd(strategyBot)
+              flashFeeAccounting.stop_loss_usd = -maxGasBudgetUsd
               executionContext.flash_fee_accounting = {
                 ...flashFeeAccounting,
                 max_network_fee_budget_usd: maxGasBudgetUsd,
+                stop_loss_usd: -maxGasBudgetUsd,
                 minimum_net_profit_usd: minNetProfitUsd,
                 fee_policy: 'reject_if_gas_estimate_missing_over_budget_or_net_profit_below_threshold',
+                profit_evidence_policy: 'do_not_record_gross_or_net_profit_above_confirmed_executor_settlement_evidence',
               }
               if (flashFeeAccounting.estimated_network_fee_usd == null || flashFeeAccounting.estimated_net_profit_usd == null) {
                 builderError = 'flash_network_fee_or_net_profit_estimate_unavailable'
@@ -894,6 +931,22 @@ export default {
                 }
                 if (flashBuild?.executable !== true || typeof flashBuild?.transaction !== 'string') {
                   builderError = 'flash_atomic_transaction_builder_incomplete'
+                } else {
+                  const transactionFeeCapUsd = await maximumTransactionFeeUsd(
+                    flashBuild.transaction,
+                    executionRoute.chain,
+                  )
+                  executionContext.flash_fee_accounting = {
+                    ...(executionContext.flash_fee_accounting || {}),
+                    transaction_fee_cap_usd: transactionFeeCapUsd,
+                    transaction_fee_cap_includes_price_buffer: true,
+                    stop_loss_usd: -maxGasBudgetUsd,
+                  }
+                  if (transactionFeeCapUsd === null) {
+                    builderError = 'flash_transaction_max_fee_valuation_unavailable'
+                  } else if (transactionFeeCapUsd > maxGasBudgetUsd) {
+                    builderError = 'flash_transaction_max_fee_exceeds_network_fee_budget'
+                  }
                 }
               }
             } catch (e) {
