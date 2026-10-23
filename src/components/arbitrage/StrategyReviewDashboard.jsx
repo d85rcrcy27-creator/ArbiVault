@@ -355,7 +355,7 @@ export default function StrategyReviewDashboard() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-2xl text-[0.6rem] leading-relaxed text-[#5a6080]">
-            Fixed proposal guardrails: up to $1,000 notional, up to 100 bps slippage and up to $100 gas budget. These are proposal caps, not execution permissions or profitability guarantees.
+            Fixed proposal guardrails: up to $1,000 notional, up to 30 bps slippage and up to $100 gas budget. These are proposal caps, not execution permissions or profitability guarantees.
           </p>
           <button disabled={busyAction !== '' || loading || authLoading} className="inline-flex items-center justify-center gap-1.5 rounded border border-[#00F0FF]/50 bg-[#00F0FF]/5 px-4 py-2 font-mono text-[0.62rem] font-bold uppercase text-[#00F0FF] disabled:opacity-40">
             <Sparkles className="h-3.5 w-3.5" /> {busyAction === 'generate' ? 'Generating…' : 'Generate proposal'}
