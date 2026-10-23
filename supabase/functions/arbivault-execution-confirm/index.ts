@@ -35,8 +35,10 @@ async function rpc(url: string, method: string, params: unknown[]) {
   return body.result;
 }
 
-function decodeFlashSettlement(receipt: any): Record<string, string> | null {
+function decodeFlashSettlement(receipt: any, expectedExecutorAddress: string): Record<string, string> | null {
+  if (!/^0x[a-fA-F0-9]{40}$/.test(expectedExecutorAddress)) return null;
   for (const log of Array.isArray(receipt?.logs) ? receipt.logs : []) {
+    if (String(log?.address || "").toLowerCase() !== expectedExecutorAddress.toLowerCase()) continue;
     try {
       const decoded: any = decodeEventLog({
         abi: FLASH_SETTLED_ABI,
@@ -47,6 +49,7 @@ function decodeFlashSettlement(receipt: any): Record<string, string> | null {
       if (decoded.eventName !== "FlashLoanSettled") continue;
       const args = decoded.args || {};
       return {
+        executor_address: String(log.address || ""),
         asset: String(args.asset || ""),
         amount_raw: String(args.amount ?? ""),
         premium_raw: String(args.premium ?? ""),
@@ -61,6 +64,34 @@ function decodeFlashSettlement(receipt: any): Record<string, string> | null {
   return null;
 }
 
+
+const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+function hasExactPayoutTransfer(receipt: any, settlement: Record<string, string> | null): boolean {
+  if (!settlement || !/^0x[a-fA-F0-9]{40}$/.test(settlement.executor_address) ||
+      !/^0x[a-fA-F0-9]{40}$/.test(settlement.hot_wallet) ||
+      !/^0x[a-fA-F0-9]{40}$/.test(settlement.asset) ||
+      !/^\\d+$/.test(settlement.profit_paid_raw) || BigInt(settlement.profit_paid_raw) <= 0n) return false;
+  const expectedFrom = "0x" + settlement.executor_address.slice(2).toLowerCase().padStart(64, "0");
+  const expectedTo = "0x" + settlement.hot_wallet.slice(2).toLowerCase().padStart(64, "0");
+  return (Array.isArray(receipt?.logs) ? receipt.logs : []).some((log: any) => {
+    const topics = Array.isArray(log?.topics) ? log.topics.map((value: unknown) => String(value).toLowerCase()) : [];
+    if (String(log?.address || "").toLowerCase() !== settlement.asset.toLowerCase()) return false;
+    if (topics[0] !== ERC20_TRANSFER_TOPIC || topics[1] !== expectedFrom || topics[2] !== expectedTo) return false;
+    try { return BigInt(String(log.data || "0x0")) === BigInt(settlement.profit_paid_raw); } catch { return false; }
+  });
+}
+
+async function verifiedExecutorAddress(chain: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("flash_executor_deployments")
+    .select("executor_address,status,source_verified,payout_audited")
+    .eq("chain", chain)
+    .maybeSingle();
+  if (error || !data || data.status !== "verified" || data.source_verified !== true || data.payout_audited !== true) return null;
+  const address = String(data.executor_address || "");
+  return /^0x[a-fA-F0-9]{40}$/.test(address) ? address : null;
+}
+
 async function checkConfirmation(chain: string, txHash: string) {
   if (chain === "bnb" || chain === "ethereum") {
     const endpoint = chain === "ethereum"
@@ -72,6 +103,14 @@ async function checkConfirmation(chain: string, txHash: string) {
     const effectiveGasPrice = BigInt(receipt.effectiveGasPrice || receipt.gasPrice || "0x0");
     const feeRaw = gasUsed * effectiveGasPrice;
     const succeeded = receipt.status === "0x1";
+    const expectedExecutorAddress = succeeded ? await verifiedExecutorAddress(chain) : null;
+    const rawSettlement = expectedExecutorAddress ? decodeFlashSettlement(receipt, expectedExecutorAddress) : null;
+    const flashSettlement = rawSettlement
+      ? {
+          ...rawSettlement,
+          payout_transfer_verified: hasExactPayoutTransfer(receipt, rawSettlement),
+        }
+      : null;
     return {
       confirmed: true,
       succeeded,
@@ -80,7 +119,8 @@ async function checkConfirmation(chain: string, txHash: string) {
       fee_native: Number(feeRaw) / 1e18,
       fee_asset: chain === "bnb" ? "BNB" : "ETH",
       block_number: receipt.blockNumber || null,
-      flash_settlement: succeeded ? decodeFlashSettlement(receipt) : null,
+      flash_settlement: flashSettlement,
+      flash_executor_registry_verified: expectedExecutorAddress !== null,
     };
   }
 
@@ -338,7 +378,7 @@ Deno.serve(async (req) => {
 
     const { data: route } = await supabase
       .from("arbivault_strategy_routes")
-      .select("strategy,pair,strategy_bot_id,route_type")
+      .select("strategy,pair,strategy_bot_id,route_type,payout_test_authorized,payout_test_authorized_by,payout_test_used_at,payout_test_execution_attempt_id,payout_test_tx_hash")
       .eq("id", attempt.execution_route_id)
       .maybeSingle();
 
