@@ -752,8 +752,10 @@ export default {
               blocker = 'flash_executor_bytecode_missing'
             } else if (!executor.payout_recipient_address) {
               blocker = 'flash_executor_payout_recipient_unreadable'
-            } else if (!executor.payout_recipient_matches_generated_hot_wallet) {
-              blocker = 'flash_executor_payout_wallet_not_generated_hot_wallet'
+            } else if (!executor.trading_wallet_matches_generated_hot_wallet) {
+              blocker = 'flash_executor_trading_wallet_not_generated_hot_wallet'
+            } else if (!executor.payout_recipient_matches_profit_destination) {
+              blocker = 'flash_executor_profit_destination_not_active_or_mismatched'
             } else if (executor.source_verification?.verified !== true) {
               blocker = 'flash_executor_source_unverified'
             } else if (!candidate.transaction_builder || candidate.builder_enabled !== true) {
@@ -773,9 +775,12 @@ export default {
               pair: candidate.pair,
               builder: candidate.transaction_builder,
               builder_enabled: candidate.builder_enabled === true,
+              trading_wallet_address: executor.trading_wallet_address || null,
+              trading_wallet_matches_generated_hot_wallet: executor.trading_wallet_matches_generated_hot_wallet === true,
               payout_recipient_address: executor.payout_recipient_address || null,
-              payout_recipient_matches_generated_hot_wallet: executor.payout_recipient_matches_generated_hot_wallet === true,
+              payout_recipient_matches_profit_destination: executor.payout_recipient_matches_profit_destination === true,
               matched_generated_wallet_id: executor.matched_generated_wallet_id || null,
+              matched_profit_recipient_wallet_id: executor.matched_profit_recipient_wallet_id || null,
               ready_for_transaction_test: blocker === 'ready_for_explicit_preflight',
               blocker,
             }
