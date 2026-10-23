@@ -413,6 +413,8 @@ Deno.serve(async (req) => {
         deployer_address: check.deployerAddress, balance_wei: check.balance.toString(),
         estimated_gas: check.gas.toString(), gas_price_wei: check.gasPrice.toString(),
         required_with_reserve_wei: check.requiredWithReserve.toString(), expected_contract_address: check.expectedAddress,
+        hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient,
+        profit_recipient_wallet_id: config.profitRecipientWalletId, pool: config.pool,
         init_code_hash: check.initCodeHash, broadcast_attempted: false });
     } catch (error) { return fail(error instanceof Error ? error.message : "deployment_preflight_failed", 409, { broadcast_attempted: false }); }
   }
