@@ -1380,7 +1380,7 @@ Deno.serve(async (req) => {
       } else {
         return json({ error: "flash_quote_route_not_supported" }, 409);
       }
-      return json({ route_id: route.id, source_wallet: wallet.address, mode: "flash_quote", ...quote });
+      return json({ route_id: route.id, source_wallet: wallet?.address || null, mode: "flash_quote", ...quote });
     }
 
     const built = route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
