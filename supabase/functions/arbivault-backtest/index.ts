@@ -102,11 +102,15 @@ Deno.serve(async (req) => {
         /profit/i.test(String(condition?.label || "")) &&
         !["%", "bps", "ms", "x"].includes(String(condition?.unit || "").toLowerCase())
       );
-      const configuredProfitFloor = profitCondition
+      const conditionProfitFloor = profitCondition
         ? Number.parseFloat(String(profitCondition.value ?? ""))
-        : (skill?.risk_limits?.min_profit_threshold == null ? 2 : Number(skill.risk_limits.min_profit_threshold));
+        : null;
+      const riskProfitFloor = Number(skill?.risk_limits?.min_profit_threshold);
+      const configuredFloors = [conditionProfitFloor, riskProfitFloor]
+        .filter((value: number) => Number.isFinite(value) && value >= 0);
+      const configuredProfitFloor = configuredFloors.length ? Math.max(...configuredFloors) : 2;
       const minimumPotentialNetProfitUsd = body.min_net_profit_usd == null
-        ? (Number.isFinite(configuredProfitFloor) && configuredProfitFloor >= 0 ? configuredProfitFloor : 2)
+        ? configuredProfitFloor
         : Number(body.min_net_profit_usd);
       if (![notional, feePct, slippagePct, costPct, minSpreadPct, minimumPotentialNetProfitUsd].every(Number.isFinite) ||
           notional <= 0 || feePct < 0 || slippagePct < 0 || costPct >= 100 ||
@@ -260,23 +264,24 @@ Deno.serve(async (req) => {
         samples_with_latency: builtSamples.filter((sample: any) => sample.latencyMs != null).length,
         samples_with_volume: builtSamples.filter((sample: any) => sample.volume24hUsd != null).length,
         trades: qualifying.length,
-        wins: wins.length,
-        losses: Math.max(0, qualifying.length - wins.length),
-        winRate: qualifying.length ? Math.round(wins.length / qualifying.length * 100) : 0,
-        pnl: Number(netPnl.toFixed(2)),
+        // Quote-derived signal entries cannot establish realized wins/losses.
+        wins: null,
+        losses: null,
+        winRate: null,
+        pnl: null,
         gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
         estimated_net_pnl: Number(netPnl.toFixed(2)),
         strategy_qualified_net_pnl: Number(netPnl.toFixed(2)),
         strategy_qualified_gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
-        // Existing field names are retained for UI compatibility. Values now sum
-        // distinct qualifying signal entries rather than every repeated poll.
+        // Legacy field names are retained for UI compatibility; totals below are
+        // estimated across exact signal entries, never all polling observations.
         potential_gross_pnl_all_samples: Number(potentialGrossPnl.toFixed(2)),
         potential_net_pnl_all_samples: Number(potentialNetPnl.toFixed(2)),
         potential_profitable_samples: potentialProfitable.length,
         best_sample_spread_pct: bestSample ? Number(bestSample.spreadPct.toFixed(6)) : null,
         best_sample_potential_net_profit_usd: bestSample ? Number(bestSample.estimatedNetProfitUsd.toFixed(2)) : null,
         estimated_not_realized: true,
-        cost_methodology: "Assumes 0.10% taker fees at each CEX venue (0.20% round trip) plus a 0.05% slippage reserve by default. Costs are estimated assumptions, not measured user fees or blockchain gas. Potential totals sum distinct entries that clear the configured spread and net-profit floors; they are not realized or executable PnL.",
+        cost_methodology: "Assumes 0.10% taker fees at each CEX venue (0.20% round trip) plus a 0.05% slippage reserve by default. Costs are estimates, not measured user fees or blockchain gas. Potential totals sum exact first-crossing signal entries that clear the spread and USD net-profit floors; they are not realized or executable PnL.",
         historical_max_spread_pct: Number(historicalMaxSpread.toFixed(6)),
         historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
         reason: qualifying.length
