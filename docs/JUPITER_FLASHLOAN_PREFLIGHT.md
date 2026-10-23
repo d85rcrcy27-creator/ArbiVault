@@ -34,7 +34,7 @@ After the branch is reviewed and the function is deployed through the project's 
 
 Use a normal Supabase user access token in the Authorization bearer header. The source wallet must belong to that user and be an active Solana trading hot wallet. Do not send the internal cron token to a browser or user-facing client.
 
-The default simulation size is 10 USDC. The supported range is 1–100 USDC, and each swap is capped at 100 bps slippage. The fixed route uses canonical USDC and wrapped-SOL mints only.
+The default simulation size is 10 USDC. The supported range is 1–100 USDC, and each swap is capped at 30 bps (0.30%) slippage. The fixed route uses canonical USDC and wrapped-SOL mints only.
 
 ## Limitations and required validation
 
