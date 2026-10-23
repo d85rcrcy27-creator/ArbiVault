@@ -703,7 +703,7 @@ export default {
 
         const wallets = await supabase
           .from('wallets')
-          .select('id,chain,address,status,is_hot,wallet_role,data_quality_status')
+          .select('id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref')
           .eq('owner_id', bot.owner_id)
           .eq('status', 'active')
           .eq('is_hot', true)
@@ -719,8 +719,61 @@ export default {
         if (approvedWalletError) throw approvedWalletError
         const approvedWalletIds = new Set((approvedWalletRows || []).map((row: any) => row.wallet_id))
         const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
-          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+          wallet.data_quality_status === 'verified' && !!wallet.secret_ref && approvedWalletIds.has(wallet.id)
         )
+
+        const { data: profitProfileRows, error: profitProfileError } = await supabase
+          .from('profit_recipient_profiles')
+          .select('id,owner_id,wallet_id,chain,asset,status,activation_at')
+          .eq('owner_id', bot.owner_id)
+          .in('chain', ['bnb', 'ethereum'])
+          .eq('asset', 'ALL')
+          .eq('status', 'active')
+        if (profitProfileError) throw new Error('profit_recipient_profile_lookup_failed')
+        const activeProfitProfiles = (profitProfileRows || []).filter((profile: any) =>
+          !profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now()
+        )
+        const profitWalletIds = activeProfitProfiles.map((profile: any) => profile.wallet_id).filter(Boolean)
+        const { data: profitWalletRows, error: profitWalletError } = profitWalletIds.length
+          ? await supabase
+              .from('wallets')
+              .select('id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref')
+              .eq('owner_id', bot.owner_id)
+              .in('id', profitWalletIds)
+              .eq('status', 'active')
+              .eq('is_hot', false)
+              .eq('wallet_role', 'profit_recipient')
+              .eq('data_quality_status', 'verified')
+              .not('secret_ref', 'is', null)
+          : { data: [], error: null }
+        if (profitWalletError) throw new Error('profit_recipient_wallet_lookup_failed')
+        const activeProfitDestinations = activeProfitProfiles.flatMap((profile: any) => {
+          const recipient = (profitWalletRows || []).find((wallet: any) =>
+            wallet.id === profile.wallet_id &&
+            wallet.owner_id === profile.owner_id &&
+            wallet.chain === profile.chain &&
+            wallet.status === 'active' &&
+            wallet.is_hot === false &&
+            wallet.wallet_role === 'profit_recipient' &&
+            wallet.data_quality_status === 'verified' &&
+            !!wallet.secret_ref
+          )
+          return recipient ? [{
+            profile_id: profile.id,
+            owner_id: profile.owner_id,
+            wallet_id: recipient.id,
+            chain: profile.chain,
+            asset: profile.asset,
+            profile_status: profile.status,
+            activation_at: profile.activation_at,
+            address: recipient.address,
+          }] : []
+        })
+        const profitDestinationsByChain = new Map<string, any>()
+        for (const chain of ['bnb', 'ethereum']) {
+          const chainRecipients = activeProfitDestinations.filter((recipient: any) => recipient.chain === chain)
+          profitDestinationsByChain.set(chain, chainRecipients.length === 1 ? chainRecipients[0] : null)
+        }
 
         // Execution wallets must be explicitly bound to this strategy bot on the
         // same chain. An owner's other approved wallets are not interchangeable.
@@ -744,79 +797,67 @@ export default {
         }
 
         const flashRouteDiagnostics = (routes || [])
-          .filter((candidate: any) =>
-            candidate.enabled === true &&
-            candidate.route_type === 'flash_liquidity'
-          )
+          .filter((candidate: any) => candidate.enabled === true && candidate.route_type === 'flash_liquidity')
           .map((candidate: any) => {
             const diagnostic: any = flashExecutorDiagnostic || {}
-            const networkDiagnostic: any = candidate.chain === 'ethereum'
-              ? diagnostic.ethereum
-              : diagnostic.bnb
+            const networkDiagnostic: any = candidate.chain === 'ethereum' ? diagnostic.ethereum : diagnostic.bnb
             const executor: any = networkDiagnostic?.executor || {}
             const routeBot: any = (strategyBots || []).find((item: any) => item.id === candidate.strategy_bot_id) || null
             const boundWalletIds = botWalletIdsByChain.get(candidate.chain) || new Set<string>()
             const boundWallet: any = executionEligibleWallets.find((item: any) =>
               item.chain === candidate.chain && boundWalletIds.has(item.id)
             ) || null
-            let blocker = 'flash_executor_payout_unverified'
-
-            if (!networkDiagnostic?.rpc_chain_ok) {
-              blocker = candidate.chain === 'ethereum'
-                ? 'ethereum_rpc_unhealthy'
-                : 'bsc_rpc_unhealthy'
-            } else if (!networkDiagnostic?.aave_pool_resolved) {
-              blocker = candidate.chain === 'ethereum'
-                ? 'ethereum_aave_pool_unresolved'
-                : 'bsc_aave_pool_unresolved'
-            } else if (!executor.configured) {
-              blocker = candidate.chain === 'ethereum'
-                ? 'ethereum_flash_executor_not_configured'
-                : 'flash_executor_not_configured'
-            } else if (!executor.code_deployed) {
-              blocker = 'flash_executor_bytecode_missing'
-            } else if (!executor.payout_recipient_address) {
-              blocker = 'flash_executor_payout_recipient_unreadable'
-            } else if (!executor.payout_recipient_matches_generated_hot_wallet) {
-              blocker = 'flash_executor_payout_wallet_not_generated_hot_wallet'
-            } else if (executor.source_verification?.verified !== true) {
-              blocker = 'flash_executor_source_unverified'
-            } else if (!candidate.transaction_builder || candidate.builder_enabled !== true) {
-              blocker = candidate.chain === 'ethereum'
-                ? 'ethereum_flash_builder_not_configured'
-                : 'flash_executor_builder_not_configured'
-            } else if (networkDiagnostic?.payout_behavior_verified !== true) {
-              blocker = 'flash_executor_payout_not_end_to_end_verified'
-            } else if (networkDiagnostic?.ready_for_flash_transaction_test !== true) {
-              blocker = 'flash_executor_preflight_not_ready'
-            } else {
-              blocker = 'ready_for_explicit_preflight'
-            }
+            const profitDestination: any = profitDestinationsByChain.get(candidate.chain) || null
             const blockers: string[] = []
+
             if (networkDiagnostic?.rpc_chain_ok !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_rpc_unhealthy' : 'bsc_rpc_unhealthy')
             if (networkDiagnostic?.aave_pool_resolved !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_aave_pool_unresolved' : 'bsc_aave_pool_unresolved')
-            if (executor.configured !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_flash_executor_not_configured' : 'flash_executor_not_configured')
-            if (executor.code_deployed !== true) blockers.push('flash_executor_bytecode_missing')
-            if (executor.pool_matches_expected !== true) blockers.push('flash_executor_pool_mismatch')
-            if (!executor.payout_recipient_address) blockers.push('flash_executor_payout_recipient_unreadable')
-            if (executor.payout_recipient_matches_generated_hot_wallet !== true) blockers.push('flash_executor_payout_wallet_not_verified')
-            if (executor.source_verification?.verified !== true) blockers.push('flash_executor_source_unverified')
-            if (networkDiagnostic?.payout_audited !== true) blockers.push('flash_executor_payout_configuration_not_audited')
-            if (networkDiagnostic?.payout_behavior_verified !== true) blockers.push('flash_executor_payout_behavior_not_verified')
+            if (executor.registry_backed !== true) blockers.push('flash_executor_registry_row_missing_or_address_mismatch')
+            if (executor.registry_chain_id_match !== true) blockers.push('flash_executor_registry_chain_id_mismatch')
+            if (executor.registry_source_blob_sha_match !== true) blockers.push('flash_executor_registry_source_revision_mismatch')
+            if (executor.configured !== true) blockers.push(candidate.chain === 'ethereum' ? 'ethereum_flash_executor_not_configured' : 'bsc_flash_executor_not_configured')
+            if (executor.code_deployed !== true) blockers.push('flash_executor_runtime_bytecode_missing')
+            if (executor.runtime_bytecode_hash_match !== true) blockers.push('flash_executor_runtime_bytecode_hash_mismatch')
+            if (executor.pool_matches_expected !== true) blockers.push('flash_executor_aave_pool_mismatch')
+            if (executor.source_verification?.verified !== true) blockers.push('flash_executor_exact_source_unverified')
+            if (executor.hot_wallet_matches_registry !== true) blockers.push('flash_executor_hot_wallet_registry_mismatch')
             if (!boundWallet) blockers.push('strategy_wallet_binding_missing_or_unverified')
-            else if (executor.payout_recipient_address &&
-              String(executor.payout_recipient_address).toLowerCase() !== String(boundWallet.address).toLowerCase()) {
-              blockers.push('flash_executor_hot_wallet_does_not_match_strategy_wallet')
+            else if (String(executor.hot_wallet_address || '').toLowerCase() !== String(boundWallet.address || '').toLowerCase() ||
+              String(executor.matched_generated_wallet_id || '') !== String(boundWallet.id || '')) {
+              blockers.push('flash_executor_hot_wallet_does_not_match_bound_strategy_wallet')
             }
-            if (!candidate.transaction_builder) blockers.push('flash_transaction_builder_missing')
-            if (candidate.builder_enabled !== true && candidate.payout_test_authorized !== true) blockers.push('flash_transaction_builder_disabled')
-            if (candidate.discovery_only === true) blockers.push('strategy_route_discovery_only')
+            if (!profitDestination) blockers.push('one_active_all_asset_profit_destination_required_for_chain')
+            if (executor.payout_recipient_matches_active_profit_destination !== true) blockers.push('flash_executor_profit_recipient_profile_not_verified')
+            else if (!profitDestination || String(executor.profit_recipient_address || '').toLowerCase() !== String(profitDestination.address || '').toLowerCase() ||
+              String(executor.matched_profit_recipient_wallet_id || '') !== String(profitDestination.wallet_id || '') ||
+              String(executor.matched_profit_recipient_profile_id || '') !== String(profitDestination.profile_id || '')) {
+              blockers.push('flash_executor_profit_recipient_does_not_match_active_destination')
+            }
+            if (boundWallet && profitDestination && String(boundWallet.id) === String(profitDestination.wallet_id)) {
+              blockers.push('profit_recipient_must_be_separate_from_trading_wallet')
+            }
+            if ((executor as any).payout_audited !== true) blockers.push('flash_executor_payout_configuration_not_audited')
+            if (networkDiagnostic?.payout_behavior_verified !== true) blockers.push('flash_executor_payout_behavior_not_end_to_end_verified')
+            if (!candidate.transaction_builder || candidate.transaction_builder !== 'aave_v3_atomic_flash_loan_v1') blockers.push('atomic_flash_transaction_builder_missing_or_mismatched')
+            if (candidate.discovery_only !== true && candidate.builder_enabled !== true) blockers.push('flash_transaction_builder_disabled')
+            if (candidate.discovery_only === true && candidate.payout_test_authorized !== true) blockers.push('strategy_route_discovery_only')
             if (!routeBot || routeBot.enabled !== true || routeBot.execution_enabled !== true || routeBot.flash_loan_enabled !== true) {
               blockers.push('flash_strategy_bot_not_execution_enabled')
             }
             if (networkDiagnostic?.ready_for_flash_transaction_test !== true) blockers.push('flash_executor_not_ready_for_payout_test')
             if (networkDiagnostic?.ready_for_live_trading !== true) blockers.push('flash_executor_not_ready_for_live_trading')
-            const primaryBlocker = blockers[0] || blocker
+
+            const baseReady = !!boundWallet && !!profitDestination &&
+              String(executor.hot_wallet_address || '').toLowerCase() === String(boundWallet.address || '').toLowerCase() &&
+              String(executor.profit_recipient_address || '').toLowerCase() === String(profitDestination.address || '').toLowerCase() &&
+              String(executor.matched_generated_wallet_id || '') === String(boundWallet.id || '') &&
+              String(executor.matched_profit_recipient_wallet_id || '') === String(profitDestination.wallet_id || '') &&
+              String(executor.matched_profit_recipient_profile_id || '') === String(profitDestination.profile_id || '')
+            const readyForTest = networkDiagnostic?.ready_for_flash_transaction_test === true && baseReady
+            const readyForLive = networkDiagnostic?.ready_for_live_trading === true &&
+              candidate.enabled === true && candidate.discovery_only !== true &&
+              candidate.builder_enabled === true && baseReady
+
             return {
               id: candidate.id,
               chain: candidate.chain,
@@ -828,13 +869,15 @@ export default {
               payout_test_used_at: candidate.payout_test_used_at || null,
               bound_wallet_id: boundWallet?.id || null,
               bound_wallet_address: boundWallet?.address || null,
-              payout_recipient_address: executor.payout_recipient_address || null,
-              payout_recipient_matches_generated_hot_wallet: executor.payout_recipient_matches_generated_hot_wallet === true,
+              profit_recipient_wallet_id: profitDestination?.wallet_id || null,
+              profit_recipient_address: profitDestination?.address || null,
+              executor_hot_wallet_address: executor.hot_wallet_address || null,
+              executor_payout_address: executor.profit_recipient_address || null,
               payout_behavior_verified: networkDiagnostic?.payout_behavior_verified === true,
               blockers,
-              ready_for_transaction_test: networkDiagnostic?.ready_for_flash_transaction_test === true && !!boundWallet && String(executor.payout_recipient_address || '').toLowerCase() === String(boundWallet.address || '').toLowerCase(),
-              ready_for_live_trading: networkDiagnostic?.ready_for_live_trading === true && candidate.enabled === true && candidate.discovery_only !== true && candidate.builder_enabled === true && !!boundWallet && String(executor.payout_recipient_address || '').toLowerCase() === String(boundWallet.address || '').toLowerCase(),
-              blocker: primaryBlocker,
+              ready_for_transaction_test: readyForTest,
+              ready_for_live_trading: readyForLive,
+              blocker: blockers[0] || 'ready_for_explicit_preflight',
             }
           })
 
