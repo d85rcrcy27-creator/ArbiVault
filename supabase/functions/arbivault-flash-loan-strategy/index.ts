@@ -199,12 +199,44 @@ async function invokeAuthorizedSigners(skipChains: Set<string> = new Set<string>
 
     const { data: attempt } = await supabase
       .from('execution_attempts')
-      .select('id,adapter_id,chain,wallet_id,status')
+      .select('id,adapter_id,chain,wallet_id,status,execution_route_id,strategy_bot_id')
       .eq('id', request.execution_attempt_id)
       .maybeSingle()
 
     if (!attempt || attempt.status !== 'validated' || !attempt.adapter_id || !attempt.wallet_id) {
       results.push({ signing_request_id: request.id, invoked: false, reason: 'execution_attempt_not_ready' })
+      continue
+    }
+
+    // This signer queue is scoped to one strategy only. Never broadcast stale
+    // authorizations from another bot or a discovery-only route.
+    const { data: route } = await supabase
+      .from('arbivault_strategy_routes')
+      .select('id,route_type,enabled,discovery_only,builder_enabled,strategy_bot_id')
+      .eq('id', attempt.execution_route_id)
+      .maybeSingle()
+    const { data: strategyBot } = await supabase
+      .from('arbivault_strategy_bots')
+      .select('enabled,execution_enabled,flash_loan_enabled')
+      .eq('id', attempt.strategy_bot_id)
+      .maybeSingle()
+    if (
+      !route ||
+      route.route_type !== 'flash_liquidity' ||
+      route.enabled !== true ||
+      route.discovery_only === true ||
+      route.builder_enabled !== true ||
+      route.strategy_bot_id !== attempt.strategy_bot_id ||
+      !strategyBot ||
+      strategyBot.enabled !== true ||
+      strategyBot.execution_enabled !== true ||
+      strategyBot.flash_loan_enabled !== true
+    ) {
+      results.push({
+        signing_request_id: request.id,
+        invoked: false,
+        reason: 'single_style_atomic_flash_route_not_execution_ready',
+      })
       continue
     }
 
