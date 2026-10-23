@@ -340,30 +340,76 @@ Deno.serve(async (req) => {
     if (confirmation.succeeded === true && payoutTestAttempt && confirmation.flash_settlement?.payout_transfer_verified === true) {
       const [walletResult, registryResult] = await Promise.all([
         supabase.from("wallets")
-          .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
+          .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
           .eq("id", attempt.wallet_id)
           .maybeSingle(),
         supabase.from("flash_executor_deployments")
-          .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
+          .select("chain,chain_id,executor_address,status,source_verified,payout_audited,payout_behavior_verified,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address,pool_address,contract_source_blob_sha,runtime_bytecode_hash")
           .eq("chain", attempt.chain)
           .eq("executor_address", confirmation.flash_settlement.executor_address)
           .maybeSingle(),
       ]);
       const proofWallet = walletResult.data;
       const registry = registryResult.data;
-      payoutTransferVerified = !walletResult.error && !registryResult.error &&
-        !!proofWallet && proofWallet.owner_id === attempt.owner_id && proofWallet.chain === attempt.chain &&
+      const registryMatchesProof = !registryResult.error && !!registry &&
+        registry.status === "verified" &&
+        registry.source_verified === true &&
+        registry.payout_audited === true &&
+        String(registry.executor_address || "").toLowerCase() === String(confirmation.flash_settlement.executor_address || "").toLowerCase() &&
+        Number(registry.chain_id) === (attempt.chain === "ethereum" ? 1 : 56) &&
+        String(registry.hot_wallet_id || "") === String(attempt.wallet_id) &&
+        String(registry.hot_wallet_address || "").toLowerCase() === String(proofWallet?.address || "").toLowerCase() &&
+        String(registry.profit_recipient_address || "").toLowerCase() === String(confirmation.flash_settlement.profit_recipient || "").toLowerCase() &&
+        !!registry.runtime_bytecode_hash &&
+        String(registry.contract_source_blob_sha || "") === (attempt.chain === "ethereum"
+          ? "4f260f58ffe7201cc478db7752f4622d8df571ac"
+          : "7b8771f3b262813f746bc16c5436c95d2740fb04");
+      const { data: recipientProfile, error: recipientProfileError } = registry?.profit_recipient_wallet_id
+        ? await supabase.from("profit_recipient_profiles")
+            .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+            .eq("owner_id", attempt.owner_id)
+            .eq("wallet_id", registry.profit_recipient_wallet_id)
+            .eq("chain", attempt.chain)
+            .eq("asset", "ALL")
+            .eq("status", "active")
+            .maybeSingle()
+        : { data: null, error: null };
+      const { data: recipientWallet, error: recipientWalletError } = registry?.profit_recipient_wallet_id
+        ? await supabase.from("wallets")
+            .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+            .eq("id", registry.profit_recipient_wallet_id)
+            .maybeSingle()
+        : { data: null, error: null };
+      const activeRecipientMatches = !recipientProfileError && !recipientWalletError &&
+        !!recipientProfile && !!recipientWallet &&
+        recipientProfile.owner_id === attempt.owner_id &&
+        recipientProfile.chain === attempt.chain &&
+        recipientProfile.asset === "ALL" &&
+        recipientProfile.status === "active" &&
+        (!recipientProfile.activation_at || new Date(recipientProfile.activation_at).getTime() <= Date.now()) &&
+        recipientWallet.owner_id === attempt.owner_id &&
+        recipientWallet.chain === attempt.chain &&
+        recipientWallet.status === "active" &&
+        recipientWallet.is_hot === false &&
+        recipientWallet.wallet_role === "profit_recipient" &&
+        recipientWallet.data_quality_status === "verified" &&
+        !!recipientWallet.secret_ref &&
+        String(recipientWallet.address || "").toLowerCase() === String(registry?.profit_recipient_address || "").toLowerCase() &&
+        String(recipientWallet.address || "").toLowerCase() === String(confirmation.flash_settlement.profit_recipient || "").toLowerCase() &&
+        String(recipientWallet.address || "").toLowerCase() !== String(proofWallet?.address || "").toLowerCase();
+      payoutTransferVerified = !walletResult.error && !!proofWallet &&
+        proofWallet.owner_id === attempt.owner_id && proofWallet.chain === attempt.chain &&
         proofWallet.status === "active" && proofWallet.is_hot === true &&
         proofWallet.wallet_role === "trading_hot" && proofWallet.data_quality_status === "verified" &&
+        !!proofWallet.secret_ref &&
         String(proofWallet.address || "").toLowerCase() === String(confirmation.flash_settlement.hot_wallet || "").toLowerCase() &&
-        !!registry && registry.status === "verified" && registry.source_verified === true &&
-        registry.payout_audited === true &&
-        String(registry.executor_address || "").toLowerCase() === String(confirmation.flash_settlement.executor_address || "").toLowerCase();
+        registryMatchesProof && activeRecipientMatches;
       if (payoutTransferVerified) {
         const { error: behaviorUpdateError } = await supabase.from("flash_executor_deployments")
           .update({ payout_behavior_verified: true, updated_at: now })
           .eq("chain", attempt.chain)
           .eq("executor_address", confirmation.flash_settlement.executor_address)
+          .eq("runtime_bytecode_hash", registry.runtime_bytecode_hash)
           .eq("status", "verified")
           .eq("source_verified", true)
           .eq("payout_audited", true);
