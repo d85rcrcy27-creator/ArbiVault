@@ -14,7 +14,7 @@ import { useIsMobile } from '@/hooks/use-mobile'
 
 const TABS = [
   { id: 'matrix', label: 'Matrix' }, { id: 'trades', label: 'Trades' },
-  { id: 'skills', label: 'Skills' },
+  { id: 'control', label: 'Trading Control' }, { id: 'skills', label: 'Skills' },
   { id: 'checks', label: 'System Checks' }, { id: 'wallets', label: 'Wallets' },
 ]
 
@@ -74,7 +74,6 @@ export default function Home() {
       <Link to="/flash-loans" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Flash Loan Explorer</span><span className="mt-1 block text-xs text-[#8a90b0]">Review recorded borrow, repayment and profit data</span></Link>
       <Link to="/key-backup" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Wallet Key Backup</span><span className="mt-1 block text-xs text-[#8a90b0]">Review secure backup and recovery guidance</span></Link>
     </nav>
-    <div className="px-4 pt-4"><BotFleet /></div>
     <div className="px-4 pt-4"><div className="max-w-xl rounded border border-[#232738] bg-[#0C0E16] p-4">
       <div className="mb-3 flex items-center justify-between"><div className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Public Venue Feeds</div><div className="font-mono text-[0.55rem] uppercase text-[#00FF87]">MARKET DATA FEEDS</div></div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{PUBLIC_VENUES.map(([name, kind]) => <div key={name} className="rounded border border-[#232738] bg-[#090A0F] px-2.5 py-2"><div className="font-mono text-[0.62rem] font-semibold text-[#e0e4f0]">{name}</div><div className="mt-1 font-mono text-[0.48rem] uppercase tracking-wider text-[#5a6080]">{kind}</div></div>)}</div>
@@ -86,11 +85,15 @@ export default function Home() {
       <div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => tab.id === 'wallets' ? navigate('/wallets') : setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
       {mobileTab === 'matrix' && <><div className="h-[22rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>{depthPanel}</>}
       {mobileTab === 'trades' && <div className="h-[26rem]"><TradeLog trades={trades} /></div>}
+      {mobileTab === 'control' && <div className="space-y-3"><BotFleet /><div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div><div className="h-[26rem]"><TradeLog trades={trades} /></div></div>}
       {mobileTab === 'skills' && <div className="h-[32rem]"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>}
       {mobileTab === 'checks' && <VerificationDashboard routes={routes} marketSnapshot={marketSnapshot} chainRpcHealth={chainRpcHealth} signerHealth={signerHealth} testnetHealth={testnetHealth} onRefresh={refreshMarket} onOpenWallets={() => navigate('/wallets')} />}
     </div> : <div className="space-y-4 p-4">
-      <VerificationDashboard routes={routes} marketSnapshot={marketSnapshot} chainRpcHealth={chainRpcHealth} signerHealth={signerHealth} testnetHealth={testnetHealth} onRefresh={refreshMarket} onOpenWallets={() => navigate('/wallets')} />
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div></div>
+      <div className="flex gap-1 overflow-x-auto rounded border border-[#232738] bg-[#0C0E16] p-1">{TABS.map((tab) => <button key={tab.id} onClick={() => tab.id === 'wallets' ? navigate('/wallets') : setMobileTab(tab.id)} className={`min-w-20 flex-1 rounded px-2 py-1.5 font-mono text-[0.6875rem] font-semibold uppercase tracking-wider ${mobileTab === tab.id ? 'bg-[#00F0FF]/10 text-[#00F0FF]' : 'text-[#5a6080]'}`}>{tab.label}</button>)}</div>
+      {mobileTab === 'control' ? <div className="space-y-4"><BotFleet /><div className="grid grid-cols-1 gap-4 lg:grid-cols-2"><div className="h-[34rem]"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div><div className="h-[34rem]"><TradeLog trades={trades} /></div></div></div> : <>
+        <VerificationDashboard routes={routes} marketSnapshot={marketSnapshot} chainRpcHealth={chainRpcHealth} signerHealth={signerHealth} testnetHealth={testnetHealth} onRefresh={refreshMarket} onOpenWallets={() => navigate('/wallets')} />
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-12"><div className="flex flex-col gap-4 lg:col-span-5"><div className="h-[26rem]"><PulseMatrix routes={routes} selectedRoute={activeRoute?.id} onSelectRoute={setSelectedRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div>{depthPanel}</div><div className="h-[34rem] lg:col-span-4"><TradeLog trades={trades} /></div><div className="h-[34rem] lg:col-span-3"><SkillsCreator routes={routes} onExecute={executeRoute} minimumSpreadPct={marketControls.minSpreadPct} /></div></div>
+      </>}
     </div>}
   </div>
 }
