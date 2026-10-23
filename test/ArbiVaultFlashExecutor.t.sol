@@ -25,14 +25,14 @@ contract ArbiVaultFlashExecutorTest {
     }
 
     function testOnlyAllowlistedRouters() public {
-        ArbiVaultFlashExecutor executor = new ArbiVaultFlashExecutor(AAVE_POOL, address(this));
+        ArbiVaultFlashExecutor executor = new ArbiVaultFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
         require(executor.isAllowedRouter(PANCAKE), "PancakeSwap must be allowed");
         require(executor.isAllowedRouter(BISWAP), "BiSwap must be allowed");
         require(!executor.isAllowedRouter(address(0xBEEF)), "unknown router must be denied");
     }
 
     function testRejectsSameRouterForBothLegs() public {
-        ArbiVaultFlashExecutor executor = new ArbiVaultFlashExecutor(AAVE_POOL, address(this));
+        ArbiVaultFlashExecutor executor = new ArbiVaultFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
         address[] memory targets = new address[](2);
         targets[0] = PANCAKE;
         targets[1] = PANCAKE;
@@ -45,9 +45,20 @@ contract ArbiVaultFlashExecutorTest {
         executor.executeFlashLoan(USDT, 1, 1, targets, values, calls);
     }
 
+    function testProfitRecipientIsSeparateFromTradingWallet() public {
+        ArbiVaultFlashExecutor executor = new ArbiVaultFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
+        require(executor.HOT_WALLET() == address(this), "trading wallet must remain the caller");
+        require(executor.PROFIT_RECIPIENT() == address(0xFEE1), "profits must go to the separate recipient");
+    }
+
+    function testConstructorRejectsSameTradingAndProfitWallet() public {
+        vm.expectRevert(ArbiVaultFlashExecutor.InvalidArguments.selector);
+        new ArbiVaultFlashExecutor(AAVE_POOL, address(this), address(this));
+    }
+
     function testConstructorRejectsWrongChain() public {
         vm.chainId(1);
         vm.expectRevert(ArbiVaultFlashExecutor.InvalidArguments.selector);
-        new ArbiVaultFlashExecutor(AAVE_POOL, address(this));
+        new ArbiVaultFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
     }
 }
