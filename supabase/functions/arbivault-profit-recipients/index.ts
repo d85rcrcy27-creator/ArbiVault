@@ -22,6 +22,43 @@ async function userFromRequest(req: Request) {
   return error || !data.user ? null : data.user;
 }
 
+
+function normalizeEvmPrivateKey(secret: string): `0x${string}` {
+  const key = secret.startsWith("0x") ? secret : `0x${secret}`;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) throw new Error("vault_private_key_format_invalid");
+  return key as `0x${string}`;
+}
+
+// A Supabase wallet row is not sufficient by itself: retrieve the protected
+// secret and prove that it derives the exact stored payout address.
+async function verifySupabaseVaultWallet(ownerId: string, walletId: string, chain: string, expectedAddress: string) {
+  const { data: wallet, error: walletError } = await admin.from("wallets")
+    .select("id,owner_id,chain,address,status,is_hot,custody_type,wallet_role,data_quality_status,secret_ref")
+    .eq("id", walletId).eq("owner_id", ownerId).maybeSingle();
+
+  if (walletError || !wallet || wallet.status !== "active" ||
+      wallet.chain !== chain || wallet.is_hot !== false ||
+      wallet.custody_type !== "server_vault" ||
+      wallet.wallet_role !== "profit_recipient" ||
+      wallet.data_quality_status !== "verified" || !wallet.secret_ref ||
+      !/^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || "")) ||
+      String(wallet.address).toLowerCase() !== expectedAddress.toLowerCase()) {
+    return false;
+  }
+
+  const { data: secret, error: secretError } = await admin.rpc("get_wallet_secret", {
+    p_wallet_id: walletId,
+  });
+  if (secretError || typeof secret !== "string" || !secret) return false;
+
+  try {
+    const derivedAddress = privateKeyToAccount(normalizeEvmPrivateKey(secret)).address;
+    return derivedAddress.toLowerCase() === expectedAddress.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 const assets: Record<string, string[]> = {
   // ALL designates one chain-specific payout address usable for the executor's supported profit assets.
   ethereum: ["ALL", "ETH", "WETH", "USDC"],
@@ -134,15 +171,23 @@ Deno.serve(async (req: Request) => {
         return json({ error: "profit_recipient_secret_reference_failed", quarantined: true }, 500);
       }
 
-      const activationAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const walletVerified = await verifySupabaseVaultWallet(user.id, wallet.id, chain, wallet.address);
+      if (!walletVerified) {
+        await admin.from("wallets").update({ status: "quarantined", updated_at: new Date().toISOString() })
+          .eq("id", wallet.id).eq("owner_id", user.id);
+        return json({ error: "profit_recipient_vault_address_verification_failed", quarantined: true }, 409);
+      }
+
+      const activatedAt = new Date().toISOString();
       const { data: profile, error: profileError } = await admin.from("profit_recipient_profiles").insert({
         owner_id: user.id,
         wallet_id: wallet.id,
         chain,
         asset,
-        status: "pending",
-        activation_at: activationAt,
-        verification_source: "server_vault_secret_reference_saved",
+        status: "active",
+        activation_at: activatedAt,
+        verified_at: activatedAt,
+        verification_source: "supabase_vault_key_matches_address",
       }).select("id,owner_id,wallet_id,chain,asset,status,activation_at,verified_at,verification_source,created_at,updated_at").single();
 
       if (profileError || !profile) {
@@ -153,8 +198,19 @@ Deno.serve(async (req: Request) => {
       await recordEvent(user.id, profile.id, "created", chain, asset, {
         custody: "server_vault",
         secret_reference_saved: true,
-        activation_delay_hours: 24,
+        payout_wallet_verified: true,
+        verification_method: "vault_secret_derives_stored_address",
+        activation_delay_hours: 0,
         private_key_returned: false,
+      });
+      await recordEvent(user.id, profile.id, "verified", chain, asset, {
+        custody: "server_vault",
+        payout_wallet_verified: true,
+      });
+      await recordEvent(user.id, profile.id, "activated", chain, asset, {
+        activation_delay_hours: 0,
+        payout_wallet_verified: true,
+        live_routing_enabled: false,
       });
 
       return json({
@@ -167,7 +223,13 @@ Deno.serve(async (req: Request) => {
             last_balance_at: null, last_verified_at: null,
           },
         },
-        security: { private_key_returned: false, signer_configured: false, live_transfer_enabled: false },
+        security: {
+          private_key_returned: false,
+          payout_wallet_verified: true,
+          verification_method: "supabase_vault_key_matches_address",
+          signer_configured: false,
+          live_transfer_enabled: false,
+        },
       }, 201);
     }
 
@@ -181,15 +243,13 @@ Deno.serve(async (req: Request) => {
       if (!recipient) return json({ error: "profit_recipient_not_found" }, 404);
       if (recipient.status === "revoked" || recipient.status === "quarantined") return json({ error: "profit_recipient_not_activatable" }, 409);
       if (recipient.status === "active") return json({ ok: true, already_active: true, recipient_id: recipient.id });
-      if (!recipient.activation_at || new Date(recipient.activation_at).getTime() > Date.now()) {
-        return json({ error: "activation_delay_pending", activation_at: recipient.activation_at }, 409);
-      }
       const { data: wallet, error: walletError } = await admin.from("wallets")
-        .select("id,chain,address,status,wallet_role,secret_ref")
+        .select("id,owner_id,chain,address,status,is_hot,custody_type,wallet_role,data_quality_status,secret_ref")
         .eq("id", recipient.wallet_id).eq("owner_id", user.id).maybeSingle();
       if (walletError) return json({ error: "profit_recipient_wallet_lookup_failed" }, 500);
-      if (!wallet || wallet.status !== "active" || wallet.wallet_role !== "profit_recipient" ||
-          wallet.chain !== recipient.chain || !wallet.secret_ref ||
+      if (!wallet || wallet.status !== "active" || wallet.is_hot !== false ||
+          wallet.wallet_role !== "profit_recipient" || wallet.custody_type !== "server_vault" ||
+          wallet.data_quality_status !== "verified" || wallet.chain !== recipient.chain || !wallet.secret_ref ||
           !/^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || ""))) {
         await admin.from("profit_recipient_profiles").update({ status: "quarantined", updated_at: new Date().toISOString() })
           .eq("id", recipient.id).eq("owner_id", user.id);
@@ -198,16 +258,51 @@ Deno.serve(async (req: Request) => {
         await recordEvent(user.id, recipient.id, "quarantined", recipient.chain, recipient.asset, { reason: "recipient_integrity_check_failed" });
         return json({ error: "profit_recipient_integrity_check_failed", quarantined: true }, 409);
       }
+      const walletVerified = await verifySupabaseVaultWallet(user.id, wallet.id, recipient.chain, wallet.address);
+      if (!walletVerified) {
+        await admin.from("profit_recipient_profiles").update({
+          status: "quarantined", updated_at: new Date().toISOString(),
+          verification_source: "supabase_vault_address_verification_failed",
+        }).eq("id", recipient.id).eq("owner_id", user.id);
+        await admin.from("wallets").update({ status: "quarantined", updated_at: new Date().toISOString() })
+          .eq("id", wallet.id).eq("owner_id", user.id);
+        await recordEvent(user.id, recipient.id, "quarantined", recipient.chain, recipient.asset, {
+          reason: "supabase_vault_secret_does_not_match_payout_address",
+        });
+        return json({ error: "profit_recipient_vault_address_verification_failed", quarantined: true }, 409);
+      }
+
+      const activatedAt = new Date().toISOString();
       const { error: updateError } = await admin.from("profit_recipient_profiles")
-        .update({ status: "active", updated_at: new Date().toISOString(), verification_source: "server_vault_reference_verified" })
+        .update({
+          status: "active",
+          activation_at: activatedAt,
+          verified_at: activatedAt,
+          updated_at: activatedAt,
+          verification_source: "supabase_vault_key_matches_address",
+        })
         .eq("id", recipient.id).eq("owner_id", user.id);
       if (updateError) return json({ error: "profit_recipient_activation_failed" }, 500);
+      await recordEvent(user.id, recipient.id, "verified", recipient.chain, recipient.asset, {
+        custody: "server_vault",
+        payout_wallet_verified: true,
+        verification_method: "vault_secret_derives_stored_address",
+      });
       await recordEvent(user.id, recipient.id, "activated", recipient.chain, recipient.asset, {
-        vault_reference_present: true,
+        activation_delay_hours: 0,
+        payout_wallet_verified: true,
         payout_compatibility_verified: false,
         live_routing_enabled: false,
       });
-      return json({ ok: true, recipient_id: recipient.id, status: "active", payout_compatibility_verified: false, live_routing_enabled: false });
+      return json({
+        ok: true,
+        recipient_id: recipient.id,
+        status: "active",
+        payout_wallet_verified: true,
+        verification_method: "supabase_vault_key_matches_address",
+        payout_compatibility_verified: false,
+        live_routing_enabled: false,
+      });
     }
 
     if (action === "revoke") {
