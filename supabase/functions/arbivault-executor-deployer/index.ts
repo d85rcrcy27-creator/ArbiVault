@@ -357,6 +357,14 @@ Deno.serve(async (req) => {
     return fail(error instanceof Error ? error.message : "executor_wallet_resolution_failed", 409, { broadcast_attempted: false });
   }
 
+  if (mode === "deploy") {
+    const expectedHotWallet = String(body.expected_hot_wallet || "");
+    const expectedProfitRecipient = String(body.expected_profit_recipient || "");
+    if (expectedHotWallet.toLowerCase() !== config.hotWallet.toLowerCase() || expectedProfitRecipient.toLowerCase() !== config.profitRecipient.toLowerCase()) {
+      return fail("deployment_wallet_config_changed_since_preflight", 409, { hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient, broadcast_attempted: false });
+    }
+  }
+
   if (provisionMode) {
     try {
       await verifyHotWalletRecord(config);
