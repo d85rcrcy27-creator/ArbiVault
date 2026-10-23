@@ -463,7 +463,7 @@ async function sha256(value: string) {
 // Fee policy for flash-loan routes: amounts are valued in the stablecoin profit
 // asset (USDT/USDC) and represented as USD-equivalent amounts for accounting.
 function rawStablecoinUsd(raw: unknown, decimals: number): number | null {
-  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return null
+  if (typeof raw !== 'string' || !/^-?\d+$/.test(raw)) return null
   const amount = Number(BigInt(raw)) / (10 ** decimals)
   return Number.isFinite(amount) ? amount : null
 }
