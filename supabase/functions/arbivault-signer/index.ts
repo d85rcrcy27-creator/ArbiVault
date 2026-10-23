@@ -657,10 +657,8 @@ Deno.serve(async (req) => {
         if (!sawForward || !sawReturn || !firstInput || !finalOutput || firstInput !== String(asset).toLowerCase() || finalOutput !== String(asset).toLowerCase()) {
           return json({ error: "flash_round_trip_incomplete_or_asset_mismatch" }, 403);
         }
-        const getter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
-        const payoutRaw = String(await rpc(BSC_RPC, "eth_call", [{ to: BSC_FLASH_EXECUTOR, data: getter }, "latest"]));
-        const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
-        if (payout.toLowerCase() !== wallet.address.toLowerCase()) return json({ error: "flash_executor_payout_wallet_mismatch" }, 403);
+        const payoutBinding = await verifyExecutorPayoutBindings("bnb", BSC_FLASH_EXECUTOR, wallet);
+        if (!payoutBinding.ok) return json({ error: payoutBinding.error }, 403);
       } else {
         const approvedRouter = chain === "ethereum" ? ETH_UNISWAP_V2_ROUTER : BSC_PANCAKE_V2_ROUTER;
         if (to.toLowerCase() !== approvedRouter.toLowerCase()) {
