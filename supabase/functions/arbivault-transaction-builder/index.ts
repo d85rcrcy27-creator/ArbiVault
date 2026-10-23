@@ -104,6 +104,7 @@ const FLASH_EXECUTOR_ABI = parseAbi([
 const FLASH_PREMIUM_ABI = parseAbi(["function FLASHLOAN_PREMIUM_TOTAL() view returns (uint128)"]);
 const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
+  "function PROFIT_RECIPIENT() view returns (address)",
   "function POOL() view returns (address)",
 ]);
 
