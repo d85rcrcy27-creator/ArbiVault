@@ -420,7 +420,7 @@ Deno.serve(async (req) => {
       const { error: consumeTestError } = await supabase.from("arbivault_strategy_routes")
         .update({
           payout_test_authorized: false,
-          payout_test_tx_hash: payoutTransferVerified ? txHash : null,
+          payout_test_tx_hash: txHash,
           updated_at: now,
         })
         .eq("id", attempt.execution_route_id)
