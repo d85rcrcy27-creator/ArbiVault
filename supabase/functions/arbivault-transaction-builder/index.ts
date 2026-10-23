@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { encodeFunctionData, decodeFunctionResult, parseAbi } from "npm:viem@2.39.0";
+import { encodeFunctionData, decodeFunctionResult, keccak256, parseAbi, type Hex } from "npm:viem@2.39.0";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -24,6 +24,8 @@ let ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
 // executor may set it. Environment variables cannot assert a real payout occurred.
 let BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
 let ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
+let BSC_EXECUTOR_REGISTRY: Record<string, any> | null = null;
+let ETH_EXECUTOR_REGISTRY: Record<string, any> | null = null;
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
@@ -35,12 +37,14 @@ const ETH_FLASH_EXPECTED_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
 async function syncExecutorRegistry() {
   const { data: rows, error } = await supabase
     .from("flash_executor_deployments")
-    .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
+    .select("chain,chain_id,contract_name,executor_address,deployment_tx_hash,deployer_address,deployment_nonce,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address,pool_address,contract_source_blob_sha,init_code_hash,runtime_bytecode_hash,status,source_verified,payout_audited,payout_behavior_verified,failure_code,github_workflow_ref,github_run_id,created_at,updated_at")
     .in("chain", ["bnb", "ethereum"]);
   if (error) throw new Error("flash_executor_registry_lookup_failed");
 
   const bnb = (rows || []).find((row: any) => row.chain === "bnb") || null;
   const ethereum = (rows || []).find((row: any) => row.chain === "ethereum") || null;
+  BSC_EXECUTOR_REGISTRY = bnb;
+  ETH_EXECUTOR_REGISTRY = ethereum;
   const usableStatuses = ["pending", "deployed_unverified", "verified"];
 
   BSC_FLASH_EXECUTOR = bnb
@@ -112,6 +116,7 @@ const FLASH_EXECUTOR_ABI = parseAbi([
 const FLASH_PREMIUM_ABI = parseAbi(["function FLASHLOAN_PREMIUM_TOTAL() view returns (uint128)"]);
 const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
+  "function PROFIT_RECIPIENT() view returns (address)",
   "function POOL() view returns (address)",
 ]);
 
