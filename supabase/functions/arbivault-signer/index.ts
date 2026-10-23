@@ -77,12 +77,14 @@ const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_
 let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
 const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 let ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+let BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
+let ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
 const FLASH_EXECUTOR_ABI = parseAbi(["function executeFlashLoan(address asset,uint256 amount,uint256 minProfit,address[] targets,uint256[] values,bytes[] data)","function HOT_WALLET() view returns (address)"]);
 
 async function syncExecutorRegistry() {
   const { data: rows, error } = await supabase
     .from("flash_executor_deployments")
-    .select("chain,executor_address,status,source_verified,payout_audited")
+    .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
     .in("chain", ["bnb", "ethereum"]);
   if (error) throw new Error("flash_executor_registry_lookup_failed");
   const bnb = (rows || []).find((row: any) => row.chain === "bnb") || null;
@@ -100,6 +102,8 @@ async function syncExecutorRegistry() {
   ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ethereum
     ? (ethereum.status === "verified" && ethereum.source_verified === true && ethereum.payout_audited === true)
     : ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+  BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = bnb?.status === "verified" && bnb.source_verified === true && bnb.payout_audited === true && bnb.payout_behavior_verified === true;
+  ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = ethereum?.status === "verified" && ethereum.source_verified === true && ethereum.payout_audited === true && ethereum.payout_behavior_verified === true;
 }
 
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
@@ -371,7 +375,7 @@ Deno.serve(async (req) => {
     }
     const { data: attemptRow, error: attemptError } = await supabase
       .from("execution_attempts")
-      .select("id,owner_id,adapter_id,strategy_bot_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
+      .select("id,owner_id,adapter_id,strategy_bot_id,chain,wallet_id,execution_mode,status,transaction_payload_hash,execution_route_id,fee_breakdown")
       .eq("id", requestRow.execution_attempt_id)
       .maybeSingle();
     if (attemptError) return json({ error: "execution_attempt_lookup_failed" }, 500);
@@ -404,6 +408,58 @@ Deno.serve(async (req) => {
     }
     if (!strategyWalletBinding) {
       return json({ error: "wallet_not_bound_to_strategy_on_chain" }, 403);
+    }
+
+    const { data: route, error: routeError } = await supabase
+      .from("arbivault_strategy_routes")
+      .select("id,route_type,enabled,discovery_only,builder_enabled,strategy_bot_id,payout_test_authorized,payout_test_authorized_by,payout_test_used_at,payout_test_execution_attempt_id")
+      .eq("id", attemptRow.execution_route_id)
+      .maybeSingle();
+    if (routeError) return json({ error: "execution_route_lookup_failed" }, 503);
+
+    const attemptFees = attemptRow.fee_breakdown && typeof attemptRow.fee_breakdown === "object"
+      ? attemptRow.fee_breakdown as Record<string, unknown>
+      : {};
+    const payoutTestMode = attemptFees.payout_test_mode === true &&
+      route?.payout_test_authorized === true &&
+      String(route?.payout_test_authorized_by || "") === String(wallet.owner_id) &&
+      route?.payout_test_used_at != null &&
+      String(route?.payout_test_execution_attempt_id || "") === String(attemptRow.id);
+    if (
+      !route ||
+      route.route_type !== "flash_liquidity" ||
+      route.enabled !== true ||
+      route.strategy_bot_id !== attemptRow.strategy_bot_id
+    ) {
+      return json({ error: "flash_execution_route_not_authorized" }, 403);
+    }
+    if (payoutTestMode) {
+      if (route.discovery_only !== true) return json({ error: "payout_test_route_must_remain_discovery_only" }, 403);
+      if (attemptFees.payout_test_claimed !== true) return json({ error: "payout_test_attempt_claim_missing" }, 403);
+    } else {
+      if (route.discovery_only === true || route.builder_enabled !== true) {
+        return json({ error: "discovery_only_route_cannot_sign" }, 403);
+      }
+      const { data: executorRow, error: executorError } = await supabase
+        .from("flash_executor_deployments")
+        .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
+        .eq("chain", chain)
+        .maybeSingle();
+      if (executorError) return json({ error: "flash_executor_registry_lookup_failed" }, 503);
+      const behaviorVerified = chain === "ethereum"
+        ? ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED
+        : BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED;
+      if (
+        !executorRow ||
+        executorRow.status !== "verified" ||
+        executorRow.source_verified !== true ||
+        executorRow.payout_audited !== true ||
+        executorRow.payout_behavior_verified !== true ||
+        behaviorVerified !== true ||
+        !executorRow.executor_address
+      ) {
+        return json({ error: "flash_executor_payout_behavior_not_verified" }, 403);
+      }
     }
 
     const { data: executionPolicy, error: executionPolicyError } = await supabase
