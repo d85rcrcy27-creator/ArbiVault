@@ -1121,7 +1121,7 @@ export default {
             live_trading_ready: liveTradingReady,
             chain: executionRoute.chain,
           }
-          const opportunityHash = await sha256(JSON.stringify(executionContext))
+          let opportunityHash = await sha256(JSON.stringify(executionContext))
           const unsignedTransaction = executionRoute.route_type === 'flash_liquidity'
             ? (flashBuild?.transaction || null)
             : twoLegExecutionReady ? (dexPreflight?.sell?.transaction || null) : null
@@ -1180,6 +1180,39 @@ export default {
             continue
           }
 
+          // Consume the human authorization only after all preflight gates and duplicate checks.
+          if (payoutTestMode) {
+            const { data: claimedRoute, error: claimError } = await supabase
+              .from('arbivault_strategy_routes')
+              .update({ payout_test_used_at: now.toISOString(), updated_at: now.toISOString() })
+              .eq('id', executionRoute.id)
+              .eq('strategy_bot_id', bot.id)
+              .eq('payout_test_authorized', true)
+              .eq('payout_test_authorized_by', bot.owner_id)
+              .is('payout_test_used_at', null)
+              .is('payout_test_execution_attempt_id', null)
+              .select('id')
+              .maybeSingle()
+            if (claimError || !claimedRoute) {
+              opportunities.push({
+                ...executionContext,
+                execution_gate: claimError ? 'flash_payout_test_claim_failed' : 'flash_payout_test_already_claimed',
+                execution_route_id: executionRoute.id,
+                execution_attempt_id: null,
+                adapter_id: executionAdapterId,
+                signing_request_id: null,
+                attempt_created: false,
+                signing: 'not_created',
+                broadcast: 'not_attempted',
+              })
+              continue
+            }
+            payoutTestClaimed = true
+            executionContext.payout_test_claimed = true
+            if (executionContext.execution_readiness) executionContext.execution_readiness.payout_test_claimed = true
+            opportunityHash = await sha256(JSON.stringify(executionContext))
+          }
+
           const { data: attempt, error: attemptError } = await supabase.from('execution_attempts').insert({
             owner_id: bot.owner_id, adapter_id: executionAdapterId, strategy_bot_id: strategyBot?.id || null, observation_id: null,
             observed_route_id: null, execution_route_id: executionRoute.id, chain: executionRoute.chain,
@@ -1226,11 +1259,16 @@ export default {
               .select('id')
               .maybeSingle()
             if (bindError || !boundRoute) {
+              await supabase.from('arbivault_strategy_routes')
+                .update({ payout_test_authorized: false, updated_at: new Date().toISOString() })
+                .eq('id', executionRoute.id)
+                .eq('payout_test_execution_attempt_id', null)
+                .eq('payout_test_used_at', now.toISOString())
               await supabase.from('execution_attempts').update({
                 status: 'failed',
                 failure_reason: 'flash_payout_test_attempt_binding_failed',
                 updated_at: new Date().toISOString(),
-              }).eq('id', attempt.id)
+              }).eq('id', attempt.id).eq('status', 'validated')
               opportunities.push({
                 ...executionContext,
                 execution_gate: 'flash_payout_test_attempt_binding_failed',
