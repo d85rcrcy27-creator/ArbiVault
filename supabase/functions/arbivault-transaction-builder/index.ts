@@ -601,11 +601,13 @@ async function diagnoseFlashExecutor() {
 
   const { data: generatedWalletRows, error: generatedWalletError } = await supabase
     .from("wallets")
-    .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
     .in("chain", ["bnb", "ethereum"])
     .eq("status", "active")
     .eq("is_hot", true)
-    .eq("wallet_role", "trading_hot");
+    .eq("wallet_role", "trading_hot")
+    .eq("data_quality_status", "verified")
+    .not("secret_ref", "is", null);
   const generatedWallets = (generatedWalletRows || []).filter((wallet: any) =>
     /^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || "")) &&
     ["bnb", "ethereum"].includes(wallet.chain)
@@ -613,6 +615,59 @@ async function diagnoseFlashExecutor() {
   result.generated_hot_wallet_lookup_ok = !generatedWalletError;
   result.active_generated_hot_wallet_count = generatedWallets.length;
   if (generatedWalletError) result.generated_hot_wallet_lookup_error = generatedWalletError.message;
+
+  const { data: profitProfileRows, error: profitProfileError } = await supabase
+    .from("profit_recipient_profiles")
+    .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+    .in("chain", ["bnb", "ethereum"])
+    .eq("asset", "ALL")
+    .eq("status", "active");
+  const eligibleProfitProfiles = (profitProfileRows || []).filter((profile: any) =>
+    !profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now()
+  );
+  const profitWalletIds = eligibleProfitProfiles.map((profile: any) => profile.wallet_id).filter(Boolean);
+  const { data: profitWalletRows, error: profitWalletError } = profitWalletIds.length
+    ? await supabase
+        .from("wallets")
+        .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+        .in("id", profitWalletIds)
+        .eq("status", "active")
+        .eq("is_hot", false)
+        .eq("wallet_role", "profit_recipient")
+        .eq("data_quality_status", "verified")
+        .not("secret_ref", "is", null)
+    : { data: [], error: null };
+  const profitDestinations = eligibleProfitProfiles.flatMap((profile: any) => {
+    const wallet = (profitWalletRows || []).find((candidate: any) =>
+      candidate.id === profile.wallet_id &&
+      candidate.owner_id === profile.owner_id &&
+      candidate.chain === profile.chain &&
+      candidate.status === "active" &&
+      candidate.is_hot === false &&
+      candidate.wallet_role === "profit_recipient" &&
+      candidate.data_quality_status === "verified" &&
+      !!candidate.secret_ref
+    );
+    return wallet ? [{
+      profile_id: profile.id,
+      owner_id: profile.owner_id,
+      wallet_id: wallet.id,
+      chain: profile.chain,
+      asset: profile.asset,
+      profile_status: profile.status,
+      activation_at: profile.activation_at,
+      address: wallet.address,
+      wallet_status: wallet.status,
+      is_hot: wallet.is_hot,
+      wallet_role: wallet.wallet_role,
+      data_quality_status: wallet.data_quality_status,
+      secret_ref: wallet.secret_ref,
+    }] : [];
+  });
+  result.profit_destination_lookup_ok = !profitProfileError && !profitWalletError;
+  result.active_profit_destination_count = profitDestinations.length;
+  if (profitProfileError) result.profit_destination_lookup_error = "profit_destination_profile_lookup_failed";
+  if (profitWalletError) result.profit_destination_lookup_error = "profit_destination_wallet_lookup_failed";
 
   try {
     const chainId = String(await rpc("eth_chainId", [])).toLowerCase();
@@ -636,18 +691,32 @@ async function diagnoseFlashExecutor() {
     (address) => rpc("eth_getCode", [address, "latest"]),
     (address, data) => rpc("eth_call", [{ to: address, data }, "latest"]),
     generatedWallets,
+    profitDestinations,
     BSC_FLASH_EXPECTED_POOL,
+    BSC_EXECUTOR_REGISTRY,
+    BSC_FLASH_EXPECTED_SOURCE_BLOB_SHA,
   );
+  bnb.registry_row_present = !!BSC_EXECUTOR_REGISTRY;
+  bnb.profit_destination_lookup_ok = !profitProfileError && !profitWalletError;
+  bnb.payout_audited = (bnb.executor as any).payout_audited === true;
   bnb.payout_behavior_verified = BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED === true;
+  await persistExecutorAudit("bnb", bnb.executor as Record<string, any>).catch(() => false);
   bnb.ready_for_flash_transaction_test =
     bnb.rpc_chain_ok === true &&
     bnb.aave_pool_resolved === true &&
+    bnb.registry_row_present === true &&
+    bnb.profit_destination_lookup_ok === true &&
+    (bnb.executor as any).registry_backed === true &&
+    (bnb.executor as any).registry_chain_id_match === true &&
+    (bnb.executor as any).registry_source_blob_sha_match === true &&
     (bnb.executor as any).configured === true &&
     (bnb.executor as any).code_deployed === true &&
+    (bnb.executor as any).runtime_bytecode_hash_match === true &&
     (bnb.executor as any).pool_matches_expected === true &&
-    (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
+    (bnb.executor as any).hot_wallet_matches_registry === true &&
+    (bnb.executor as any).payout_recipient_matches_active_profit_destination === true &&
     (bnb.executor as any).source_verification?.verified === true &&
-    BSC_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+    (bnb.executor as any).payout_audited === true;
   bnb.ready_for_live_trading = bnb.ready_for_flash_transaction_test === true && bnb.payout_behavior_verified === true;
 
   try {
@@ -672,21 +741,33 @@ async function diagnoseFlashExecutor() {
     (address) => ethereumRpc("eth_getCode", [address, "latest"]),
     (address, data) => ethereumRpc("eth_call", [{ to: address, data }, "latest"]),
     generatedWallets,
+    profitDestinations,
     ETH_FLASH_EXPECTED_POOL,
+    ETH_EXECUTOR_REGISTRY,
+    ETH_FLASH_EXPECTED_SOURCE_BLOB_SHA,
   );
-  await persistExecutorAudit("bnb", bnb.executor as Record<string, any>);
-  await persistExecutorAudit("ethereum", eth.executor as Record<string, any>);
-
+  eth.registry_row_present = !!ETH_EXECUTOR_REGISTRY;
+  eth.profit_destination_lookup_ok = !profitProfileError && !profitWalletError;
+  eth.payout_audited = (eth.executor as any).payout_audited === true;
   eth.payout_behavior_verified = ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED === true;
+  await persistExecutorAudit("ethereum", eth.executor as Record<string, any>).catch(() => false);
+
   eth.ready_for_flash_transaction_test =
     eth.rpc_chain_ok === true &&
     eth.aave_pool_resolved === true &&
+    eth.registry_row_present === true &&
+    eth.profit_destination_lookup_ok === true &&
+    (eth.executor as any).registry_backed === true &&
+    (eth.executor as any).registry_chain_id_match === true &&
+    (eth.executor as any).registry_source_blob_sha_match === true &&
     (eth.executor as any).configured === true &&
     (eth.executor as any).code_deployed === true &&
+    (eth.executor as any).runtime_bytecode_hash_match === true &&
     (eth.executor as any).pool_matches_expected === true &&
-    (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
+    (eth.executor as any).hot_wallet_matches_registry === true &&
+    (eth.executor as any).payout_recipient_matches_active_profit_destination === true &&
     (eth.executor as any).source_verification?.verified === true &&
-    ETH_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+    (eth.executor as any).payout_audited === true;
   eth.ready_for_live_trading = eth.ready_for_flash_transaction_test === true && eth.payout_behavior_verified === true;
 
   // The combined flags mean ALL supported chains are ready; separate any-chain
@@ -700,6 +781,41 @@ async function diagnoseFlashExecutor() {
   result.ethereum_payout_behavior_verified = eth.payout_behavior_verified === true;
   result.executor_configured = (bnb.executor as any).configured === true && (eth.executor as any).configured === true;
   result.any_executor_configured = (bnb.executor as any).configured === true || (eth.executor as any).configured === true;
+  result.registry_rows_present = { bnb: bnb.registry_row_present === true, ethereum: eth.registry_row_present === true };
+  result.profit_destination_lookup_ok = !profitProfileError && !profitWalletError;
+  result.active_profit_destinations = { bnb: profitDestinations.filter((recipient: any) => recipient.chain === "bnb").length, ethereum: profitDestinations.filter((recipient: any) => recipient.chain === "ethereum").length };
+  result.blockers = {
+    bnb: [
+      ...(!bnb.rpc_chain_ok ? ["bsc_rpc_unhealthy"] : []),
+      ...(!bnb.aave_pool_resolved ? ["bsc_aave_pool_unresolved"] : []),
+      ...(!bnb.registry_row_present ? ["bsc_executor_registry_row_missing"] : []),
+      ...(!bnb.profit_destination_lookup_ok ? ["bsc_profit_destination_lookup_failed"] : []),
+      ...(!(bnb.executor as any).configured ? ["bsc_executor_address_not_configured"] : []),
+      ...(!(bnb.executor as any).code_deployed ? ["bsc_executor_runtime_code_missing"] : []),
+      ...(!(bnb.executor as any).runtime_bytecode_hash_match ? ["bsc_executor_runtime_hash_mismatch"] : []),
+      ...(!(bnb.executor as any).source_verification?.verified ? ["bsc_executor_source_or_registry_revision_unverified"] : []),
+      ...(!(bnb.executor as any).hot_wallet_matches_registry ? ["bsc_executor_hot_wallet_registry_mismatch"] : []),
+      ...(!(bnb.executor as any).payout_recipient_matches_active_profit_destination ? ["bsc_active_profit_recipient_missing_or_mismatched"] : []),
+      ...(!(bnb.executor as any).pool_matches_expected ? ["bsc_aave_pool_mismatch"] : []),
+      ...(!(bnb.executor as any).payout_audited ? ["bsc_executor_payout_configuration_not_audited"] : []),
+      ...(!bnb.payout_behavior_verified ? ["bsc_payout_behavior_not_end_to_end_verified"] : []),
+    ],
+    ethereum: [
+      ...(!eth.rpc_chain_ok ? ["ethereum_rpc_unhealthy"] : []),
+      ...(!eth.aave_pool_resolved ? ["ethereum_aave_pool_unresolved"] : []),
+      ...(!eth.registry_row_present ? ["ethereum_executor_registry_row_missing"] : []),
+      ...(!eth.profit_destination_lookup_ok ? ["ethereum_profit_destination_lookup_failed"] : []),
+      ...(!(eth.executor as any).configured ? ["ethereum_executor_address_not_configured"] : []),
+      ...(!(eth.executor as any).code_deployed ? ["ethereum_executor_runtime_code_missing"] : []),
+      ...(!(eth.executor as any).runtime_bytecode_hash_match ? ["ethereum_executor_runtime_hash_mismatch"] : []),
+      ...(!(eth.executor as any).source_verification?.verified ? ["ethereum_executor_source_or_registry_revision_unverified"] : []),
+      ...(!(eth.executor as any).hot_wallet_matches_registry ? ["ethereum_executor_hot_wallet_registry_mismatch"] : []),
+      ...(!(eth.executor as any).payout_recipient_matches_active_profit_destination ? ["ethereum_active_profit_recipient_missing_or_mismatched"] : []),
+      ...(!(eth.executor as any).pool_matches_expected ? ["ethereum_aave_pool_mismatch"] : []),
+      ...(!(eth.executor as any).payout_audited ? ["ethereum_executor_payout_configuration_not_audited"] : []),
+      ...(!eth.payout_behavior_verified ? ["ethereum_payout_behavior_not_end_to_end_verified"] : []),
+    ],
+  };
   result.bsc_flash_executor_payout_audited = BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
   result.executor_address = (bnb.executor as any).address || null;
   result.executor_code_deployed = (bnb.executor as any).code_deployed === true;
