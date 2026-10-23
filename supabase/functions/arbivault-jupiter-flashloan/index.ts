@@ -27,7 +27,7 @@ const USDC_DECIMALS = 6;
 const SOL_DECIMALS = 9;
 const MIN_SIMULATION_USDC_RAW = 1_000_000n;       // 1 USDC
 const MAX_SIMULATION_USDC_RAW = 100_000_000n;     // 100 USDC
-const MAX_SLIPPAGE_BPS = 100;
+const MAX_SLIPPAGE_BPS = 30;
 const MAX_COMPUTE_UNITS = 1_400_000;
 
 type ApiInstruction = {
@@ -441,7 +441,7 @@ Deno.serve(async (req: Request) => {
     if (!sourceWalletId) return json({ error: "source_wallet_id_required" }, 400);
     const amountRaw = String(body?.amount_raw || "10000000"); // 10 USDC default
     validateAmount(amountRaw);
-    const slippageBps = Number(body?.slippage_bps ?? 50);
+    const slippageBps = Number(body?.slippage_bps ?? 30);
     if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS) {
       return json({ error: "slippage_out_of_bounds", max_slippage_bps: MAX_SLIPPAGE_BPS }, 400);
     }
