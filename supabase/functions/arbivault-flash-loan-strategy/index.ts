@@ -940,6 +940,7 @@ export default {
               }
 
               if (
+                wallet &&
                 executionRoute.discovery_only !== true &&
                 !builderError &&
                 flashQuote.profitable === true &&
