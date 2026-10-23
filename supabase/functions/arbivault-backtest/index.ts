@@ -16,6 +16,32 @@ const corsHeaders = {
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, "cache-control": "no-store" } });
 
+// Repeated polling observations are not independent trades. Count one entry for
+// a signal per symbol + buy/sell venue route, until it fails or the route has
+// gone unobserved for more than 60 seconds.
+function distinctSignalEntries(
+  samples: any[],
+  predicate: (sample: any) => boolean,
+  rearmGapMs = 60_000,
+) {
+  const state = new Map<string, { qualifies: boolean; at: number }>();
+  const entries: any[] = [];
+  for (const sample of samples) {
+    const key = String(sample.routeKey || sample.symbol || "unknown");
+    const at = new Date(sample.observed_at).getTime();
+    const qualifies = predicate(sample);
+    const previous = state.get(key);
+    const gapMs = previous && Number.isFinite(at) && Number.isFinite(previous.at)
+      ? at - previous.at
+      : Infinity;
+    if (qualifies && (!previous || !previous.qualifies || gapMs > rearmGapMs)) {
+      entries.push(sample);
+    }
+    state.set(key, { qualifies, at });
+  }
+  return entries;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -71,7 +97,7 @@ Deno.serve(async (req) => {
       const queryPageSize = 1000;
       const { data: firstLivePage, error: liveRowsError, count: liveRowsCount } = await admin
         .from("strategy_observations")
-        .select("id,symbol,metric,value,observed_at,metadata")
+        .select("id,symbol,metric,value,observed_at,metadata", { count: "exact" })
         .eq("owner_id", skill.owner_id)
         .eq("source_key", "public_exchange_order_books")
         .eq("domain", "execution_scout")
@@ -178,9 +204,28 @@ Deno.serve(async (req) => {
       };
 
       const notional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 1000);
-      const feePct = body.round_trip_fee_pct == null ? 0.10 : Number(body.round_trip_fee_pct);
-      const slippagePct = body.slippage_pct == null ? 0 : Number(body.slippage_pct);
+      // CEX quote observations require a venue-fee model, not a made-up gas fee.
+      // Default to 0.10% taker fee per venue (0.20% round trip) plus 0.05%
+      // slippage reserve. These are assumptions, not measured user fees or fills.
+      const feePct = body.round_trip_fee_pct == null ? 0.20 : Number(body.round_trip_fee_pct);
+      const slippagePct = body.slippage_pct == null ? 0.05 : Number(body.slippage_pct);
       const costPct = feePct + slippagePct;
+      const minSpreadPct = body.min_spread_pct == null ? 0.30 : Number(body.min_spread_pct);
+      const profitCondition = skillConditions.find((condition: any) =>
+        /profit/i.test(String(condition?.label || "")) &&
+        !/%|bps|\\bms\\b|\\bx\\b/i.test(String(condition?.unit || ""))
+      );
+      const configuredProfitFloor = profitCondition
+        ? Number.parseFloat(String(profitCondition.value ?? ""))
+        : (skill?.risk_limits?.min_profit_threshold == null ? 2 : Number(skill.risk_limits.min_profit_threshold));
+      const minimumPotentialNetProfitUsd = body.min_net_profit_usd == null
+        ? (Number.isFinite(configuredProfitFloor) && configuredProfitFloor >= 0 ? configuredProfitFloor : 2)
+        : Number(body.min_net_profit_usd);
+      if (![notional, feePct, slippagePct, costPct, minSpreadPct, minimumPotentialNetProfitUsd].every(Number.isFinite) ||
+          notional <= 0 || feePct < 0 || slippagePct < 0 || costPct >= 100 ||
+          minSpreadPct < 0 || minimumPotentialNetProfitUsd < 0) {
+        return json({ error: "invalid_cost_assumptions_or_notional" }, 400);
+      }
       const builtSamples = chronologicallyOrderedLiveRows.map((row: any) => {
         const metadata = row.metadata || {};
         const quotes = Array.isArray(metadata.quotes) ? metadata.quotes : [];
@@ -195,13 +240,17 @@ Deno.serve(async (req) => {
         const spreadPct = Number(row.value);
         const volume24hUsd = nearestVolume(String(row.symbol || ""), row.observed_at);
         const estimatedNetProfitUsd = notional * (spreadPct - costPct) / 100;
+        const buyVenue = String(metadata.buy_exchange ?? metadata.buyExchange ?? "");
+        const sellVenue = String(metadata.sell_exchange ?? metadata.sellExchange ?? "");
         return {
           id: row.id,
           symbol: row.symbol,
+          routeKey: `${String(row.symbol || "")}|${buyVenue}|${sellVenue}`,
           observed_at: row.observed_at,
           spreadPct,
           latencyMs,
           volume24hUsd,
+          estimatedGrossProfitUsd: notional * spreadPct / 100,
           estimatedNetProfitUsd,
         };
       }).filter((sample: any) => Number.isFinite(sample.spreadPct));
@@ -236,19 +285,29 @@ Deno.serve(async (req) => {
         if (label.includes("profit")) return sample.estimatedNetProfitUsd > threshold;
         return false;
       };
-      // A negative observed spread is a no-arbitrage market condition, not a trade loss.
-      // Keep it in the observation count, but never book it as a hypothetical trade PnL.
+      // Negative spreads are observations, not executed losses. Count only distinct
+      // entries that pass the configured market spread floor and net-profit floor.
       const positiveSpreadSamples = builtSamples.filter((sample: any) => sample.spreadPct > 0);
-      const qualifying = positiveSpreadSamples.filter((sample: any) =>
+      const qualifying = distinctSignalEntries(builtSamples, (sample: any) =>
+        sample.spreadPct >= minSpreadPct &&
+        sample.estimatedNetProfitUsd > 0 &&
         skillConditions.every((condition: any) => conditionPasses(condition, sample))
       );
       const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
-      // Potential profit is reported separately from strategy-qualified results.
-      // These estimates use recorded observations; they are not executable or realized PnL.
-      const potentialProfitable = positiveSpreadSamples.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
-      const potentialGrossPnl = positiveSpreadSamples.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0);
-      const potentialNetPnl = positiveSpreadSamples.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
+
+      // Polling every few seconds must not charge the same hypothetical trade fee
+      // repeatedly. These totals include only distinct signal entries above the
+      // gross-spread floor and configured minimum net profit, never all 10,000 polls.
+      const potentialSignalEntries = distinctSignalEntries(builtSamples, (sample: any) =>
+        sample.spreadPct >= minSpreadPct &&
+        sample.estimatedNetProfitUsd >= minimumPotentialNetProfitUsd
+      );
+      const potentialProfitable = potentialSignalEntries;
+      const potentialGrossPnl = potentialSignalEntries.reduce((sum: number, sample: any) =>
+        sum + sample.estimatedGrossProfitUsd, 0);
+      const potentialNetPnl = potentialSignalEntries.reduce((sum: number, sample: any) =>
+        sum + sample.estimatedNetProfitUsd, 0);
       const bestSample = positiveSpreadSamples.reduce((best: any, sample: any) =>
         !best || sample.estimatedNetProfitUsd > best.estimatedNetProfitUsd ? sample : best, null);
       const observedTimes = builtSamples.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
@@ -260,13 +319,15 @@ Deno.serve(async (req) => {
         supported: true,
         source: "recorded_live_market_observations",
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
-        data_methodology: "Newest recorded live order-book observations up to the 10,000-sample computation limit, sorted chronologically after retrieval; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes.",
+        data_methodology: "Newest recorded live order-book observations up to the 10,000-sample computation limit, sorted chronologically after retrieval; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes. Repeated polls are de-duplicated into signal entries by symbol and buy/sell venue.",
         available_dataset_samples: liveRowsCount ?? builtSamples.length,
         sample_limit: liveSampleLimit,
         newest_samples_selected: true,
         live_market_observations_only: true,
         condition_thresholds: conditionThresholds,
-        threshold_pct: Number.isFinite(spreadThreshold) ? spreadThreshold : null,
+        threshold_pct: Number.isFinite(spreadThreshold) ? Math.max(spreadThreshold, minSpreadPct) : minSpreadPct,
+        configured_skill_spread_threshold_pct: Number.isFinite(spreadThreshold) ? spreadThreshold : null,
+        market_min_spread_pct: minSpreadPct,
         threshold_reached: qualifying.length > 0,
         pnl_is_realized: false,
         pnl_is_executable: false,
@@ -282,6 +343,12 @@ Deno.serve(async (req) => {
         round_trip_fee_pct: feePct,
         slippage_pct: slippagePct,
         total_cost_assumption_pct: costPct,
+        minimum_potential_net_profit_usd: minimumPotentialNetProfitUsd,
+        potential_signal_events: potentialSignalEntries.length,
+        potential_event_methodology: "One entry per symbol + buy/sell venue route when observed spread clears the configured floor and estimated net clears the USD profit floor; repeated polls of the same signal are not added as separate trades.",
+        network_fee_included: false,
+        network_fee_estimate_usd: null,
+        network_fee_policy: "Not included: observations come from centralized-exchange order books, not a confirmed on-chain route or gas estimate.",
         samples: builtSamples.length,
         samples_with_latency: builtSamples.filter((sample: any) => sample.latencyMs != null).length,
         samples_with_volume: builtSamples.filter((sample: any) => sample.volume24hUsd != null).length,
@@ -294,20 +361,21 @@ Deno.serve(async (req) => {
         estimated_net_pnl: Number(netPnl.toFixed(2)),
         strategy_qualified_net_pnl: Number(netPnl.toFixed(2)),
         strategy_qualified_gross_pnl: Number(qualifying.reduce((sum: number, sample: any) => sum + notional * sample.spreadPct / 100, 0).toFixed(2)),
+        // Existing field names are retained for UI compatibility. Values now sum
+        // distinct qualifying signal entries rather than every repeated poll.
         potential_gross_pnl_all_samples: Number(potentialGrossPnl.toFixed(2)),
         potential_net_pnl_all_samples: Number(potentialNetPnl.toFixed(2)),
         potential_profitable_samples: potentialProfitable.length,
         best_sample_spread_pct: bestSample ? Number(bestSample.spreadPct.toFixed(6)) : null,
         best_sample_potential_net_profit_usd: bestSample ? Number(bestSample.estimatedNetProfitUsd.toFixed(2)) : null,
         estimated_not_realized: true,
-        cost_methodology: "Recorded live market observations less configured round-trip fee and slippage assumptions. Potential totals are hypothetical sample-level estimates, not realized or executable PnL.",
+        cost_methodology: "Assumes 0.10% taker fees at each CEX venue (0.20% round trip) plus a 0.05% slippage reserve by default. Costs are estimated assumptions, not measured user fees or blockchain gas. Potential totals sum distinct entries that clear the configured spread and net-profit floors; they are not realized or executable PnL.",
         historical_max_spread_pct: Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)),
         historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
         reason: qualifying.length
           ? "live_observation_conditions_matched"
-          : (Number.isFinite(spreadThreshold) &&
-             Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)) <= spreadThreshold
-              ? "historical_max_spread_below_strategy_threshold"
+          : (Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)) < minSpreadPct
+              ? "historical_max_spread_below_market_floor"
               : "no_recorded_observations_matched_all_skill_conditions"),
         first_observation: builtSamples[0]?.observed_at || null,
         last_observation: builtSamples[builtSamples.length - 1]?.observed_at || null,
