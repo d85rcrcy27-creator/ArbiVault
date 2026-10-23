@@ -845,7 +845,8 @@ export default {
             // estimates, but the downstream execution gate must keep them from
             // creating attempts or signing requests.
             candidate.discovery_only === true ||
-            (candidate.builder_enabled === true && candidate.discovery_only !== true)
+            (candidate.builder_enabled === true && candidate.discovery_only !== true) ||
+            (candidate.payout_test_authorized === true && candidate.payout_test_used_at == null && candidate.discovery_only === true)
           )
         )
 
@@ -857,7 +858,11 @@ export default {
           const wallet = executionEligibleWallets.find((candidate: any) =>
             candidate.chain === executionRoute.chain && botWalletIds.has(candidate.id)
           ) || null
+          const payoutTestMode = executionRoute.payout_test_authorized === true && executionRoute.payout_test_used_at == null
+          let payoutTestClaimed = false
           const executionContext: any = {
+            payout_test_mode: payoutTestMode,
+            payout_test_used_at: executionRoute.payout_test_used_at || null,
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
             builder: executionRoute.transaction_builder,
@@ -908,6 +913,7 @@ export default {
           if (executionRoute.route_type === 'flash_liquidity') {
             try {
               if (!wallet && executionRoute.discovery_only !== true) throw new Error('flash_source_wallet_unavailable')
+              if (payoutTestMode && !wallet) throw new Error('flash_payout_test_wallet_unavailable')
               const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
               const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
               if (!isBnbFlash && !isEthereumFlash) {
@@ -918,9 +924,10 @@ export default {
               }
               // Use the strategy's configured notional for quote screening. This is a flash-loan amount, not wallet principal; chain liquidity, slippage, net-profit, gas, executor verification, and signer policy remain enforced.
               const configuredNotional = Number(strategyBot?.max_trade_size)
-              const notionalUsd = Number.isFinite(configuredNotional) && configuredNotional > 0
+              const normalNotionalUsd = Number.isFinite(configuredNotional) && configuredNotional > 0
                 ? configuredNotional
                 : 100
+              const notionalUsd = payoutTestMode ? Math.min(normalNotionalUsd, 25) : normalNotionalUsd
               const slippageBps = Math.max(1, Math.min(100, Math.round(Number(strategyBot?.slippage_tolerance ?? 0.5) * 100)))
               const flashAsset = isBnbFlash
                 ? '0x55d398326f99059fF775485246999027B3197955'
@@ -975,10 +982,10 @@ export default {
               }
 
               if (
-                executionRoute.discovery_only !== true &&
+                (payoutTestMode || (executionRoute.discovery_only !== true && networkFlashDiagnostic?.ready_for_live_trading === true)) &&
                 !builderError &&
                 flashQuote.profitable === true &&
-                networkFlashDiagnostic?.ready_for_flash_transaction_test === true &&
+                (payoutTestMode ? networkFlashDiagnostic?.ready_for_flash_transaction_test === true : networkFlashDiagnostic?.ready_for_live_trading === true) &&
                 flashQuote.best?.executor_configured === true &&
                 Array.isArray(flashQuote.best?.data) &&
                 flashQuote.best.data.length === 2
@@ -989,6 +996,7 @@ export default {
                 const minNetRaw = BigInt(Math.ceil(minNetProfitUsd * (10 ** decimals)))
                 const contractMinProfitRaw = (BigInt(gasCostRaw) + minNetRaw).toString()
                 flashBuild = await callTransactionBuilder({
+                  mode: payoutTestMode ? 'flash_payout_test_build' : 'flash_build',
                   route_id: executionRoute.id,
                   source_wallet_id: wallet.id,
                   side: 'sell',
@@ -1025,6 +1033,22 @@ export default {
                     builderError = 'flash_transaction_max_fee_valuation_unavailable'
                   } else if (transactionFeeCapUsd > maxGasBudgetUsd) {
                     builderError = 'flash_transaction_max_fee_exceeds_network_fee_budget'
+                  }
+                }
+                if (payoutTestMode && !builderError && flashBuild?.executable === true) {
+                  const { data: claimedRoute, error: claimError } = await supabase
+                    .from('arbivault_strategy_routes')
+                    .update({ payout_test_used_at: now.toISOString(), updated_at: now.toISOString() })
+                    .eq('id', executionRoute.id)
+                    .eq('payout_test_authorized', true)
+                    .is('payout_test_used_at', null)
+                    .select('id')
+                    .maybeSingle()
+                  if (claimError) throw new Error('flash_payout_test_claim_failed')
+                  if (!claimedRoute) {
+                    builderError = 'flash_payout_test_already_claimed'
+                  } else {
+                    payoutTestClaimed = true
                   }
                 }
               }
