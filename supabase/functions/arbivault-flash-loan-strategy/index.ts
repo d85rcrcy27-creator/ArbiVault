@@ -1055,22 +1055,6 @@ export default {
                     builderError = 'flash_transaction_max_fee_exceeds_network_fee_budget'
                   }
                 }
-                if (payoutTestMode && !builderError && flashBuild?.executable === true) {
-                  const { data: claimedRoute, error: claimError } = await supabase
-                    .from('arbivault_strategy_routes')
-                    .update({ payout_test_used_at: now.toISOString(), updated_at: now.toISOString() })
-                    .eq('id', executionRoute.id)
-                    .eq('payout_test_authorized', true)
-                    .is('payout_test_used_at', null)
-                    .select('id')
-                    .maybeSingle()
-                  if (claimError) throw new Error('flash_payout_test_claim_failed')
-                  if (!claimedRoute) {
-                    builderError = 'flash_payout_test_already_claimed'
-                  } else {
-                    payoutTestClaimed = true
-                  }
-                }
               }
             } catch (e) {
               builderError = e instanceof Error ? e.message : String(e)
@@ -1102,9 +1086,11 @@ export default {
             : flashExecutorDiagnostic?.bnb
           const liveTradingReady = chainDiagnostic?.ready_for_live_trading === true
           const payoutTestReady = payoutTestMode &&
-            payoutTestClaimed &&
             chainDiagnostic?.ready_for_flash_transaction_test === true &&
-            executionRoute.payout_test_authorized === true
+            executionRoute.payout_test_authorized === true &&
+            !builderError &&
+            flashQuote?.profitable === true &&
+            transactionBuilt
           const executionBlockers: string[] = []
           if (!strategyBot) executionBlockers.push('strategy_bot_not_linked')
           if (walletSafetyBlockedChains.has(executionRoute.chain)) executionBlockers.push('wallet_contract_code_check_unavailable')
