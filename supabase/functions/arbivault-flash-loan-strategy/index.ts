@@ -919,13 +919,12 @@ export default {
                 : 1
               const maxGasBudgetUsd = maxNetworkFeeBudgetUsd(strategyBot)
               flashFeeAccounting.stop_loss_usd = -maxGasBudgetUsd
+              flashFeeAccounting.max_network_fee_budget_usd = maxGasBudgetUsd
+              flashFeeAccounting.minimum_net_profit_usd = minNetProfitUsd
+              flashFeeAccounting.profit_evidence_policy = 'do_not_record_gross_or_net_profit_above_confirmed_executor_settlement_evidence'
               executionContext.flash_fee_accounting = {
                 ...flashFeeAccounting,
-                max_network_fee_budget_usd: maxGasBudgetUsd,
-                stop_loss_usd: -maxGasBudgetUsd,
-                minimum_net_profit_usd: minNetProfitUsd,
                 fee_policy: 'reject_if_gas_estimate_missing_over_budget_or_net_profit_below_threshold',
-                profit_evidence_policy: 'do_not_record_gross_or_net_profit_above_confirmed_executor_settlement_evidence',
               }
               if (flashFeeAccounting.estimated_network_fee_usd == null || flashFeeAccounting.estimated_net_profit_usd == null) {
                 builderError = 'flash_network_fee_or_net_profit_estimate_unavailable'
@@ -973,6 +972,8 @@ export default {
                     flashBuild.transaction,
                     executionRoute.chain,
                   )
+                  flashFeeAccounting.transaction_fee_cap_usd = transactionFeeCapUsd
+                  flashFeeAccounting.transaction_fee_cap_includes_price_buffer = true
                   executionContext.flash_fee_accounting = {
                     ...(executionContext.flash_fee_accounting || {}),
                     transaction_fee_cap_usd: transactionFeeCapUsd,
