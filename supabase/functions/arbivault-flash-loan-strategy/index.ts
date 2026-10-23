@@ -1084,8 +1084,7 @@ export default {
           const payoutTestReady = payoutTestMode &&
             payoutTestClaimed &&
             chainDiagnostic?.ready_for_flash_transaction_test === true &&
-            executionRoute.payout_test_authorized === true &&
-            executionRoute.payout_test_used_at != null
+            executionRoute.payout_test_authorized === true
           const executionBlockers: string[] = []
           if (!strategyBot) executionBlockers.push('strategy_bot_not_linked')
           if (walletSafetyBlockedChains.has(executionRoute.chain)) executionBlockers.push('wallet_contract_code_check_unavailable')
