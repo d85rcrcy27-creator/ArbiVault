@@ -457,10 +457,64 @@ async function verifyExecutor(
     result.matched_generated_wallet_id = match?.id || null;
     result.matched_generated_wallet_owner_id = match?.owner_id || null;
   } catch (error) {
-    result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_payout_getter_failed";
+    result.trading_wallet_read_error = error instanceof Error ? error.message : "executor_hot_wallet_getter_failed";
   }
 
-  
+  try {
+    const callData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "PROFIT_RECIPIENT" });
+    const raw = String(await readCall(executor, callData));
+    const profitRecipient = decodeFunctionResult({
+      abi: FLASH_EXECUTOR_PAYOUT_ABI,
+      functionName: "PROFIT_RECIPIENT",
+      data: raw as `0x${string}`,
+    }) as string;
+    result.payout_recipient_address = profitRecipient;
+
+    const { data: deployment, error: deploymentError } = await supabase.from("flash_executor_deployments")
+      .select("hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address")
+      .eq("chain", chain).eq("executor_address", executor).maybeSingle();
+    if (deploymentError || !deployment?.profit_recipient_wallet_id) {
+      throw new Error("executor_profit_recipient_registry_entry_missing");
+    }
+
+    const { data: recipientWallet, error: recipientWalletError } = await supabase.from("wallets")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+      .eq("id", deployment.profit_recipient_wallet_id)
+      .maybeSingle();
+    if (recipientWalletError || !recipientWallet) throw new Error("profit_destination_wallet_not_found");
+
+    const { data: profile, error: profileError } = await supabase.from("profit_recipient_profiles")
+      .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+      .eq("owner_id", recipientWallet.owner_id)
+      .eq("wallet_id", recipientWallet.id)
+      .eq("chain", chain)
+      .eq("asset", "ALL")
+      .eq("status", "active")
+      .maybeSingle();
+    if (profileError) throw new Error("active_profit_destination_profile_lookup_failed");
+
+    const recipientValid = recipientWallet.status === "active" &&
+      recipientWallet.chain === chain &&
+      recipientWallet.is_hot === false &&
+      recipientWallet.wallet_role === "profit_recipient" &&
+      recipientWallet.data_quality_status === "verified" &&
+      !!recipientWallet.secret_ref &&
+      /^0x[a-fA-F0-9]{40}$/.test(String(recipientWallet.address || ""));
+    const profileValid = !!profile &&
+      (!profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now());
+    const registryValid = String(deployment.profit_recipient_address || "").toLowerCase() === profitRecipient.toLowerCase() &&
+      String(deployment.hot_wallet_address || "").toLowerCase() === String(result.trading_wallet_address || "").toLowerCase() &&
+      String(deployment.hot_wallet_id || "") === String(result.matched_generated_wallet_id || "");
+    result.payout_recipient_matches_profit_destination =
+      recipientValid && profileValid && registryValid &&
+      String(recipientWallet.address).toLowerCase() === profitRecipient.toLowerCase();
+    result.matched_profit_recipient_wallet_id =
+      result.payout_recipient_matches_profit_destination === true ? recipientWallet.id : null;
+    result.payout_recipient_matches_generated_hot_wallet = false;
+  } catch (error) {
+    result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_profit_recipient_getter_failed";
+  }
+
   try {
     const poolCallData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" });
     const poolRaw = String(await readCall(executor, poolCallData));
