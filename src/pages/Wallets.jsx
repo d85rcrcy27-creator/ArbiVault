@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowUpRight, CheckCircle2, Clock3, Copy, Plus, RefreshCw, Send, ShieldCheck } from 'lucide-react'
 import WalletBootstrap from '@/components/arbitrage/WalletBootstrap'
+import ProfitDestinations from '@/components/arbitrage/ProfitDestinations'
 import { addApprovedDestination, activateApprovedDestination, createWalletTransfer, createWithdrawal } from '@/lib/arbivault'
 import { getAuthenticatedSession, supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/AuthContext'
@@ -224,6 +225,7 @@ export default function Wallets() {
 
       <main className="space-y-4 p-4 md:p-6">
         <WalletBootstrap />
+        <ProfitDestinations />
 
         {(error || message) && (
           <div className={`rounded border p-3 font-mono text-[0.62rem] ${error ? 'border-[#FF4D4D]/30 bg-[#FF4D4D]/5 text-[#FF4D4D]' : 'border-[#00FF87]/30 bg-[#00FF87]/5 text-[#00FF87]'}`}>
