@@ -51,7 +51,7 @@ Deno.serve(async (req) => {
 
   const audits = [];
   for (const config of CONFIGS) {
-    const base = { chain: config.chain, chain_id: config.chainId, executor_address: null as string | null, deployment_tx_hash: null as string | null, runtime_bytecode_hash: null as string | null, status: "not_deployed", source_verified: false, payout_audited: false, payout_behavior_verified: false, checks: {} as Record<string, boolean>, failure_code: null as string | null };
+    const base = { chain: config.chain, chain_id: config.chainId, executor_address: null as string | null, deployment_tx_hash: null as string | null, hot_wallet_address: null as string | null, profit_recipient_address: null as string | null, runtime_bytecode_hash: null as string | null, status: "not_deployed", source_verified: false, payout_audited: false, payout_behavior_verified: false, checks: {} as Record<string, boolean>, failure_code: null as string | null };
     const { data: deployment, error: registryError } = await admin.from("flash_executor_deployments")
       .select("chain,chain_id,contract_name,executor_address,deployment_tx_hash,deployer_address,deployment_nonce,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address,pool_address,contract_source_blob_sha,init_code_hash,runtime_bytecode_hash,status,source_verified,payout_audited,payout_behavior_verified,failure_code,github_workflow_ref,github_run_id,created_at,updated_at")
       .eq("chain", config.chain).maybeSingle();
@@ -69,6 +69,8 @@ Deno.serve(async (req) => {
       const registryBacked = !!deployment?.executor_address;
       base.executor_address = candidateAddress;
       base.deployment_tx_hash = deployment?.deployment_tx_hash || null;
+      base.hot_wallet_address = deployment?.hot_wallet_address || null;
+      base.profit_recipient_address = deployment?.profit_recipient_address || null;
       base.runtime_bytecode_hash = deployment?.runtime_bytecode_hash || null;
       base.source_verified = deployment?.source_verified === true;
       base.payout_audited = deployment?.payout_audited === true;
@@ -151,7 +153,6 @@ Deno.serve(async (req) => {
         if (!runtimeCodePresent) base.failure_code = "executor_runtime_bytecode_missing";
         else if (!base.checks.chain_id_match) base.failure_code = "chain_id_mismatch";
         else if (!registryBacked) base.failure_code = "candidate_requires_registry_audit_baseline";
-        else if (!runtimeHashMatch) base.failure_code = "runtime_bytecode_hash_mismatch";
         else if (!runtimeHashMatch) base.failure_code = "runtime_bytecode_hash_mismatch";
         else if (!hotWalletRecordValid || !hotWalletMatch) base.failure_code = "executor_trading_wallet_mismatch_or_unverified";
         else if (!profitRecipientProfileActive || !profitRecipientDistinct || !profitRecipientMatch) base.failure_code = "executor_profit_destination_missing_inactive_or_mismatched";
