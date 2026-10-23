@@ -19,6 +19,7 @@ interface IUniswapV2FlashRouter {
 ///      assets, recipients, paths, deadlines, repayment and minimum profit are constrained.
 contract ArbiVaultEthereumFlashExecutor {
     address public immutable HOT_WALLET;
+    address public immutable PROFIT_RECIPIENT;
     IAaveV3PoolEth public immutable POOL;
     uint256 private preLoanBalance;
     address private expectedAsset;
@@ -44,18 +45,20 @@ contract ArbiVaultEthereumFlashExecutor {
     error LoanStateMismatch();
 
     event FlashLoanStarted(address indexed asset,uint256 amount,address indexed hotWallet);
-    event FlashLoanSettled(address indexed asset,uint256 amount,uint256 premium,uint256 profitPaid,address indexed hotWallet);
+    event FlashLoanSettled(address indexed asset,uint256 amount,uint256 premium,uint256 profitPaid,address indexed hotWallet,address indexed profitRecipient);
 
     function isAllowedRouter(address target) public pure returns (bool) {
         return target == UNISWAP_V2_ROUTER || target == SUSHISWAP_V2_ROUTER;
     }
 
-    constructor(address pool,address hotWallet) {
-        if (block.chainid != 1 || pool != AAVE_V3_POOL_ETH || pool.code.length == 0 || hotWallet == address(0)) {
+    constructor(address pool,address hotWallet,address profitRecipient) {
+        if (block.chainid != 1 || pool != AAVE_V3_POOL_ETH || pool.code.length == 0 ||
+            hotWallet == address(0) || profitRecipient == address(0) || profitRecipient == hotWallet) {
             revert InvalidArguments();
         }
         POOL = IAaveV3PoolEth(pool);
         HOT_WALLET = hotWallet;
+        PROFIT_RECIPIENT = profitRecipient;
     }
 
     function _approveExact(IERC20FlashEth token,address spender,uint256 amount) private {
@@ -152,10 +155,10 @@ contract ArbiVaultEthereumFlashExecutor {
         uint256 required = preLoanBalance + repayment + minProfit;
         if (balance < required) revert ProfitBelowMinimum(balance,required);
         uint256 profit = balance - preLoanBalance - repayment;
-        if (profit != 0 && !IERC20FlashEth(asset).transfer(HOT_WALLET,profit)) revert TokenOperationFailed();
+        if (profit != 0 && !IERC20FlashEth(asset).transfer(PROFIT_RECIPIENT,profit)) revert TokenOperationFailed();
         _approveExact(IERC20FlashEth(asset),address(POOL),repayment);
         callbackCompleted = true;
-        emit FlashLoanSettled(asset,amount,premium,profit,HOT_WALLET);
+        emit FlashLoanSettled(asset,amount,premium,profit,HOT_WALLET,PROFIT_RECIPIENT);
         return true;
     }
 

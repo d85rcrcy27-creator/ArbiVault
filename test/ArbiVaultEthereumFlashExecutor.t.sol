@@ -25,14 +25,14 @@ contract ArbiVaultEthereumFlashExecutorTest {
     }
 
     function testOnlyAllowlistedRouters() public {
-        ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this));
+        ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
         require(executor.isAllowedRouter(UNISWAP_ROUTER), "Uniswap should be allowed");
         require(executor.isAllowedRouter(SUSHISWAP_ROUTER), "SushiSwap should be allowed");
         require(!executor.isAllowedRouter(address(0xBEEF)), "unknown router must be denied");
     }
 
     function testRejectsSameRouterForBothLegs() public {
-        ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this));
+        ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
         address[] memory targets = new address[](2);
         targets[0] = UNISWAP_ROUTER;
         targets[1] = UNISWAP_ROUTER;
@@ -45,9 +45,20 @@ contract ArbiVaultEthereumFlashExecutorTest {
         executor.executeFlashLoan(USDC, 1, 1, targets, values, calls);
     }
 
+    function testProfitRecipientIsSeparateFromTradingWallet() public {
+        ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
+        require(executor.HOT_WALLET() == address(this), "trading wallet must remain the caller");
+        require(executor.PROFIT_RECIPIENT() == address(0xFEE1), "profits must go to the separate recipient");
+    }
+
+    function testConstructorRejectsSameTradingAndProfitWallet() public {
+        vm.expectRevert(ArbiVaultEthereumFlashExecutor.InvalidArguments.selector);
+        new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(this));
+    }
+
     function testConstructorRejectsWrongChain() public {
         vm.chainId(56);
         vm.expectRevert(ArbiVaultEthereumFlashExecutor.InvalidArguments.selector);
-        new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this));
+        new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(0xFEE1));
     }
 }

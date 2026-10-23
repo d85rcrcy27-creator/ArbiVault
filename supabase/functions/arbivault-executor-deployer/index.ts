@@ -26,9 +26,12 @@ const BSC = {
   workflow: REPOSITORY + "/.github/workflows/deploy-bnb-flash-executor.yml@refs/heads/main",
   confirmPhrase: "DEPLOY_TO_BSC_MAINNET",
   contractName: "ArbiVaultFlashExecutor",
-  sourceBlobSha: "4ba59361fa0a125db5d1e538707e8b0932d5c453",
-  walletId: "43a50a7d-f018-4d36-9ada-5dd7e02efe47",
-  hotWallet: "0xEa37838f3361b80601756f7B0D770A5F5f38c486",
+  sourceBlobSha: "7b8771f3b262813f746bc16c5436c95d2740fb04",
+  ownerId: "3406bc39-44c9-438b-b1ca-0a95683f7dda",
+  walletId: "",
+  hotWallet: "",
+  profitRecipientWalletId: "",
+  profitRecipient: "",
   pool: "0x6807dc923806fE8Fd134338EABCA509979a7e0cB",
   rpc: Deno.env.get("BSC_RPC_URL") || "https://bsc-dataseed.binance.org",
 };
@@ -37,9 +40,12 @@ const ETH = {
   workflow: REPOSITORY + "/.github/workflows/deploy-ethereum-flash-executor.yml@refs/heads/main",
   confirmPhrase: "DEPLOY_TO_ETHEREUM_MAINNET",
   contractName: "ArbiVaultEthereumFlashExecutor",
-  sourceBlobSha: "276dd92d982054a21dbff756fd8ffbe14f97f3b2",
-  walletId: "9cf84d39-83c3-40ee-aa81-c0ba7ec3ebd3",
-  hotWallet: "0xFfd52F7A182887a0382f2Cef33627af2F6BF0E27",
+  sourceBlobSha: "4f260f58ffe7201cc478db7752f4622d8df571ac",
+  ownerId: "3406bc39-44c9-438b-b1ca-0a95683f7dda",
+  walletId: "",
+  hotWallet: "",
+  profitRecipientWalletId: "",
+  profitRecipient: "",
   pool: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
   rpc: Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com",
 };
@@ -47,6 +53,7 @@ type ChainConfig = typeof BSC | typeof ETH;
 const CONFIGS = new Map<string, ChainConfig>([["bnb", BSC], ["ethereum", ETH]]);
 const EXECUTOR_ABI = parseAbi([
   "function HOT_WALLET() view returns (address)",
+  "function PROFIT_RECIPIENT() view returns (address)",
   "function POOL() view returns (address)",
 ]);
 const json = (body: unknown, status = 200) =>
@@ -62,8 +69,8 @@ function normalizeHexBytecode(input: unknown): Hex {
   return normalized as Hex;
 }
 function buildInitCode(bytecode: Hex, config: ChainConfig): Hex {
-  const args = encodeAbiParameters(parseAbiParameters("address pool, address hotWallet"), [
-    config.pool as Address, config.hotWallet as Address,
+  const args = encodeAbiParameters(parseAbiParameters("address pool, address hotWallet, address profitRecipient"), [
+    config.pool as Address, config.hotWallet as Address, config.profitRecipient as Address,
   ]);
   return (bytecode + args.slice(2)) as Hex;
 }
@@ -114,7 +121,7 @@ async function getDeploymentAccount(config: ChainConfig, provisionIfMissing = fa
   if (!signer && provisionIfMissing) {
     const privateKey = generatePrivateKey();
     const candidate = privateKeyToAccount(privateKey);
-    if ([BSC.hotWallet, ETH.hotWallet].some(
+    if ([BSC.hotWallet, ETH.hotWallet, config.hotWallet, config.profitRecipient].filter(Boolean).some(
       (address) => address.toLowerCase() === candidate.address.toLowerCase()
     )) {
       throw new Error("deployment_signer_matches_trading_wallet");
@@ -157,7 +164,7 @@ async function getDeploymentAccount(config: ChainConfig, provisionIfMissing = fa
   if (account.address.toLowerCase() !== String(signer.signer_address).toLowerCase()) {
     throw new Error("deployment_signer_address_mismatch");
   }
-  if ([BSC.hotWallet, ETH.hotWallet].some(
+  if ([BSC.hotWallet, ETH.hotWallet, config.hotWallet, config.profitRecipient].filter(Boolean).some(
     (address) => address.toLowerCase() === account.address.toLowerCase()
   )) {
     throw new Error("deployment_signer_matches_trading_wallet");
@@ -165,18 +172,72 @@ async function getDeploymentAccount(config: ChainConfig, provisionIfMissing = fa
 
   return { account, created };
 }
+async function resolveConfiguredChain(base: ChainConfig): Promise<ChainConfig> {
+  const { data: tradingRows, error: tradingError } = await supabase.from("wallets")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+    .eq("owner_id", base.ownerId)
+    .eq("chain", base.chain)
+    .eq("status", "active")
+    .eq("is_hot", true)
+    .eq("wallet_role", "trading_hot")
+    .eq("data_quality_status", "verified")
+    .not("secret_ref", "is", null)
+    .limit(2);
+  if (tradingError) throw new Error("trading_hot_wallet_lookup_failed");
+  if (!tradingRows || tradingRows.length !== 1) throw new Error("active_verified_trading_wallet_missing_or_ambiguous");
+  const trading = tradingRows[0];
+  if (!/^0x[a-fA-F0-9]{40}$/.test(String(trading.address || ""))) throw new Error("trading_hot_wallet_address_invalid");
+
+  const { data: profiles, error: profileError } = await supabase.from("profit_recipient_profiles")
+    .select("id,owner_id,wallet_id,chain,asset,status,activation_at,verification_source")
+    .eq("owner_id", base.ownerId)
+    .eq("chain", base.chain)
+    .eq("asset", "ALL")
+    .eq("status", "active")
+    .limit(2);
+  if (profileError) throw new Error("active_profit_destination_lookup_failed");
+  if (!profiles || profiles.length !== 1) throw new Error("active_all_assets_profit_destination_missing_or_ambiguous");
+  const profile = profiles[0];
+  if (profile.activation_at && new Date(profile.activation_at).getTime() > Date.now()) throw new Error("profit_destination_activation_delay_pending");
+
+  const { data: recipient, error: recipientError } = await supabase.from("wallets")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+    .eq("id", profile.wallet_id)
+    .eq("owner_id", base.ownerId)
+    .maybeSingle();
+  if (recipientError) throw new Error("profit_destination_wallet_lookup_failed");
+  if (!recipient || recipient.status !== "active" || recipient.chain !== base.chain ||
+      recipient.wallet_role !== "profit_recipient" || recipient.is_hot !== false ||
+      recipient.data_quality_status !== "verified" || !recipient.secret_ref ||
+      !/^0x[a-fA-F0-9]{40}$/.test(String(recipient.address || ""))) {
+    throw new Error("profit_destination_wallet_integrity_check_failed");
+  }
+  if (String(recipient.address).toLowerCase() === String(trading.address).toLowerCase()) {
+    throw new Error("profit_destination_must_be_separate_from_trading_wallet");
+  }
+  return {
+    ...base,
+    walletId: String(trading.id),
+    hotWallet: String(trading.address),
+    profitRecipientWalletId: String(recipient.id),
+    profitRecipient: String(recipient.address),
+  };
+}
+
 async function verifyHotWalletRecord(config: ChainConfig) {
   const { data, error } = await supabase.from("wallets")
-    .select("id,chain,address,status,is_hot,wallet_role").eq("id", config.walletId).maybeSingle();
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+    .eq("id", config.walletId).eq("owner_id", config.ownerId).maybeSingle();
   if (error || !data) throw new Error("approved_hot_wallet_record_unavailable");
   if (data.chain !== config.chain || data.status !== "active" || data.is_hot !== true ||
-      data.wallet_role !== "trading_hot" || String(data.address).toLowerCase() !== config.hotWallet.toLowerCase()) {
+      data.wallet_role !== "trading_hot" || data.data_quality_status !== "verified" || !data.secret_ref ||
+      String(data.address).toLowerCase() !== config.hotWallet.toLowerCase()) {
     throw new Error("approved_hot_wallet_configuration_mismatch");
   }
 }
 async function getExistingDeployment(config: ChainConfig) {
   const { data, error } = await supabase.from("flash_executor_deployments")
-    .select("chain,executor_address,deployment_tx_hash,status,source_verified,payout_audited")
+    .select("chain,executor_address,deployment_tx_hash,status,source_verified,payout_audited,profit_recipient_wallet_id,profit_recipient_address")
     .eq("chain", config.chain).maybeSingle();
   if (error) throw new Error("deployment_registry_lookup_failed");
   return data;
@@ -212,7 +273,7 @@ async function prepare(config: ChainConfig, bytecode: Hex) {
 async function codeAt(config: ChainConfig, address: string) {
   return String(await rpc(config, "eth_getCode", [address, "latest"]));
 }
-async function readGetter(config: ChainConfig, address: string, functionName: "HOT_WALLET" | "POOL") {
+async function readGetter(config: ChainConfig, address: string, functionName: "HOT_WALLET" | "PROFIT_RECIPIENT" | "POOL") {
   const calldata = encodeFunctionData({ abi: EXECUTOR_ABI, functionName });
   const raw = String(await rpc(config, "eth_call", [{ to: address, data: calldata }, "latest"]));
   return decodeFunctionResult({ abi: EXECUTOR_ABI, functionName, data: raw as Hex }) as string;
@@ -233,23 +294,30 @@ async function verifyAndRecord(config: ChainConfig, address: string, txHash: str
   const code = await codeAt(config, address);
   if (!/^0x[0-9a-f]+$/i.test(code) || code.length <= 2) throw new Error("executor_runtime_bytecode_missing");
   const hotWallet = await readGetter(config, address, "HOT_WALLET");
+  const profitRecipient = await readGetter(config, address, "PROFIT_RECIPIENT");
   const pool = await readGetter(config, address, "POOL");
   if (hotWallet.toLowerCase() !== config.hotWallet.toLowerCase()) throw new Error("executor_hot_wallet_getter_mismatch");
+  if (profitRecipient.toLowerCase() !== config.profitRecipient.toLowerCase()) throw new Error("executor_profit_recipient_getter_mismatch");
   if (pool.toLowerCase() !== config.pool.toLowerCase()) throw new Error("executor_pool_getter_mismatch");
   const verification = await sourcifyExact(config, address);
   const sourceVerified = verification.verified === true;
-  const payoutAudited = sourceVerified && hotWallet.toLowerCase() === config.hotWallet.toLowerCase() &&
+  const payoutAudited = sourceVerified &&
+    hotWallet.toLowerCase() === config.hotWallet.toLowerCase() &&
+    profitRecipient.toLowerCase() === config.profitRecipient.toLowerCase() &&
     pool.toLowerCase() === config.pool.toLowerCase();
   const { error } = await supabase.from("flash_executor_deployments").update({
     executor_address: address, deployment_tx_hash: txHash || existing.deployment_tx_hash,
     runtime_bytecode_hash: keccak256(code as Hex), status: sourceVerified ? "verified" : "deployed_unverified",
     source_verified: sourceVerified, payout_audited: payoutAudited, payout_behavior_verified: false,
+    profit_recipient_wallet_id: config.profitRecipientWalletId,
+    profit_recipient_address: config.profitRecipient,
     failure_code: null, updated_at: new Date().toISOString(),
   }).eq("chain", config.chain);
   if (error) throw new Error("deployment_registry_update_failed");
   return {
     ok: true, chain: config.chain, chain_id: config.chainId, executor_address: address,
-    deployment_tx_hash: txHash || existing.deployment_tx_hash, hot_wallet: hotWallet, pool,
+    deployment_tx_hash: txHash || existing.deployment_tx_hash, hot_wallet: hotWallet,
+    profit_recipient: profitRecipient, profit_recipient_wallet_id: config.profitRecipientWalletId, pool,
     runtime_bytecode_bytes: (code.length - 2) / 2, runtime_bytecode_hash: keccak256(code as Hex),
     source_verification: verification, payout_audited: payoutAudited,
     payout_behavior_verified: false, status: sourceVerified ? "verified" : "deployed_unverified",
@@ -261,25 +329,40 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return fail("invalid_json", 400); }
 
   const chain = String(body.chain || "");
-  const config = CONFIGS.get(chain);
-  if (!config) return fail("chain_not_allowlisted", 400);
+  const baseConfig = CONFIGS.get(chain);
+  if (!baseConfig) return fail("chain_not_allowlisted", 400);
 
   const mode = String(body.mode || "");
   if (!["provision_signer", "preflight", "deploy", "verify"].includes(mode)) {
     return fail("mode_not_allowlisted", 400);
   }
   const provisionMode = mode === "provision_signer";
-  const expectedPhrase = provisionMode ? PROVISION_CONFIRM_PHRASE : config.confirmPhrase;
+  const expectedPhrase = provisionMode ? PROVISION_CONFIRM_PHRASE : baseConfig.confirmPhrase;
   if (body.confirm_phrase !== expectedPhrase) return fail("confirmation_phrase_missing_or_invalid", 403);
 
   let identity: { workflowRef: string; runId: string; actor: string; sha: string; eventName: string };
   try {
-    identity = await authorizeGithub(req, provisionMode ? PROVISION_WORKFLOW : config.workflow);
+    identity = await authorizeGithub(req, provisionMode ? PROVISION_WORKFLOW : baseConfig.workflow);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const code = ["github_oidc_bearer_required", "github_oidc_claims_not_allowed"].includes(message)
       ? message : "github_oidc_validation_failed";
     return fail(code, 401);
+  }
+
+  let config: ChainConfig;
+  try {
+    config = await resolveConfiguredChain(baseConfig);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "executor_wallet_resolution_failed", 409, { broadcast_attempted: false });
+  }
+
+  if (mode === "deploy") {
+    const expectedHotWallet = String(body.expected_hot_wallet || "");
+    const expectedProfitRecipient = String(body.expected_profit_recipient || "");
+    if (expectedHotWallet.toLowerCase() !== config.hotWallet.toLowerCase() || expectedProfitRecipient.toLowerCase() !== config.profitRecipient.toLowerCase()) {
+      return fail("deployment_wallet_config_changed_since_preflight", 409, { hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient, broadcast_attempted: false });
+    }
   }
 
   if (provisionMode) {
@@ -330,6 +413,8 @@ Deno.serve(async (req) => {
         deployer_address: check.deployerAddress, balance_wei: check.balance.toString(),
         estimated_gas: check.gas.toString(), gas_price_wei: check.gasPrice.toString(),
         required_with_reserve_wei: check.requiredWithReserve.toString(), expected_contract_address: check.expectedAddress,
+        hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient,
+        profit_recipient_wallet_id: config.profitRecipientWalletId, pool: config.pool,
         init_code_hash: check.initCodeHash, broadcast_attempted: false });
     } catch (error) { return fail(error instanceof Error ? error.message : "deployment_preflight_failed", 409, { broadcast_attempted: false }); }
   }
@@ -347,6 +432,7 @@ Deno.serve(async (req) => {
     chain: config.chain, chain_id: config.chainId, contract_name: config.contractName,
     executor_address: prepared.expectedAddress, deployment_tx_hash: null, deployer_address: prepared.deployerAddress,
     deployment_nonce: prepared.nonce.toString(), hot_wallet_id: config.walletId, hot_wallet_address: config.hotWallet,
+    profit_recipient_wallet_id: config.profitRecipientWalletId, profit_recipient_address: config.profitRecipient,
     pool_address: config.pool, contract_source_blob_sha: config.sourceBlobSha, init_code_hash: prepared.initCodeHash,
     status: "pending", source_verified: false, payout_audited: false, payout_behavior_verified: false,
     github_workflow_ref: identity.workflowRef, github_run_id: identity.runId, updated_at: new Date().toISOString(),
@@ -387,6 +473,8 @@ Deno.serve(async (req) => {
   if (!receipt) return json({
     ok: true, mode: "deploy", status: "pending", chain: config.chain, chain_id: config.chainId,
     deployer_address: prepared.deployerAddress, executor_address: prepared.expectedAddress,
+    hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient,
+    profit_recipient_wallet_id: config.profitRecipientWalletId,
     deployment_tx_hash: txHash, broadcast_attempted: true, confirmed: false,
     note: "Transaction accepted by RPC; receipt not yet available. Do not resubmit.",
   }, 202);
