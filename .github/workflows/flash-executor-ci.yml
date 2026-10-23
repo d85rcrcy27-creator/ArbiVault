@@ -4,11 +4,17 @@ on:
   push:
     paths:
       - "contracts/ArbiVaultFlashExecutor.sol"
+      - "contracts/ArbiVaultEthereumFlashExecutor.sol"
+      - "test/ArbiVaultFlashExecutor.t.sol"
+      - "test/ArbiVaultEthereumFlashExecutor.t.sol"
       - "foundry.toml"
       - ".github/workflows/flash-executor-ci.yml"
   pull_request:
     paths:
       - "contracts/ArbiVaultFlashExecutor.sol"
+      - "contracts/ArbiVaultEthereumFlashExecutor.sol"
+      - "test/ArbiVaultFlashExecutor.t.sol"
+      - "test/ArbiVaultEthereumFlashExecutor.t.sol"
       - "foundry.toml"
       - ".github/workflows/flash-executor-ci.yml"
 
@@ -24,5 +30,9 @@ jobs:
         uses: actions/checkout@v7
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-      - name: Compile BNB flash executor
+      - name: Compile both chain executors
         run: forge build --sizes
+      - name: Test BNB flash executor
+        run: forge test --match-path test/ArbiVaultFlashExecutor.t.sol -vv
+      - name: Test Ethereum flash executor
+        run: forge test --match-path test/ArbiVaultEthereumFlashExecutor.t.sol -vv
