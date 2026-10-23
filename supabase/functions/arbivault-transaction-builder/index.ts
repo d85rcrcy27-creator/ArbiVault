@@ -1274,9 +1274,10 @@ Deno.serve(async (req) => {
     const amountRaw = String(body.amount_raw || "");
     const slippageBps = Number(body.slippage_bps ?? 50);
     const priceImpactPct = Number(body.price_impact_pct ?? 0);
-    const mode = body.mode === "quote" ? "quote" : "build";
+    const quoteOnlyMode = body.mode === "flash_quote" || body.mode === "quote";
+    const mode = quoteOnlyMode ? "quote" : "build";
 
-    if (!routeId || !sourceWalletId || !amountRaw || !["buy", "sell"].includes(side)) {
+    if (!routeId || (!sourceWalletId && !quoteOnlyMode) || !amountRaw || !["buy", "sell"].includes(side)) {
       return json({ error: "invalid_request" }, 400);
     }
     if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
@@ -1301,7 +1302,7 @@ Deno.serve(async (req) => {
 
     if (routeError) return json({ error: routeError.message }, 500);
     if (!route || route.enabled !== true) return json({ error: "route_not_enabled" }, 404);
-    if (route.discovery_only === true) return json({ error: "discovery_only_route_cannot_execute" }, 409);
+    if (route.discovery_only === true && !quoteOnlyMode) return json({ error: "discovery_only_route_cannot_execute" }, 409);
     const isAtomicFlashRoute =
       route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
       route.route_type === "flash_liquidity";
@@ -1314,7 +1315,6 @@ Deno.serve(async (req) => {
         transaction_builder: route.transaction_builder,
       }, 409);
     }
-    const quoteOnlyMode = body.mode === "flash_quote" || body.mode === "quote";
     // Pending executor routes may continue read-only quotes while builder_enabled=false.
     // Every other request still fails closed until the route is explicitly enabled.
     if (
@@ -1327,22 +1327,26 @@ Deno.serve(async (req) => {
       return json({ error: "route_type_not_supported_by_spot_builder" }, 409);
     }
 
-    const { data: wallet, error: walletError } = await supabase
-      .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
-      .eq("id", sourceWalletId)
-      .maybeSingle();
-
-    if (walletError) return json({ error: "source_wallet_lookup_failed" }, 503);
-    if (!wallet || wallet.status !== "active" || wallet.is_hot !== true || wallet.wallet_role !== "trading_hot") {
+    let wallet: any = null;
+    if (sourceWalletId) {
+      const { data, error: walletError } = await supabase
+        .from("wallets")
+        .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
+        .eq("id", sourceWalletId)
+        .maybeSingle();
+      if (walletError) return json({ error: "source_wallet_lookup_failed" }, 503);
+      wallet = data;
+    }
+    if (!wallet && !quoteOnlyMode) return json({ error: "source_wallet_not_active_trading_hot" }, 403);
+    if (wallet && (wallet.status !== "active" || wallet.is_hot !== true || wallet.wallet_role !== "trading_hot")) {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
     }
-    if (wallet.chain !== route.chain) return json({ error: "wallet_route_chain_mismatch" }, 403);
+    if (wallet && wallet.chain !== route.chain) return json({ error: "wallet_route_chain_mismatch" }, 403);
 
     // Read-only quotes can run without wallet approval; building an executable
     // payload requires verified provenance plus explicit owner-scoped approval.
     if (!quoteOnlyMode) {
-      if (wallet.data_quality_status !== "verified") {
+      if (!wallet || wallet.data_quality_status !== "verified") {
         return json({ error: "source_wallet_not_verified" }, 403);
       }
       const { data: approvedWallet, error: approvalError } = await supabase
