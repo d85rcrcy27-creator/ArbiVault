@@ -437,7 +437,7 @@ async function verifyExecutor(
   if (result.code_deployed !== true) return result;
 
   const { data: deployment, error: deploymentError } = await supabase.from("flash_executor_deployments")
-    .select("chain,executor_address,status,source_verified,payout_audited,runtime_bytecode_hash,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address")
+    .select("chain,executor_address,status,source_verified,payout_audited,runtime_bytecode_hash,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address,pool_address")
     .eq("chain", chain).eq("executor_address", executor).maybeSingle();
   const registryValid = !deploymentError && !!deployment && deployment.status === "verified" &&
     deployment.source_verified === true && deployment.payout_audited === true &&
@@ -534,11 +534,13 @@ async function diagnoseFlashExecutor() {
 
   const { data: generatedWalletRows, error: generatedWalletError } = await supabase
     .from("wallets")
-    .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
     .in("chain", ["bnb", "ethereum"])
     .eq("status", "active")
     .eq("is_hot", true)
-    .eq("wallet_role", "trading_hot");
+    .eq("wallet_role", "trading_hot")
+    .eq("data_quality_status", "verified")
+    .not("secret_ref", "is", null);
   const generatedWallets = (generatedWalletRows || []).filter((wallet: any) =>
     /^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || "")) &&
     ["bnb", "ethereum"].includes(wallet.chain)
