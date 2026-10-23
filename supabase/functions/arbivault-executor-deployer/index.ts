@@ -354,25 +354,33 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return fail("invalid_json", 400); }
 
   const chain = String(body.chain || "");
-  const config = CONFIGS.get(chain);
-  if (!config) return fail("chain_not_allowlisted", 400);
+  const baseConfig = CONFIGS.get(chain);
+  if (!baseConfig) return fail("chain_not_allowlisted", 400);
 
   const mode = String(body.mode || "");
   if (!["provision_signer", "preflight", "deploy", "verify"].includes(mode)) {
     return fail("mode_not_allowlisted", 400);
   }
   const provisionMode = mode === "provision_signer";
-  const expectedPhrase = provisionMode ? PROVISION_CONFIRM_PHRASE : config.confirmPhrase;
+  const expectedPhrase = provisionMode ? PROVISION_CONFIRM_PHRASE : baseConfig.confirmPhrase;
   if (body.confirm_phrase !== expectedPhrase) return fail("confirmation_phrase_missing_or_invalid", 403);
 
   let identity: { workflowRef: string; runId: string; actor: string; sha: string; eventName: string };
   try {
-    identity = await authorizeGithub(req, provisionMode ? PROVISION_WORKFLOW : config.workflow);
+    identity = await authorizeGithub(req, provisionMode ? PROVISION_WORKFLOW : baseConfig.workflow);
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     const code = ["github_oidc_bearer_required", "github_oidc_claims_not_allowed"].includes(message)
       ? message : "github_oidc_validation_failed";
     return fail(code, 401);
+  }
+
+  let config: ChainConfig;
+  try {
+    config = await resolveChainWalletConfig(baseConfig);
+  } catch (error) {
+    const blocker = error instanceof Error ? error.message : "active_chain_wallet_and_profit_destination_required";
+    return fail(blocker, 409, { chain, broadcast_attempted: false });
   }
 
   if (provisionMode) {
@@ -440,6 +448,7 @@ Deno.serve(async (req) => {
     chain: config.chain, chain_id: config.chainId, contract_name: config.contractName,
     executor_address: prepared.expectedAddress, deployment_tx_hash: null, deployer_address: prepared.deployerAddress,
     deployment_nonce: prepared.nonce.toString(), hot_wallet_id: config.walletId, hot_wallet_address: config.hotWallet,
+    profit_recipient_wallet_id: config.profitRecipientWalletId, profit_recipient_address: config.profitRecipient,
     pool_address: config.pool, contract_source_blob_sha: config.sourceBlobSha, init_code_hash: prepared.initCodeHash,
     status: "pending", source_verified: false, payout_audited: false, payout_behavior_verified: false,
     github_workflow_ref: identity.workflowRef, github_run_id: identity.runId, updated_at: new Date().toISOString(),
