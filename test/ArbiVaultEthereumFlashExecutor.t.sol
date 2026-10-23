@@ -27,6 +27,9 @@ contract ArbiVaultEthereumFlashExecutorTest {
 
     function testOnlyAllowlistedRouters() public {
         ArbiVaultEthereumFlashExecutor executor = new ArbiVaultEthereumFlashExecutor(AAVE_POOL, address(this), address(0xCAFE));
+        require(executor.HOT_WALLET() == address(this), "trading wallet getter mismatch");
+        require(executor.PROFIT_RECIPIENT() == PROFIT_RECIPIENT, "profit recipient getter mismatch");
+        require(address(executor.POOL()) == AAVE_POOL, "pool getter mismatch");
         require(executor.isAllowedRouter(UNISWAP_ROUTER), "Uniswap should be allowed");
         require(executor.isAllowedRouter(SUSHISWAP_ROUTER), "SushiSwap should be allowed");
         require(!executor.isAllowedRouter(address(0xBEEF)), "unknown router must be denied");
