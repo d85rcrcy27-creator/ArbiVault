@@ -41,7 +41,7 @@ async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethere
  let address='',secret='',derivation_path:string|null=null
  if(chain==='bnb'||chain==='ethereum'){const pk=generatePrivateKey(),account=privateKeyToAccount(pk);address=account.address;secret=pk;derivation_path='internal-random-secp256k1'}
  else if(chain==='solana'){const kp=Keypair.generate();address=kp.publicKey.toBase58();secret=Array.from(kp.secretKey).map(b=>b.toString(16).padStart(2,'0')).join('');derivation_path='internal-random-ed25519'}
- else if(chain==='xrp'){const xrplWallet=XrplWallet.generate();address=xrplWallet.address;secret=xrplWallet.seed;derivation_path='internal-random-xrpl-secp256k1'}
+ else if(chain==='xrp'){const xrplWallet=XrplWallet.generate();if(!xrplWallet.seed)throw new Error('xrp_seed_generation_failed');address=xrplWallet.address;secret=xrplWallet.seed;derivation_path='internal-random-xrpl-secp256k1'}
  else{const key=ECPair.makeRandom(),payment=bitcoin.payments.p2wpkh({pubkey:key.publicKey,network:bitcoin.networks.bitcoin});if(!payment.address)throw new Error('bitcoin_address_derivation_failed');address=payment.address;secret=key.toWIF();derivation_path='internal-random-secp256k1-p2wpkh'}
  const {data:wallet,error}=await admin.from('wallets').insert({owner_id:userId,chain,address,label:'ArbiVault '+chain.toUpperCase()+' trading hot wallet',status:'active',is_hot:true,custody_type:'server_vault',wallet_role:'trading_hot',verification_source:'arbivault-wallet-bootstrap',data_quality_status:'verified',derivation_path}).select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').single()
  if(error||!wallet)throw new Error(error?.message||'wallet_create_failed')
