@@ -1300,9 +1300,9 @@ Deno.serve(async (req) => {
   }
 
   try {
-    await syncExecutorRegistry();
     const body = await req.json();
     if (body?.mode === "diagnostic") {
+      await syncExecutorRegistry();
       return json(await diagnoseFlashExecutor());
     }
     const routeId = String(body.route_id || "");
@@ -1343,6 +1343,9 @@ Deno.serve(async (req) => {
     const isAtomicFlashRoute =
       route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
       route.route_type === "flash_liquidity";
+    // Executor registry health is relevant only to atomic flash-loan routes.
+    // Standard DEX swaps must not fail because the flash-executor registry is unavailable.
+    if (isAtomicFlashRoute) await syncExecutorRegistry();
     if (!builderRouteCompatible(route)) {
       return json({
         error: "route_builder_chain_pair_mismatch",
