@@ -114,6 +114,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: "payout_test_requires_discovery_only_disabled_builder_route" }, 409);
     }
 
+    const blockers: string[] = [];
     const { data: walletBindings, error: bindingError } = await admin
       .from("arbivault_strategy_wallets")
       .select("wallet_id,chain,purpose,status")
@@ -124,31 +125,37 @@ Deno.serve(async (req: Request) => {
       .eq("status", "assigned");
     if (bindingError) return json({ ok: false, error: "strategy_wallet_binding_lookup_failed" }, 503);
     const boundIds = (walletBindings || []).map((binding: any) => binding.wallet_id).filter(Boolean);
-    if (!boundIds.length) return json({ ok: false, error: "strategy_wallet_binding_missing" }, 409);
+    if (!boundIds.length) blockers.push("strategy_wallet_binding_missing");
 
-    const { data: wallets, error: walletError } = await admin
-      .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
-      .eq("owner_id", user.id)
-      .eq("chain", chain)
-      .in("id", boundIds)
-      .eq("status", "active")
-      .eq("is_hot", true)
-      .eq("wallet_role", "trading_hot")
-      .eq("data_quality_status", "verified");
+    const { data: wallets, error: walletError } = boundIds.length
+      ? await admin
+          .from("wallets")
+          .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
+          .eq("owner_id", user.id)
+          .eq("chain", chain)
+          .in("id", boundIds)
+          .eq("status", "active")
+          .eq("is_hot", true)
+          .eq("wallet_role", "trading_hot")
+          .eq("data_quality_status", "verified")
+      : { data: [], error: null };
     if (walletError) return json({ ok: false, error: "strategy_wallet_lookup_failed" }, 503);
     const wallet = (wallets || []).length === 1 ? wallets[0] : null;
-    if (!wallet) return json({ ok: false, error: "unique_active_verified_strategy_hot_wallet_required" }, 409);
-    const { data: approval, error: approvalError } = await admin
-      .from("approved_wallets")
-      .select("id")
-      .eq("owner_id", user.id)
-      .eq("wallet_id", wallet.id)
-      .eq("status", "approved")
-      .maybeSingle();
-    if (approvalError) return json({ ok: false, error: "wallet_approval_lookup_failed" }, 503);
-    if (!approval) return json({ ok: false, error: "strategy_hot_wallet_not_approved" }, 409);
+    if (!wallet) blockers.push("unique_active_verified_strategy_hot_wallet_required");
 
+    let approval = null;
+    if (wallet) {
+      const { data, error: approvalError } = await admin
+        .from("approved_wallets")
+        .select("id")
+        .eq("owner_id", user.id)
+        .eq("wallet_id", wallet.id)
+        .eq("status", "approved")
+        .maybeSingle();
+      if (approvalError) return json({ ok: false, error: "wallet_approval_lookup_failed" }, 503);
+      approval = data;
+    }
+    if (!approval) blockers.push("strategy_hot_wallet_not_approved");
     if (route.payout_test_used_at || route.payout_test_execution_attempt_id) {
       return json({
         ok: true,
@@ -162,27 +169,46 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { data: adapter, error: adapterError } = await admin
-      .from("execution_adapters")
-      .select("id,chain,configured,health_status,read_only,can_broadcast,automatic_signing,signer_provider,allowed_wallet_id")
-      .eq("chain", chain)
-      .eq("allowed_wallet_id", wallet.id)
-      .maybeSingle();
+    const { data: adapter, error: adapterError } = wallet
+      ? await admin
+          .from("execution_adapters")
+          .select("id,chain,configured,health_status,read_only,can_broadcast,automatic_signing,signer_provider,allowed_wallet_id")
+          .eq("chain", chain)
+          .eq("allowed_wallet_id", wallet.id)
+          .maybeSingle()
+      : { data: null, error: null };
     if (adapterError) return json({ ok: false, error: "execution_adapter_lookup_failed" }, 503);
     const adapterReady = !!adapter && adapter.configured === true &&
       adapter.health_status === "healthy" && adapter.read_only === false &&
       adapter.can_broadcast === true && adapter.automatic_signing === true &&
       adapter.signer_provider === "internal_vault";
+    if (!adapterReady) blockers.push("healthy_internal_signer_adapter_not_configured_for_bound_wallet");
 
     let chainDiagnostic: any = null;
-    let blockers: string[] = [];
     try {
       const diagnostic = await builderDiagnostic();
       chainDiagnostic = chain === "ethereum" ? diagnostic.ethereum : diagnostic.bnb;
-      blockers = diagnosticBlockers(chainDiagnostic, String(wallet.address));
-      if (!adapterReady) blockers.push("healthy_internal_signer_adapter_not_configured_for_bound_wallet");
+      blockers.push(...diagnosticBlockers(chainDiagnostic, String(wallet?.address || "")));
     } catch (error) {
-      blockers = [error instanceof Error ? error.message : "executor_diagnostic_failed"];
+      blockers.push(error instanceof Error ? error.message : "executor_diagnostic_failed");
+    }
+
+    const { data: executorRegistry, error: executorRegistryError } = await admin
+      .from("flash_executor_deployments")
+      .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
+      .eq("chain", chain)
+      .maybeSingle();
+    if (executorRegistryError) blockers.push("executor_registry_lookup_failed");
+    else if (!executorRegistry) blockers.push("executor_deployment_registry_row_missing");
+    else {
+      if (executorRegistry.status !== "verified") blockers.push("executor_registry_status_not_verified");
+      if (executorRegistry.source_verified !== true) blockers.push("executor_source_not_verified_in_registry");
+      if (executorRegistry.payout_audited !== true) blockers.push("executor_payout_not_audited_in_registry");
+      if (executorRegistry.payout_behavior_verified === true) blockers.push("executor_payout_behavior_already_verified");
+      if (chainDiagnostic?.executor?.address &&
+          String(executorRegistry.executor_address || "").toLowerCase() !== String(chainDiagnostic.executor.address).toLowerCase()) {
+        blockers.push("executor_registry_address_differs_from_live_diagnostic");
+      }
     }
     const { data: executionPolicy, error: policyError } = await admin
       .from("arbivault_execution_policy")
@@ -196,8 +222,8 @@ Deno.serve(async (req: Request) => {
       (!executionPolicy.ends_at || new Date(executionPolicy.ends_at).getTime() > policyNow);
     if (!policyActive) blockers.push(policyError ? "execution_policy_lookup_failed" : "execution_policy_not_active");
     const alreadyVerified = chainDiagnostic?.payout_behavior_verified === true ||
-      chainDiagnostic?.executor?.payout_behavior_verified === true;
-    if (alreadyVerified) blockers.push("executor_payout_behavior_already_verified");
+      chainDiagnostic?.executor?.payout_behavior_verified === true ||
+      executorRegistry?.payout_behavior_verified === true;
     const alreadyAuthorizedByUser = route.payout_test_authorized === true &&
       String(route.payout_test_authorized_by || "") === String(user.id);
     const authorizedByAnotherUser = route.payout_test_authorized === true && !alreadyAuthorizedByUser;
@@ -210,7 +236,7 @@ Deno.serve(async (req: Request) => {
     if (action === "status") {
       return json({
         ok: true, chain, route_id: route.id, pair: route.pair, strategy_bot_id: bot.id,
-        wallet_id: wallet.id, wallet_address: wallet.address, executor: chainDiagnostic?.executor || null,
+        wallet_id: wallet?.id || null, wallet_address: wallet?.address || null, executor: chainDiagnostic?.executor || null,
         chain_diagnostic: chainDiagnostic,
         payout_test_authorized: alreadyAuthorizedByUser,
         payout_test_authorization_state: alreadyAuthorizedByUser
