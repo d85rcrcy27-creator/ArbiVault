@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { encodeFunctionData, decodeFunctionResult, parseAbi } from "npm:viem@2.39.0";
+import { encodeFunctionData, decodeFunctionResult, keccak256, parseAbi } from "npm:viem@2.39.0";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -14,8 +14,8 @@ let ETH_FLASH_EXECUTOR = ENV_ETH_FLASH_EXECUTOR;
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const ENV_BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 let BSC_FLASH_EXECUTOR = ENV_BSC_FLASH_EXECUTOR;
-// Fail closed until the deployed executor contract source and live bytecode prove that
-// realized profits are paid to the calling ArbiVault trading hot wallet.
+// Fail closed until the deployed executor source and runtime prove that
+// realized profits are sent to the separately registered profit destination.
 const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
 const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
@@ -412,128 +412,100 @@ async function verifyExecutor(
 ) {
   const validAddress = /^0x[a-fA-F0-9]{40}$/.test(executor);
   const result: Record<string, unknown> = {
-    configured: validAddress,
-    address: validAddress ? executor : null,
-    code_deployed: false,
-    bytecode_hash: null,
-    bytecode_size_bytes: 0,
-    trading_wallet_address: null,
-    trading_wallet_matches_generated_hot_wallet: false,
-    payout_recipient_address: null,
-    payout_recipient_matches_profit_destination: false,
+    configured: validAddress, address: validAddress ? executor : null,
+    code_deployed: false, bytecode_hash: null, runtime_bytecode_hash: null, bytecode_size_bytes: 0,
+    trading_wallet_address: null, trading_wallet_matches_generated_hot_wallet: false,
+    payout_recipient_address: null, payout_recipient_matches_profit_destination: false,
     payout_recipient_matches_generated_hot_wallet: false,
-    pool_address: null,
-    pool_matches_expected: false,
-    matched_generated_wallet_id: null,
+    pool_address: null, pool_matches_expected: false,
+    matched_generated_wallet_id: null, matched_profit_recipient_wallet_id: null,
     source_verification: { checked: false, verified: false, match: null, runtime_match: null },
+    payout_audited: false,
   };
   if (!validAddress) return result;
+  let code = "";
   try {
-    const code = String(await readCode(executor));
+    code = String(await readCode(executor));
     result.code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
     result.bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
     result.bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
+    result.runtime_bytecode_hash = code.length > 2 ? keccak256(code as `0x${string}`) : null;
   } catch (error) {
     result.code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
     return result;
   }
   if (result.code_deployed !== true) return result;
 
-  try {
-    const callData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
-    const raw = String(await readCall(executor, callData));
-    const recipient = decodeFunctionResult({
-      abi: FLASH_EXECUTOR_PAYOUT_ABI,
-      functionName: "HOT_WALLET",
-      data: raw as `0x${string}`,
-    }) as string;
-    result.trading_wallet_address = recipient;
-    const match = generatedWallets.find((wallet) =>
-      wallet.chain === chain &&
-      /^0x[a-fA-F0-9]{40}$/.test(wallet.address || "") &&
-      wallet.address.toLowerCase() === recipient.toLowerCase()
-    );
-    result.trading_wallet_matches_generated_hot_wallet = !!match;
-    result.matched_generated_wallet_id = match?.id || null;
-    result.matched_generated_wallet_owner_id = match?.owner_id || null;
-  } catch (error) {
-    result.trading_wallet_read_error = error instanceof Error ? error.message : "executor_hot_wallet_getter_failed";
-  }
+  const { data: deployment, error: deploymentError } = await supabase.from("flash_executor_deployments")
+    .select("chain,executor_address,status,source_verified,payout_audited,runtime_bytecode_hash,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address,pool_address")
+    .eq("chain", chain).eq("executor_address", executor).maybeSingle();
+  const registryValid = !deploymentError && !!deployment && deployment.status === "verified" &&
+    deployment.source_verified === true && deployment.payout_audited === true &&
+    !!deployment.hot_wallet_id && !!deployment.hot_wallet_address &&
+    !!deployment.profit_recipient_wallet_id && !!deployment.profit_recipient_address;
+  result.registry_entry_verified = registryValid;
+  result.runtime_bytecode_hash_matches_registry = !!deployment?.runtime_bytecode_hash &&
+    String(result.runtime_bytecode_hash).toLowerCase() === String(deployment.runtime_bytecode_hash).toLowerCase();
 
   try {
-    const callData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "PROFIT_RECIPIENT" });
-    const raw = String(await readCall(executor, callData));
-    const profitRecipient = decodeFunctionResult({
-      abi: FLASH_EXECUTOR_PAYOUT_ABI,
-      functionName: "PROFIT_RECIPIENT",
-      data: raw as `0x${string}`,
-    }) as string;
+    const [hotRaw, recipientRaw, poolRaw] = await Promise.all([
+      readCall(executor, encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" })),
+      readCall(executor, encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "PROFIT_RECIPIENT" })),
+      readCall(executor, encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" })),
+    ]);
+    const hotWallet = decodeFunctionResult({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET", data: String(hotRaw) as `0x${string}` }) as string;
+    const profitRecipient = decodeFunctionResult({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "PROFIT_RECIPIENT", data: String(recipientRaw) as `0x${string}` }) as string;
+    const pool = decodeFunctionResult({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL", data: String(poolRaw) as `0x${string}` }) as string;
+    result.trading_wallet_address = hotWallet;
     result.payout_recipient_address = profitRecipient;
+    result.pool_address = pool;
+    result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase() &&
+      (!deployment?.pool_address || String(deployment.pool_address).toLowerCase() === pool.toLowerCase());
 
-    const { data: deployment, error: deploymentError } = await supabase.from("flash_executor_deployments")
-      .select("hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address")
-      .eq("chain", chain).eq("executor_address", executor).maybeSingle();
-    if (deploymentError || !deployment?.profit_recipient_wallet_id) {
-      throw new Error("executor_profit_recipient_registry_entry_missing");
+    const trading = generatedWallets.find((wallet) =>
+      wallet.chain === chain && /^0x[a-fA-F0-9]{40}$/.test(wallet.address || "") &&
+      String(wallet.id) === String(deployment?.hot_wallet_id) &&
+      wallet.address.toLowerCase() === hotWallet.toLowerCase() &&
+      !!deployment?.hot_wallet_address && wallet.address.toLowerCase() === String(deployment.hot_wallet_address).toLowerCase()
+    );
+    result.trading_wallet_matches_generated_hot_wallet = !!trading;
+    result.matched_generated_wallet_id = trading?.id || null;
+    result.matched_generated_wallet_owner_id = trading?.owner_id || null;
+
+    if (deployment?.profit_recipient_wallet_id && deployment?.profit_recipient_address) {
+      const { data: recipientWallet, error: recipientError } = await supabase.from("wallets")
+        .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+        .eq("id", deployment.profit_recipient_wallet_id).maybeSingle();
+      const recipientWalletValid = !recipientError && !!recipientWallet && recipientWallet.status === "active" &&
+        recipientWallet.chain === chain && recipientWallet.is_hot === false && recipientWallet.wallet_role === "profit_recipient" &&
+        recipientWallet.data_quality_status === "verified" && !!recipientWallet.secret_ref &&
+        String(recipientWallet.address).toLowerCase() === profitRecipient.toLowerCase() &&
+        String(deployment.profit_recipient_address).toLowerCase() === profitRecipient.toLowerCase() &&
+        !!trading && recipientWallet.owner_id === trading.owner_id &&
+        profitRecipient.toLowerCase() !== hotWallet.toLowerCase();
+      let activeProfile = false;
+      if (recipientWalletValid && recipientWallet) {
+        const { data: profile, error: profileError } = await supabase.from("profit_recipient_profiles")
+          .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+          .eq("owner_id", recipientWallet.owner_id).eq("wallet_id", recipientWallet.id)
+          .eq("chain", chain).eq("asset", "ALL").eq("status", "active").maybeSingle();
+        activeProfile = !profileError && !!profile &&
+          (!profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now());
+      }
+      result.payout_recipient_matches_profit_destination = recipientWalletValid && activeProfile && registryValid;
+      result.matched_profit_recipient_wallet_id = result.payout_recipient_matches_profit_destination === true ? recipientWallet?.id || null : null;
     }
-
-    const { data: recipientWallet, error: recipientWalletError } = await supabase.from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
-      .eq("id", deployment.profit_recipient_wallet_id)
-      .maybeSingle();
-    if (recipientWalletError || !recipientWallet) throw new Error("profit_destination_wallet_not_found");
-
-    const { data: profile, error: profileError } = await supabase.from("profit_recipient_profiles")
-      .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
-      .eq("owner_id", recipientWallet.owner_id)
-      .eq("wallet_id", recipientWallet.id)
-      .eq("chain", chain)
-      .eq("asset", "ALL")
-      .eq("status", "active")
-      .maybeSingle();
-    if (profileError) throw new Error("active_profit_destination_profile_lookup_failed");
-
-    const recipientValid = recipientWallet.status === "active" &&
-      recipientWallet.chain === chain &&
-      recipientWallet.is_hot === false &&
-      recipientWallet.wallet_role === "profit_recipient" &&
-      recipientWallet.data_quality_status === "verified" &&
-      !!recipientWallet.secret_ref &&
-      /^0x[a-fA-F0-9]{40}$/.test(String(recipientWallet.address || ""));
-    const profileValid = !!profile &&
-      (!profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now());
-    const registryValid = String(deployment.profit_recipient_address || "").toLowerCase() === profitRecipient.toLowerCase() &&
-      String(deployment.hot_wallet_address || "").toLowerCase() === String(result.trading_wallet_address || "").toLowerCase() &&
-      String(deployment.hot_wallet_id || "") === String(result.matched_generated_wallet_id || "");
-    result.payout_recipient_matches_profit_destination =
-      recipientValid && profileValid && registryValid &&
-      String(recipientWallet.address).toLowerCase() === profitRecipient.toLowerCase();
-    result.matched_profit_recipient_wallet_id =
-      result.payout_recipient_matches_profit_destination === true ? recipientWallet.id : null;
     result.payout_recipient_matches_generated_hot_wallet = false;
   } catch (error) {
-    result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_profit_recipient_getter_failed";
-  }
-
-  try {
-    const poolCallData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" });
-    const poolRaw = String(await readCall(executor, poolCallData));
-    const pool = decodeFunctionResult({
-      abi: FLASH_EXECUTOR_PAYOUT_ABI,
-      functionName: "POOL",
-      data: poolRaw as `0x${string}`,
-    }) as string;
-    result.pool_address = pool;
-    result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase();
-  } catch (error) {
-    result.pool_read_error = error instanceof Error ? error.message : "executor_pool_getter_failed";
+    result.executor_getter_read_error = error instanceof Error ? error.message : "executor_getter_read_failed";
   }
 
   result.source_verification = await lookupSourcifyVerification(chainId, executor);
   result.payout_audited = result.code_deployed === true &&
+    result.runtime_bytecode_hash_matches_registry === true &&
     result.trading_wallet_matches_generated_hot_wallet === true &&
     result.payout_recipient_matches_profit_destination === true &&
-    result.pool_matches_expected === true &&
+    result.pool_matches_expected === true && registryValid &&
     (result.source_verification as any)?.verified === true;
   return result;
 }
@@ -542,7 +514,7 @@ async function diagnoseFlashExecutor() {
   const result: Record<string, unknown> = {
     diagnostic_only: true,
     payout_behavior_verified: false,
-    payout_audit_reason: "Payout routing requires immutable HOT_WALLET and PROFIT_RECIPIENT getters to match separate, active, same-chain ArbiVault wallets with exact source/runtime verification. End-to-end payout still requires a confirmed on-chain receipt and recipient balance delta.",
+    payout_audit_reason: "Payout routing requires immutable HOT_WALLET and PROFIT_RECIPIENT getters to match separate active same-chain ArbiVault wallets with exact source/runtime verification. End-to-end payout still requires a confirmed on-chain receipt and recipient balance delta.",
     transaction_building_enabled: false,
     bnb: {
       network: "BNB Smart Chain mainnet",
@@ -562,11 +534,13 @@ async function diagnoseFlashExecutor() {
 
   const { data: generatedWalletRows, error: generatedWalletError } = await supabase
     .from("wallets")
-    .select("id,owner_id,chain,address,status,is_hot,wallet_role")
+    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
     .in("chain", ["bnb", "ethereum"])
     .eq("status", "active")
     .eq("is_hot", true)
-    .eq("wallet_role", "trading_hot");
+    .eq("wallet_role", "trading_hot")
+    .eq("data_quality_status", "verified")
+    .not("secret_ref", "is", null);
   const generatedWallets = (generatedWalletRows || []).filter((wallet: any) =>
     /^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || "")) &&
     ["bnb", "ethereum"].includes(wallet.chain)
@@ -654,12 +628,9 @@ async function diagnoseFlashExecutor() {
   result.executor_bytecode_hash = (bnb.executor as any).bytecode_hash || null;
   result.source_verification = (bnb.executor as any).source_verification;
   result.payout_recipient_address = (bnb.executor as any).payout_recipient_address || null;
-  result.payout_recipient_matches_generated_hot_wallet = false;
-  result.trading_wallet_address = (bnb.executor as any).trading_wallet_address || null;
-  result.trading_wallet_matches_generated_hot_wallet = (bnb.executor as any).trading_wallet_matches_generated_hot_wallet === true;
-  result.payout_recipient_matches_profit_destination = (bnb.executor as any).payout_recipient_matches_profit_destination === true;
+  result.payout_recipient_matches_generated_hot_wallet = (bnb.executor as any).trading_wallet_matches_generated_hot_wallet === true &&
+    (bnb.executor as any).payout_recipient_matches_profit_destination === true;
   result.matched_generated_wallet_id = (bnb.executor as any).matched_generated_wallet_id || null;
-  result.matched_profit_recipient_wallet_id = (bnb.executor as any).matched_profit_recipient_wallet_id || null;
   result.aave_pool_resolved = bnb.aave_pool_resolved === true;
   result.aave_pool_address = bnb.aave_pool_address || null;
   result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
@@ -667,12 +638,9 @@ async function diagnoseFlashExecutor() {
   result.ethereum_flash_executor_address = (eth.executor as any).address || null;
   result.ethereum_payout_behavior_verified = false;
   result.ethereum_payout_recipient_address = (eth.executor as any).payout_recipient_address || null;
-  result.ethereum_payout_recipient_matches_generated_hot_wallet = false;
-  result.ethereum_trading_wallet_address = (eth.executor as any).trading_wallet_address || null;
-  result.ethereum_trading_wallet_matches_generated_hot_wallet = (eth.executor as any).trading_wallet_matches_generated_hot_wallet === true;
-  result.ethereum_payout_recipient_matches_profit_destination = (eth.executor as any).payout_recipient_matches_profit_destination === true;
+  result.ethereum_payout_recipient_matches_generated_hot_wallet = (eth.executor as any).trading_wallet_matches_generated_hot_wallet === true &&
+    (eth.executor as any).payout_recipient_matches_profit_destination === true;
   result.ethereum_matched_generated_wallet_id = (eth.executor as any).matched_generated_wallet_id || null;
-  result.ethereum_matched_profit_recipient_wallet_id = (eth.executor as any).matched_profit_recipient_wallet_id || null;
   result.ethereum_aave_pool_resolved = eth.aave_pool_resolved === true;
   result.ethereum_aave_pool_address = eth.aave_pool_address || null;
   return result;

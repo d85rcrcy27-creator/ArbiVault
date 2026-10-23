@@ -779,8 +779,8 @@ export default {
               trading_wallet_matches_generated_hot_wallet: executor.trading_wallet_matches_generated_hot_wallet === true,
               payout_recipient_address: executor.payout_recipient_address || null,
               payout_recipient_matches_profit_destination: executor.payout_recipient_matches_profit_destination === true,
+              payout_recipient_matches_generated_hot_wallet: false,
               matched_generated_wallet_id: executor.matched_generated_wallet_id || null,
-              matched_profit_recipient_wallet_id: executor.matched_profit_recipient_wallet_id || null,
               ready_for_transaction_test: blocker === 'ready_for_explicit_preflight',
               blocker,
             }
