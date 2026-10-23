@@ -22,7 +22,6 @@ jobs:
       DEPLOY_URL: "https://karbtrfzxfyipxkhhqjz.supabase.co/functions/v1/arbivault-executor-deployer"
       CHAIN: "ethereum"
       CONFIRM_PHRASE: "DEPLOY_TO_ETHEREUM_MAINNET"
-      HOT_WALLET: "0xFfd52F7A182887a0382f2Cef33627af2F6BF0E27"
       AAVE_POOL: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
 
     steps:
@@ -40,7 +39,7 @@ jobs:
           forge build --sizes
           forge test --match-path test/ArbiVaultEthereumFlashExecutor.t.sol -vv
           source_sha="$(git rev-parse HEAD:contracts/ArbiVaultEthereumFlashExecutor.sol)"
-          expected_sha="276dd92d982054a21dbff756fd8ffbe14f97f3b2"
+          expected_sha="4f260f58ffe7201cc478db7752f4622d8df571ac"
           if [[ "$source_sha" != "$expected_sha" ]]; then
             echo "::error::Executor source revision is not the reviewed, allowlisted source."
             exit 1
@@ -97,12 +96,20 @@ jobs:
             echo "::error::Supabase deployment preflight failed; no transaction was broadcast."
             exit 1
           fi
+          hot_wallet="$(jq -er '.hot_wallet' "$RUNNER_TEMP/preflight.json")"
+          profit_recipient="$(jq -er '.profit_recipient' "$RUNNER_TEMP/preflight.json")"
+          if [[ ! "$hot_wallet" =~ ^0x[a-fA-F0-9]{40}$ || ! "$profit_recipient" =~ ^0x[a-fA-F0-9]{40}$ ]]; then
+            echo "::error::Server did not return valid chain wallet destinations."
+            exit 1
+          fi
+          echo "hot_wallet=$hot_wallet" >> "$GITHUB_OUTPUT"
+          echo "profit_recipient=$profit_recipient" >> "$GITHUB_OUTPUT"
           deployer="$(jq -er '.deployer_address' "$RUNNER_TEMP/preflight.json")"
           deployer_lower="$(printf '%s' "$deployer" | tr '[:upper:]' '[:lower:]')"
-          bsc_hot_lower="0xea37838f3361b80601756f7b0d770a5f5f38c486"
-          eth_hot_lower="0xffd52f7a182887a0382f2cef33627af2f6bf0e27"
-          if [[ "$deployer_lower" == "$bsc_hot_lower" || "$deployer_lower" == "$eth_hot_lower" ]]; then
-            echo "::error::Deployment key resolves to a trading hot wallet; refusing to use a trading key for contract deployment."
+          hot_lower="$(printf '%s' "$hot_wallet" | tr '[:upper:]' '[:lower:]')"
+          recipient_lower="$(printf '%s' "$profit_recipient" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$deployer_lower" == "$hot_lower" || "$deployer_lower" == "$recipient_lower" ]]; then
+            echo "::error::Deployment signer overlaps a trading or profit destination wallet."
             exit 1
           fi
 
@@ -112,6 +119,8 @@ jobs:
         env:
           SOURCE_BLOB_SHA: ${{ steps.compile.outputs.contract_source_blob_sha }}
           CREATION_BYTECODE: ${{ steps.compile.outputs.creation_bytecode }}
+          HOT_WALLET: ${{ steps.preflight.outputs.hot_wallet }}
+          PROFIT_RECIPIENT: ${{ steps.preflight.outputs.profit_recipient }}
         run: |
           set -euo pipefail
           get_oidc_token() {
@@ -120,7 +129,7 @@ jobs:
             curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "$ACTIONS_ID_TOKEN_REQUEST_URL$separator"audience=arbivault-executor-deployer | jq -er '.value'
           }
-          payload="$(jq -cn --arg mode "deploy" --arg chain "$CHAIN" --arg phrase "$CONFIRM_PHRASE" --arg sha "$SOURCE_BLOB_SHA" --arg bytecode "$CREATION_BYTECODE" '{mode:$mode,chain:$chain,confirm_phrase:$phrase,contract_source_blob_sha:$sha,creation_bytecode:$bytecode}')"
+          payload="$(jq -cn --arg mode "deploy" --arg chain "$CHAIN" --arg phrase "$CONFIRM_PHRASE" --arg sha "$SOURCE_BLOB_SHA" --arg bytecode "$CREATION_BYTECODE" --arg hot "$HOT_WALLET" --arg recipient "$PROFIT_RECIPIENT" '{mode:$mode,chain:$chain,confirm_phrase:$phrase,contract_source_blob_sha:$sha,creation_bytecode:$bytecode,expected_hot_wallet:$hot,expected_profit_recipient:$recipient}')"
           token="$(get_oidc_token)"
           status="$(curl -sS -o "$RUNNER_TEMP/deploy.json" -w '%{http_code}' -X POST "$DEPLOY_URL" -H "Authorization: Bearer $token" -H "Content-Type: application/json" -d "$payload")"
           cat "$RUNNER_TEMP/deploy.json"
@@ -134,6 +143,8 @@ jobs:
       - name: Independently verify bytecode and immutable payout configuration
         env:
           CONTRACT_ADDRESS: ${{ steps.deploy.outputs.contract_address }}
+          HOT_WALLET: ${{ steps.preflight.outputs.hot_wallet }}
+          PROFIT_RECIPIENT: ${{ steps.preflight.outputs.profit_recipient }}
         shell: bash
         run: |
           set -euo pipefail
@@ -145,10 +156,12 @@ jobs:
           fi
           payout="$(cast call "$CONTRACT_ADDRESS" 'HOT_WALLET()(address)' --rpc-url "$RPC_URL" | tr '[:upper:]' '[:lower:]')"
           expected_payout="$(printf '%s' "$HOT_WALLET" | tr '[:upper:]' '[:lower:]')"
+          recipient="$(cast call "$CONTRACT_ADDRESS" 'PROFIT_RECIPIENT()(address)' --rpc-url "$RPC_URL" | tr '[:upper:]' '[:lower:]')"
+          expected_recipient="$(printf '%s' "$PROFIT_RECIPIENT" | tr '[:upper:]' '[:lower:]')"
           pool="$(cast call "$CONTRACT_ADDRESS" 'POOL()(address)' --rpc-url "$RPC_URL" | tr '[:upper:]' '[:lower:]')"
           expected_pool="$(printf '%s' "$AAVE_POOL" | tr '[:upper:]' '[:lower:]')"
-          if [[ "$payout" != "$expected_payout" || "$pool" != "$expected_pool" ]]; then
-            echo "::error::Immutable HOT_WALLET or POOL getter mismatch"
+          if [[ "$payout" != "$expected_payout" || "$recipient" != "$expected_recipient" || "$pool" != "$expected_pool" ]]; then
+            echo "::error::Immutable trading wallet, profit recipient, or pool getter mismatch"
             exit 1
           fi
 
@@ -160,7 +173,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$RPC_URL" ]]; then RPC_URL="https://ethereum-rpc.publicnode.com"; fi
-          constructor_args="$(cast abi-encode 'constructor(address,address)' "$AAVE_POOL" "$HOT_WALLET")"
+          constructor_args="$(cast abi-encode 'constructor(address,address,address)' "$AAVE_POOL" "$HOT_WALLET" "$PROFIT_RECIPIENT")"
           forge verify-contract --chain-id 1 --verifier sourcify --constructor-args "$constructor_args" "$CONTRACT_ADDRESS" contracts/ArbiVaultEthereumFlashExecutor.sol:ArbiVaultEthereumFlashExecutor
 
       - name: Require exact source/runtime match and record payout audit
@@ -192,6 +205,7 @@ jobs:
             echo "Contract: $(jq -r '.executor_address' "$RUNNER_TEMP/verify.json")"
             echo "Deployment transaction: $(jq -r '.deployment_tx_hash' "$RUNNER_TEMP/verify.json")"
             echo "Immutable HOT_WALLET: $(jq -r '.hot_wallet' "$RUNNER_TEMP/verify.json")"
+            echo "Immutable PROFIT_RECIPIENT: $(jq -r '.profit_recipient' "$RUNNER_TEMP/verify.json")"
             echo "Immutable POOL: $(jq -r '.pool' "$RUNNER_TEMP/verify.json")"
             echo "Exact source/runtime verification: passed"
             echo "Payout configuration audit: passed"
