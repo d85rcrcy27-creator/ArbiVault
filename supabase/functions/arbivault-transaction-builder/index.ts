@@ -419,76 +419,157 @@ async function verifyExecutor(
   executor: string,
   readCode: (address: string) => Promise<unknown>,
   readCall: (address: string, data: string) => Promise<unknown>,
-  generatedWallets: Array<{ id: string; owner_id: string; chain: string; address: string }>,
+  generatedWallets: Array<Record<string, any>>,
+  profitDestinations: Array<Record<string, any>>,
   expectedPool: string,
+  registry: Record<string, any> | null,
+  expectedSourceBlobSha: string,
 ) {
   const validAddress = /^0x[a-fA-F0-9]{40}$/.test(executor);
-  const result: Record<string, unknown> = {
+  const registryAddressMatches = !!registry &&
+    /^0x[a-fA-F0-9]{40}$/.test(String(registry.executor_address || "")) &&
+    String(registry.executor_address).toLowerCase() === executor.toLowerCase();
+  const result: Record<string, any> = {
     configured: validAddress,
     address: validAddress ? executor : null,
+    registry_backed: registryAddressMatches,
+    registry_status: registry?.status || "missing",
+    registry_chain_id_match: !!registry && Number(registry.chain_id) === Number(chainId),
+    registry_source_blob_sha_match: !!registry &&
+      String(registry.contract_source_blob_sha || "") === expectedSourceBlobSha,
     code_deployed: false,
     bytecode_hash: null,
     bytecode_size_bytes: 0,
+    runtime_bytecode_hash_match: false,
+    hot_wallet_address: null,
+    hot_wallet_matches_registry: false,
+    hot_wallet_matches_generated_hot_wallet: false,
     payout_recipient_address: null,
+    profit_recipient_address: null,
+    payout_recipient_matches_active_profit_destination: false,
     payout_recipient_matches_generated_hot_wallet: false,
     pool_address: null,
     pool_matches_expected: false,
     matched_generated_wallet_id: null,
+    matched_generated_wallet_owner_id: null,
+    matched_profit_recipient_wallet_id: null,
+    matched_profit_recipient_profile_id: null,
     source_verification: { checked: false, verified: false, match: null, runtime_match: null },
+    payout_audited: false,
+    payout_behavior_verified: registry?.payout_behavior_verified === true,
   };
   if (!validAddress) return result;
+
+  let code = "";
   try {
-    const code = String(await readCode(executor));
+    code = String(await readCode(executor));
     result.code_deployed = /^0x[0-9a-f]+$/i.test(code) && code.length > 2;
     result.bytecode_size_bytes = Math.max(0, (code.length - 2) / 2);
-    result.bytecode_hash = code.length > 2 ? await sha256(code.toLowerCase()) : null;
+    result.bytecode_hash = result.code_deployed ? keccak256(code as Hex).toLowerCase() : null;
+    result.runtime_bytecode_hash_match = result.code_deployed &&
+      !!registry?.runtime_bytecode_hash &&
+      result.bytecode_hash === String(registry.runtime_bytecode_hash).toLowerCase();
   } catch (error) {
     result.code_error = error instanceof Error ? error.message : "executor_code_lookup_failed";
     return result;
   }
   if (result.code_deployed !== true) return result;
 
+  let hotWallet = "";
+  let profitRecipient = "";
+  let pool = "";
   try {
-    const callData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
-    const raw = String(await readCall(executor, callData));
-    const recipient = decodeFunctionResult({
+    const hotWalletData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "HOT_WALLET" });
+    const profitRecipientData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "PROFIT_RECIPIENT" });
+    const poolData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" });
+    const [hotRaw, recipientRaw, poolRaw] = await Promise.all([
+      readCall(executor, hotWalletData),
+      readCall(executor, profitRecipientData),
+      readCall(executor, poolData),
+    ]);
+    hotWallet = decodeFunctionResult({
       abi: FLASH_EXECUTOR_PAYOUT_ABI,
       functionName: "HOT_WALLET",
-      data: raw as `0x${string}`,
+      data: String(hotRaw) as Hex,
     }) as string;
-    result.payout_recipient_address = recipient;
-    const match = generatedWallets.find((wallet) =>
-      wallet.chain === chain &&
-      /^0x[a-fA-F0-9]{40}$/.test(wallet.address || "") &&
-      wallet.address.toLowerCase() === recipient.toLowerCase()
-    );
-    result.payout_recipient_matches_generated_hot_wallet = !!match;
-    result.matched_generated_wallet_id = match?.id || null;
-    result.matched_generated_wallet_owner_id = match?.owner_id || null;
-  } catch (error) {
-    result.payout_recipient_read_error = error instanceof Error ? error.message : "executor_payout_getter_failed";
-  }
-
-  
-  try {
-    const poolCallData = encodeFunctionData({ abi: FLASH_EXECUTOR_PAYOUT_ABI, functionName: "POOL" });
-    const poolRaw = String(await readCall(executor, poolCallData));
-    const pool = decodeFunctionResult({
+    profitRecipient = decodeFunctionResult({
+      abi: FLASH_EXECUTOR_PAYOUT_ABI,
+      functionName: "PROFIT_RECIPIENT",
+      data: String(recipientRaw) as Hex,
+    }) as string;
+    pool = decodeFunctionResult({
       abi: FLASH_EXECUTOR_PAYOUT_ABI,
       functionName: "POOL",
-      data: poolRaw as `0x${string}`,
+      data: String(poolRaw) as Hex,
     }) as string;
-    result.pool_address = pool;
-    result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase();
   } catch (error) {
-    result.pool_read_error = error instanceof Error ? error.message : "executor_pool_getter_failed";
+    result.executor_getter_error = error instanceof Error ? error.message : "executor_getter_failed";
+    result.payout_recipient_read_error = result.executor_getter_error;
+    return result;
   }
 
-  result.source_verification = await lookupSourcifyVerification(chainId, executor);
-  result.payout_audited = result.code_deployed === true &&
-    result.payout_recipient_matches_generated_hot_wallet === true &&
-    result.pool_matches_expected === true &&
-    (result.source_verification as any)?.verified === true;
+  result.hot_wallet_address = hotWallet;
+  result.payout_recipient_address = profitRecipient;
+  result.profit_recipient_address = profitRecipient;
+  result.pool_address = pool;
+
+  const tradingWallet = generatedWallets.find((wallet: any) =>
+    wallet.chain === chain &&
+    String(wallet.id || "") === String(registry?.hot_wallet_id || "") &&
+    String(wallet.owner_id || "") === String(registry?.profit_recipient_owner_id || wallet.owner_id || "") &&
+    String(wallet.address || "").toLowerCase() === hotWallet.toLowerCase() &&
+    String(registry?.hot_wallet_address || "").toLowerCase() === hotWallet.toLowerCase()
+  ) || null;
+  result.matched_generated_wallet_id = tradingWallet?.id || null;
+  result.matched_generated_wallet_owner_id = tradingWallet?.owner_id || null;
+  result.hot_wallet_matches_generated_hot_wallet = !!tradingWallet;
+  result.hot_wallet_matches_registry = !!tradingWallet &&
+    !!registry && String(registry.hot_wallet_id || "") === String(tradingWallet.id) &&
+    Number(registry.chain_id) === Number(chainId);
+
+  const activeRecipient = profitDestinations.find((recipient: any) =>
+    recipient.chain === chain &&
+    String(recipient.owner_id || "") === String(tradingWallet?.owner_id || "") &&
+    String(recipient.wallet_id || "") === String(registry?.profit_recipient_wallet_id || "") &&
+    String(recipient.address || "").toLowerCase() === profitRecipient.toLowerCase() &&
+    String(registry?.profit_recipient_address || "").toLowerCase() === profitRecipient.toLowerCase() &&
+    String(recipient.asset || "") === "ALL" &&
+    String(recipient.profile_status || "") === "active" &&
+    (!recipient.activation_at || new Date(recipient.activation_at).getTime() <= Date.now()) &&
+    String(recipient.wallet_status || "") === "active" &&
+    recipient.is_hot === false &&
+    String(recipient.wallet_role || "") === "profit_recipient" &&
+    String(recipient.data_quality_status || "") === "verified" &&
+    !!recipient.secret_ref
+  ) || null;
+  result.matched_profit_recipient_wallet_id = activeRecipient?.wallet_id || null;
+  result.matched_profit_recipient_profile_id = activeRecipient?.profile_id || null;
+  result.payout_recipient_matches_active_profit_destination = !!activeRecipient;
+  result.payout_recipient_matches_generated_hot_wallet = false;
+  result.pool_matches_expected = pool.toLowerCase() === expectedPool.toLowerCase() &&
+    !!registry && String(registry.pool_address || "").toLowerCase() === expectedPool.toLowerCase();
+
+  const sourcify = await lookupSourcifyVerification(chainId, executor);
+  result.source_verification = {
+    ...sourcify,
+    registry_source_verified: registry?.source_verified === true,
+    runtime_bytecode_hash_match: result.runtime_bytecode_hash_match,
+    registry_source_blob_sha_match: result.registry_source_blob_sha_match,
+    verified: sourcify.verified === true &&
+      registry?.source_verified === true &&
+      result.registry_backed === true &&
+      result.registry_chain_id_match === true &&
+      result.registry_source_blob_sha_match === true &&
+      result.runtime_bytecode_hash_match === true,
+  };
+  result.payout_audited = result.registry_backed === true &&
+    result.registry_chain_id_match === true &&
+    result.registry_source_blob_sha_match === true &&
+    result.runtime_bytecode_hash_match === true &&
+    result.source_verification.verified === true &&
+    result.hot_wallet_matches_registry === true &&
+    result.payout_recipient_matches_active_profit_destination === true &&
+    result.pool_matches_expected === true;
   return result;
 }
 
