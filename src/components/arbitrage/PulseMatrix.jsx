@@ -4,14 +4,14 @@ const ESTIMATED_SLIPPAGE_BUFFER_PCT = 0.05
 const ESTIMATED_TOTAL_COST_PCT = ASSUMED_TAKER_FEE_PER_VENUE_PCT * 2 + ESTIMATED_SLIPPAGE_BUFFER_PCT
 const money = (value) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
 
-export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute }) {
+export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute, minimumSpreadPct = 0.3 }) {
   const maxSpread = Math.max(...routes.map((r) => Number(r.spreadPct) || 0), 0.01)
 
   return (
     <div className="flex h-full flex-col rounded border border-[#232738] bg-[#0C0E16]">
       <div className="flex items-center justify-between border-b border-[#232738] px-4 py-3">
         <span className="font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">Pulse Matrix</span>
-        <span className="font-mono text-[0.625rem] text-[#5a6080]">{routes.length} candidates ≥ 0.30%</span>
+        <span className="font-mono text-[0.625rem] text-[#5a6080]">{routes.length} candidates ≥ {Number(minimumSpreadPct).toFixed(2)}%</span>
       </div>
       <div className="border-b border-[#232738] px-4 py-2 font-mono text-[0.55rem] leading-relaxed text-[#8a90b0]">
         CEX quote screening only. Net estimate assumes 0.10% taker fee at each venue (0.20% total) plus 0.05% slippage reserve on a $10,000 benchmark. These are estimates, not measured fees; chain gas, transfer costs, live order-book depth, and actual execution are not included. This panel does not authorize a bot trade.
@@ -19,7 +19,7 @@ export default function PulseMatrix({ routes = [], selectedRoute, onSelectRoute 
       <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
         {routes.length === 0 ? (
           <div className="p-4 font-mono text-xs leading-relaxed text-[#8a90b0]">
-            No current quote candidates clear the 0.30% gross-spread floor. The floor screens out spreads that are unlikely to cover assumed venue fees and slippage; it does not mean an on-chain route is executable.
+            No current quote candidates clear the {Number(minimumSpreadPct).toFixed(2)}% gross-spread floor. The floor screens out spreads that are unlikely to cover assumed venue fees and slippage; it does not mean an on-chain route is executable.
           </div>
         ) : routes.map((r) => {
           const active = selectedRoute === r.id
