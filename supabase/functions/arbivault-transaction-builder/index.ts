@@ -1297,6 +1297,7 @@ Deno.serve(async (req) => {
     const slippageBps = Number(body.slippage_bps ?? 50);
     const priceImpactPct = Number(body.price_impact_pct ?? 0);
     const quoteOnlyMode = body.mode === "flash_quote" || body.mode === "quote";
+    const payoutTestMode = body.mode === "flash_payout_test_build";
     const mode = quoteOnlyMode ? "quote" : "build";
 
     if (!routeId || (!sourceWalletId && !quoteOnlyMode) || !amountRaw || !["buy", "sell"].includes(side)) {
@@ -1318,13 +1319,13 @@ Deno.serve(async (req) => {
 
     const { data: route, error: routeError } = await supabase
       .from("arbivault_strategy_routes")
-      .select("id,strategy,strategy_family,chain,pair,dex_venue,route_type,enabled,discovery_only,builder_enabled,transaction_builder,strategy_bot_id")
+      .select("id,strategy,strategy_family,chain,pair,dex_venue,route_type,enabled,discovery_only,builder_enabled,transaction_builder,strategy_bot_id,payout_test_authorized,payout_test_authorized_by,payout_test_used_at,payout_test_execution_attempt_id")
       .eq("id", routeId)
       .maybeSingle();
 
     if (routeError) return json({ error: routeError.message }, 500);
     if (!route || route.enabled !== true) return json({ error: "route_not_enabled" }, 404);
-    if (route.discovery_only === true && !quoteOnlyMode) return json({ error: "discovery_only_route_cannot_execute" }, 409);
+    if (route.discovery_only === true && !quoteOnlyMode && !payoutTestMode) return json({ error: "discovery_only_route_cannot_execute" }, 409);
     const isAtomicFlashRoute =
       route.transaction_builder === "aave_v3_atomic_flash_loan_v1" &&
       route.route_type === "flash_liquidity";
@@ -1341,7 +1342,7 @@ Deno.serve(async (req) => {
     // Every other request still fails closed until the route is explicitly enabled.
     if (
       !route.transaction_builder ||
-      (route.builder_enabled !== true && !(quoteOnlyMode && isAtomicFlashRoute))
+      (route.builder_enabled !== true && !(quoteOnlyMode && isAtomicFlashRoute) && !(payoutTestMode && isAtomicFlashRoute))
     ) {
       return json({ error: "transaction_builder_not_configured" }, 409);
     }
@@ -1367,6 +1368,36 @@ Deno.serve(async (req) => {
 
     // Read-only quotes can run without wallet approval; building an executable
     // payload requires verified provenance plus explicit owner-scoped approval.
+    if (payoutTestMode) {
+      if (
+        !isAtomicFlashRoute || route.discovery_only !== true ||
+        route.payout_test_authorized !== true || route.payout_test_used_at != null ||
+        !route.payout_test_authorized_by || !wallet ||
+        String(route.payout_test_authorized_by) !== String(wallet.owner_id)
+      ) {
+        return json({ error: "flash_payout_test_not_authorized_or_already_used" }, 409);
+      }
+      const { data: testBot, error: testBotError } = await supabase
+        .from("arbivault_strategy_bots")
+        .select("owner_id,enabled,execution_enabled,flash_loan_enabled")
+        .eq("id", route.strategy_bot_id)
+        .maybeSingle();
+      if (testBotError) return json({ error: "flash_payout_test_bot_lookup_failed" }, 503);
+      if (!testBot || String(testBot.owner_id) !== String(wallet.owner_id) ||
+          testBot.enabled !== true || testBot.execution_enabled !== true || testBot.flash_loan_enabled !== true) {
+        return json({ error: "flash_payout_test_bot_not_execution_enabled" }, 409);
+      }
+      const testAsset = route.chain === "bnb" ? BSC_USDT : ETH_USDC;
+      const testDecimals = route.chain === "bnb" ? 18n : 6n;
+      const maxTestAmountRaw = 25n * (10n ** testDecimals);
+      if (String(body.flash_loan_asset || "").toLowerCase() !== testAsset.toLowerCase()) {
+        return json({ error: "flash_payout_test_asset_must_be_stablecoin" }, 409);
+      }
+      if (BigInt(amountRaw) > maxTestAmountRaw) {
+        return json({ error: "flash_payout_test_notional_exceeds_25_usd" }, 409);
+      }
+    }
+
     if (!quoteOnlyMode) {
       if (!wallet || wallet.data_quality_status !== "verified") {
         return json({ error: "source_wallet_not_verified" }, 403);
@@ -1440,6 +1471,7 @@ Deno.serve(async (req) => {
         builder: route.transaction_builder,
       },
       mode,
+      payout_test_mode: payoutTestMode,
       address_resolution: route.transaction_builder === "aave_v3_atomic_flash_loan_v1"
         ? {
             network: route.chain === "ethereum" ? "Ethereum mainnet" : "BNB Smart Chain mainnet",
