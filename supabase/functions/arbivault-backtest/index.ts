@@ -121,6 +121,13 @@ Deno.serve(async (req) => {
         }, 409);
       }
 
+      const spreadCondition = skillConditions.find((condition: any) =>
+        String(condition?.label || "").toLowerCase().includes("spread")
+      );
+      const spreadThreshold = spreadCondition
+        ? Number.parseFloat(String(spreadCondition.value ?? ""))
+        : null;
+
       // Pull actual threshold-entry events from the full history, rather than
       // pretending the 10k sampled rows are 10k trades. The SQL function detects
       // the first crossing per symbol + venue route and joins contemporaneous volume.
