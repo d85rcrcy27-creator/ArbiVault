@@ -107,7 +107,7 @@ Deno.serve(async (req) => {
               trading.data_quality_status === "verified" && !!trading.secret_ref &&
               String(trading.address).toLowerCase() === String(deployment.hot_wallet_address).toLowerCase();
             hotWalletMatch = hotWalletRecordValid && hotWallet.toLowerCase() === String(deployment.hot_wallet_address).toLowerCase();
-            const recipientValid = !recipientResult.error && !!recipient && recipient.status === "active" &&
+            const recipientValid = !recipientResult.error && !!recipient && !!trading && recipient.owner_id === trading.owner_id && recipient.status === "active" &&
               recipient.chain === config.chain && recipient.is_hot === false && recipient.wallet_role === "profit_recipient" &&
               recipient.data_quality_status === "verified" && !!recipient.secret_ref &&
               /^0x[a-fA-F0-9]{40}$/.test(String(recipient.address || "")) &&
