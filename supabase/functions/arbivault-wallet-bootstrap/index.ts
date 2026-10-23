@@ -27,8 +27,10 @@ async function walletAddressHasContractCode(chain:'bnb'|'ethereum',address:strin
  return body.result!=='0x'&&body.result!=='0x0'
 }
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp'){
- const {data:existing,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').maybeSingle()
- if(existingError)throw new Error('active_wallet_lookup_failed')
+ const {data:activeRows,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').order('created_at',{ascending:false}).limit(2)
+ if(existingError)throw new Error('active_wallet_lookup_failed:'+String(existingError.code||'db_error'))
+ if((activeRows||[]).length>1)throw new Error('multiple_active_trading_wallets_detected:'+chain)
+ const existing=(activeRows||[])[0]||null
  let replacedWalletId:string|null=null
  let contractCodeDetected=false
  if(existing?.address&&(chain==='bnb'||chain==='ethereum'))contractCodeDetected=await walletAddressHasContractCode(chain,existing.address)
