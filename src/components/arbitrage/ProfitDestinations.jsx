@@ -74,7 +74,7 @@ export default function ProfitDestinations() {
       const recipient = data.recipient
       setMessage(data.existing
         ? 'A destination for this chain already exists.'
-        : 'New destination generated, verified against the stored Supabase vault key, and activated immediately. Flash-loan payouts still require a deployed verified executor.')
+        : 'New destination generated, verified with the non-exporting Supabase vault binding check, and activated immediately. Flash-loan payouts still require a deployed verified executor.')
       if (recipient) setRecipients((previous) => [recipient, ...previous.filter((r) => r.id !== recipient.id)])
       await load()
     } catch (e) {
@@ -90,7 +90,7 @@ export default function ProfitDestinations() {
     setMessage('')
     try {
       await invoke({ action: 'activate', recipient_id: recipientId })
-      setMessage('Destination verified against the stored Supabase vault key and activated immediately. Flash-loan payouts still require a deployed and verified executor configured for this address.')
+      setMessage('Destination verified with the non-exporting Supabase vault binding check and activated immediately. Flash-loan payouts still require a deployed and verified executor configured for this address.')
       await load()
     } catch (e) {
       setError(e.message || 'Destination is not ready for activation')
