@@ -33,6 +33,8 @@ const AAVE_PROVIDER_ABI = parseAbi(["function getPool() view returns (address)"]
 
 const BSC_FLASH_EXPECTED_POOL = "0x6807dc923806fE8Fd134338EABCA509979a7e0cB";
 const ETH_FLASH_EXPECTED_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
+const BSC_FLASH_EXPECTED_SOURCE_BLOB_SHA = "7b8771f3b262813f746bc16c5436c95d2740fb04";
+const ETH_FLASH_EXPECTED_SOURCE_BLOB_SHA = "4f260f58ffe7201cc478db7752f4622d8df571ac";
 
 async function syncExecutorRegistry() {
   const { data: rows, error } = await supabase
@@ -77,6 +79,7 @@ async function persistExecutorAudit(chain: string, executor: Record<string, any>
     })
     .eq("chain", chain)
     .eq("executor_address", String(executor.address))
+    .eq("runtime_bytecode_hash", String(executor.registry_runtime_bytecode_hash || ""))
     .select("chain")
     .maybeSingle();
   if (error || !data) throw new Error("flash_executor_audit_persist_failed");
@@ -437,6 +440,7 @@ async function verifyExecutor(
     registry_chain_id_match: !!registry && Number(registry.chain_id) === Number(chainId),
     registry_source_blob_sha_match: !!registry &&
       String(registry.contract_source_blob_sha || "") === expectedSourceBlobSha,
+    registry_runtime_bytecode_hash: registry?.runtime_bytecode_hash || null,
     code_deployed: false,
     bytecode_hash: null,
     bytecode_size_bytes: 0,
