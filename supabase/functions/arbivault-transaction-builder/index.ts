@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.117.2";
-import { encodeFunctionData, decodeFunctionResult, parseAbi } from "npm:viem@2.39.0";
+import { encodeFunctionData, decodeFunctionResult, keccak256, parseAbi } from "npm:viem@2.39.0";
 
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
@@ -14,8 +14,8 @@ let ETH_FLASH_EXECUTOR = ENV_ETH_FLASH_EXECUTOR;
 const JUPITER_API_KEY = Deno.env.get("JUPITER_API_KEY") || "";
 const ENV_BSC_FLASH_EXECUTOR = (Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR") || "").trim();
 let BSC_FLASH_EXECUTOR = ENV_BSC_FLASH_EXECUTOR;
-// Fail closed until the deployed executor contract source and live bytecode prove that
-// realized profits are paid to the calling ArbiVault trading hot wallet.
+// Fail closed until the deployed executor source and runtime prove that
+// realized profits are sent to the separately registered profit destination.
 const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true" || Deno.env.get("ARBIVAULT_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
 const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
