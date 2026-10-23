@@ -47,18 +47,25 @@ async function builderDiagnostic() {
   return result;
 }
 
-function diagnosticBlockers(chainDiagnostic: any, walletAddress: string) {
+function diagnosticBlockers(chainDiagnostic: any, tradingWalletAddress: string, profitRecipientAddress: string) {
   const executor = chainDiagnostic?.executor || {};
   const blockers: string[] = [];
   if (chainDiagnostic?.rpc_chain_ok !== true) blockers.push("chain_rpc_unhealthy");
   if (chainDiagnostic?.aave_pool_resolved !== true) blockers.push("aave_pool_unresolved");
+  if (executor.registry_backed !== true) blockers.push("executor_deployment_registry_row_missing");
   if (executor.configured !== true) blockers.push("executor_address_not_configured");
   if (executor.code_deployed !== true) blockers.push("executor_runtime_bytecode_missing");
+  if (executor.runtime_bytecode_hash_match !== true) blockers.push("executor_runtime_bytecode_hash_mismatch");
   if (executor.pool_matches_expected !== true) blockers.push("executor_pool_mismatch");
   if (executor.source_verification?.verified !== true) blockers.push("executor_source_not_verified");
-  if (executor.payout_recipient_matches_generated_hot_wallet !== true) blockers.push("executor_payout_wallet_not_verified");
-  if (String(executor.payout_recipient_address || "").toLowerCase() !== walletAddress.toLowerCase()) {
-    blockers.push("executor_payout_wallet_does_not_match_strategy_wallet");
+  if (executor.hot_wallet_matches_registry !== true) blockers.push("executor_hot_wallet_not_registry_verified");
+  if (!tradingWalletAddress || String(executor.hot_wallet_address || "").toLowerCase() !== tradingWalletAddress.toLowerCase()) {
+    blockers.push("executor_hot_wallet_does_not_match_strategy_wallet");
+  }
+  if (executor.payout_recipient_matches_active_profit_destination !== true) blockers.push("executor_profit_recipient_not_active_or_not_verified");
+  if (!profitRecipientAddress) blockers.push("active_all_asset_profit_destination_missing");
+  else if (String(executor.profit_recipient_address || "").toLowerCase() !== profitRecipientAddress.toLowerCase()) {
+    blockers.push("executor_profit_recipient_does_not_match_active_destination");
   }
   if (chainDiagnostic?.ready_for_flash_transaction_test !== true) blockers.push("executor_not_ready_for_payout_test");
   if (executor.payout_audited !== true && chainDiagnostic?.payout_audited !== true) blockers.push("executor_payout_configuration_not_audited");
@@ -156,6 +163,37 @@ Deno.serve(async (req: Request) => {
       approval = data;
     }
     if (!approval) blockers.push("strategy_hot_wallet_not_approved");
+
+    const { data: profitProfiles, error: profitProfilesError } = await admin
+      .from("profit_recipient_profiles")
+      .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+      .eq("owner_id", user.id)
+      .eq("chain", chain)
+      .eq("asset", "ALL")
+      .eq("status", "active");
+    if (profitProfilesError) return json({ ok: false, error: "profit_destination_profile_lookup_failed" }, 503);
+    const activeProfiles = (profitProfiles || []).filter((profile: any) =>
+      !profile.activation_at || new Date(profile.activation_at).getTime() <= Date.now()
+    );
+    const recipientWalletIds = activeProfiles.map((profile: any) => profile.wallet_id).filter(Boolean);
+    const { data: profitWallets, error: profitWalletError } = recipientWalletIds.length
+      ? await admin.from("wallets")
+          .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+          .eq("owner_id", user.id)
+          .eq("chain", chain)
+          .in("id", recipientWalletIds)
+          .eq("status", "active")
+          .eq("is_hot", false)
+          .eq("wallet_role", "profit_recipient")
+          .eq("data_quality_status", "verified")
+      : { data: [], error: null };
+    if (profitWalletError) return json({ ok: false, error: "profit_destination_wallet_lookup_failed" }, 503);
+    const validProfitWallets = (profitWallets || []).filter((candidate: any) => !!candidate.secret_ref);
+    const profitWallet = validProfitWallets.length === 1 ? validProfitWallets[0] : null;
+    if (!profitWallet) blockers.push("active_all_asset_profit_destination_missing_or_unverified");
+    if (profitWallet && String(profitWallet.id) === String(wallet?.id || "")) {
+      blockers.push("profit_destination_must_be_separate_from_trading_wallet");
+    }
     if (route.payout_test_used_at || route.payout_test_execution_attempt_id) {
       return json({
         ok: true,
@@ -188,7 +226,7 @@ Deno.serve(async (req: Request) => {
     try {
       const diagnostic = await builderDiagnostic();
       chainDiagnostic = chain === "ethereum" ? diagnostic.ethereum : diagnostic.bnb;
-      blockers.push(...diagnosticBlockers(chainDiagnostic, String(wallet?.address || "")));
+      blockers.push(...diagnosticBlockers(chainDiagnostic, String(wallet?.address || ""), String(profitWallet?.address || "")));
     } catch (error) {
       blockers.push(error instanceof Error ? error.message : "executor_diagnostic_failed");
     }
@@ -236,7 +274,7 @@ Deno.serve(async (req: Request) => {
     if (action === "status") {
       return json({
         ok: true, chain, route_id: route.id, pair: route.pair, strategy_bot_id: bot.id,
-        wallet_id: wallet?.id || null, wallet_address: wallet?.address || null, executor: chainDiagnostic?.executor || null,
+        wallet_id: wallet?.id || null, wallet_address: wallet?.address || null, profit_recipient_wallet_id: profitWallet?.id || null, profit_recipient_address: profitWallet?.address || null, executor: chainDiagnostic?.executor || null,
         chain_diagnostic: chainDiagnostic,
         payout_test_authorized: alreadyAuthorizedByUser,
         payout_test_authorization_state: alreadyAuthorizedByUser
