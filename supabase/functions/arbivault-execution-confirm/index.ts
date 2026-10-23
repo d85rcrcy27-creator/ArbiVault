@@ -7,7 +7,7 @@ const supabase = createClient(
 );
 
 const FLASH_SETTLED_ABI = parseAbi([
-  "event FlashLoanSettled(address indexed asset,uint256 amount,uint256 premium,uint256 profitPaid,address indexed hotWallet)",
+  "event FlashLoanSettled(address indexed asset,uint256 amount,uint256 premium,uint256 profitPaid,address indexed hotWallet,address indexed profitRecipient)",
 ]);
 
 const BSC_USDT = "0x55d398326f99059ff775485246999027b3197955";
@@ -55,6 +55,7 @@ function decodeFlashSettlement(receipt: any, expectedExecutorAddress: string): R
         premium_raw: String(args.premium ?? ""),
         profit_paid_raw: String(args.profitPaid ?? ""),
         hot_wallet: String(args.hotWallet || ""),
+        profit_recipient: String(args.profitRecipient || ""),
       };
     } catch {
       // Most receipt logs are unrelated token/router logs. Continue until the
@@ -69,10 +70,11 @@ const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 function hasExactPayoutTransfer(receipt: any, settlement: Record<string, string> | null): boolean {
   if (!settlement || !/^0x[a-fA-F0-9]{40}$/.test(settlement.executor_address) ||
       !/^0x[a-fA-F0-9]{40}$/.test(settlement.hot_wallet) ||
+      !/^0x[a-fA-F0-9]{40}$/.test(settlement.profit_recipient) ||
       !/^0x[a-fA-F0-9]{40}$/.test(settlement.asset) ||
       !/^\\d+$/.test(settlement.profit_paid_raw) || BigInt(settlement.profit_paid_raw) <= 0n) return false;
   const expectedFrom = "0x" + settlement.executor_address.slice(2).toLowerCase().padStart(64, "0");
-  const expectedTo = "0x" + settlement.hot_wallet.slice(2).toLowerCase().padStart(64, "0");
+  const expectedTo = "0x" + settlement.profit_recipient.slice(2).toLowerCase().padStart(64, "0");
   return (Array.isArray(receipt?.logs) ? receipt.logs : []).some((log: any) => {
     const topics = Array.isArray(log?.topics) ? log.topics.map((value: unknown) => String(value).toLowerCase()) : [];
     if (String(log?.address || "").toLowerCase() !== settlement.asset.toLowerCase()) return false;
