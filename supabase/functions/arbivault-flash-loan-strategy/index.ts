@@ -605,7 +605,7 @@ export default {
 
     const { data: routes, error: routeError } = await supabase
       .from('arbivault_strategy_routes')
-      .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status')
+      .select('id,strategy,strategy_bot_id,chain,pair,route_type,enabled,discovery_only,transaction_builder,builder_enabled,builder_status,payout_test_authorized,payout_test_authorized_by,payout_test_authorized_at,payout_test_used_at,payout_test_execution_attempt_id,payout_test_tx_hash')
       .eq('enabled', true)
       .eq('route_type', 'flash_liquidity')
 
