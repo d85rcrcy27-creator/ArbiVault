@@ -16,6 +16,34 @@ const corsHeaders = {
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, "cache-control": "no-store" } });
 
+
+// Each route can have multiple qualifying quotes in one continuous spread episode.
+// Count it once, at the first quote that passes all conditions. The SQL-provided
+// previous_value comes from the full stream, so a down-sampled history gap does
+// not create a fictitious new opportunity.
+function distinctSignalEntries(
+  samples: any[],
+  predicate: (sample: any) => boolean,
+  spreadFloor: number,
+) {
+  const state = new Map<string, { entryCounted: boolean }>();
+  const entries: any[] = [];
+  for (const sample of samples) {
+    const key = String(sample.routeKey || sample.symbol || "unknown");
+    const previousValue = sample.previousValue == null ? Number.NaN : Number(sample.previousValue);
+    const startsNewEpisode = !state.has(key) ||
+      !Number.isFinite(previousValue) ||
+      previousValue < spreadFloor;
+    let routeState = startsNewEpisode ? { entryCounted: false } : state.get(key)!;
+    if (predicate(sample) && !routeState.entryCounted) {
+      entries.push(sample);
+      routeState = { entryCounted: true };
+    }
+    state.set(key, routeState);
+  }
+  return entries;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -172,6 +200,7 @@ Deno.serve(async (req) => {
           symbol: row.symbol,
           routeKey: `${String(row.symbol || "")}|${buyExchange}|${sellExchange}`,
           observed_at: row.observed_at,
+          previousValue: row.previous_value,
           spreadPct,
           latencyMs,
           volume24hUsd,
@@ -196,19 +225,21 @@ Deno.serve(async (req) => {
         if (label.includes("profit")) return sample.estimatedNetProfitUsd > threshold;
         return false;
       };
-      // Rows in builtSamples are exact entry events from the complete observed
-      // history, not repeated polling observations. Each signal entry is counted once.
+      // Candidates contain every quote while the spread is above the entry floor.
+      // Count only the first qualifying quote in each continuous route episode.
       const positiveSpreadSamples = builtSamples.filter((sample: any) => sample.spreadPct > 0);
-      const qualifying = builtSamples.filter((sample: any) =>
+      const qualifying = distinctSignalEntries(builtSamples, (sample: any) =>
         sample.spreadPct >= minSpreadPct &&
         sample.estimatedNetProfitUsd > 0 &&
-        skillConditions.every((condition: any) => conditionPasses(condition, sample))
+        skillConditions.every((condition: any) => conditionPasses(condition, sample)),
+        entryThreshold,
       );
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
 
-      const potentialSignalEntries = builtSamples.filter((sample: any) =>
+      const potentialSignalEntries = distinctSignalEntries(builtSamples, (sample: any) =>
         sample.spreadPct >= minSpreadPct &&
-        sample.estimatedNetProfitUsd >= minimumPotentialNetProfitUsd
+        sample.estimatedNetProfitUsd >= minimumPotentialNetProfitUsd,
+        entryThreshold,
       );
       const potentialProfitable = potentialSignalEntries;
       const potentialGrossPnl = potentialSignalEntries.reduce((sum: number, sample: any) =>
