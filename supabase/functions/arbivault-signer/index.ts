@@ -4,30 +4,9 @@ import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
 import { ECPairFactory } from "npm:ecpair@3.0.0";
-import { Connection, Keypair, PublicKey, VersionedTransaction, Transaction } from "npm:@solana/web3.js@1.98.4";
-import { Turnkey } from "npm:@turnkey/sdk-server@1.5.0";
-import { TurnkeySigner } from "npm:@turnkey/solana@1.0.0";
+import { VersionedTransaction, Transaction, Keypair } from "npm:@solana/web3.js@1.98.4";
 
 const ECPair = ECPairFactory(ecc);
-
-function createTurnkeySolanaSigner() {
-  const apiPublicKey = Deno.env.get("TURNKEY_API_PUBLIC_KEY") || "";
-  const apiPrivateKey = Deno.env.get("TURNKEY_API_PRIVATE_KEY") || "";
-  const organizationId = Deno.env.get("TURNKEY_ORGANIZATION_ID") || "";
-  if (!apiPublicKey || !apiPrivateKey || !organizationId) {
-    throw new Error("turnkey_solana_signer_not_configured");
-  }
-  const turnkey = new Turnkey({
-    apiBaseUrl: "https://api.turnkey.com",
-    apiPublicKey,
-    apiPrivateKey,
-    defaultOrganizationId: organizationId,
-  });
-  return new TurnkeySigner({
-    client: turnkey.apiClient() as any,
-    organizationId,
-  });
-}
 const supabase = createClient(
   Deno.env.get("SUPABASE_URL")!,
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
@@ -130,11 +109,10 @@ async function verifyExecutorPayoutBindings(chain: "ethereum" | "bnb", executorA
     const hot = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: String(hotRaw) as `0x${string}` }) as string;
     const recipient = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "PROFIT_RECIPIENT", data: String(recipientRaw) as `0x${string}` }) as string;
     if (hot.toLowerCase() !== String(deployment.hot_wallet_address).toLowerCase() ||
-        recipient.toLowerCase() !== String(deployment.profit_recipient_address).toLowerCase()) {
+        recipient.toLowerCase() !== String(deployment.profit_recipient_address).toLowerCase() ||
+        hot.toLowerCase() === recipient.toLowerCase()) {
       return { ok: false, error: "executor_immutable_wallet_getter_mismatch" };
     }
-    if (hot.toLowerCase() === recipient.toLowerCase()) return { ok: false, error: "executor_profit_recipient_must_be_separate" };
-
     const { data: recipientWallet, error: recipientWalletError } = await supabase
       .from("wallets")
       .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
@@ -142,8 +120,7 @@ async function verifyExecutorPayoutBindings(chain: "ethereum" | "bnb", executorA
     if (recipientWalletError || !recipientWallet || recipientWallet.status !== "active" ||
         recipientWallet.chain !== chain || recipientWallet.is_hot !== false ||
         recipientWallet.wallet_role !== "profit_recipient" || recipientWallet.data_quality_status !== "verified" ||
-        !recipientWallet.secret_ref ||
-        String(recipientWallet.address).toLowerCase() !== recipient.toLowerCase() ||
+        !recipientWallet.secret_ref || String(recipientWallet.address).toLowerCase() !== recipient.toLowerCase() ||
         recipientWallet.owner_id !== wallet.owner_id) {
       return { ok: false, error: "profit_recipient_wallet_inactive_or_mismatched" };
     }
@@ -161,7 +138,6 @@ async function verifyExecutorPayoutBindings(chain: "ethereum" | "bnb", executorA
     return { ok: false, error: "executor_profit_destination_live_check_failed" };
   }
 }
-
 
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const ETH_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
@@ -222,15 +198,6 @@ async function getSecret(id: string) {
 
 function decode64(v: string) {
   return Uint8Array.from(atob(v), c => c.charCodeAt(0));
-}
-
-function solanaProgramAllowlist(adapter: any, programIds: string[]) {
-  const allowed = Array.isArray(adapter?.allowed_programs)
-    ? adapter.allowed_programs.map((value: unknown) => String(value))
-    : [];
-  // Empty allowlists are not interpreted as unrestricted access.
-  return allowed.length > 0 && programIds.length > 0 &&
-    programIds.every((programId) => !!programId && allowed.includes(programId));
 }
 
 async function rotateFlaggedWallet(walletId: string) {
@@ -297,43 +264,29 @@ Deno.serve(async (req) => {
       .eq("id", adapterId)
       .maybeSingle();
     if (ae) return json({ error: ae.message }, 500);
-    // EVM and Bitcoin currently use the internal vault. Solana may use
-    // the internal vault or Turnkey, but the wallet custody type must match.
-    const supportedProviders = chain === "solana" ? ["internal_vault", "turnkey"] : ["internal_vault"];
     if (
       !adapter ||
-      adapter.chain !== chain ||
       adapter.configured !== true ||
       adapter.automatic_signing !== true ||
       adapter.can_broadcast !== true ||
-      adapter.read_only === true ||
-      !supportedProviders.includes(adapter.signer_provider)
+      adapter.signer_provider !== "internal_vault"
     ) {
-      return json({ error: "adapter_signer_provider_not_authorized", supported_providers: supportedProviders }, 403);
+      return json({ error: "adapter_not_authorized" }, 403);
     }
 
     if (
       adapter.allowed_wallet_id !== walletId ||
-      adapter.signing_boundary !== adapter.signer_provider
+      adapter.signing_boundary !== "internal_vault"
     ) {
-      return json({ error: "wallet_not_bound_to_expected_signer" }, 403);
-    }
-
-    const expectedAdapterTypes = chain === "solana"
-      ? ["solana_program", "custom"]
-      : chain === "bitcoin"
-        ? ["bitcoin_psbt", "custom"]
-        : ["dex_router", "evm_flash_atomic", "custom"];
-    if (!expectedAdapterTypes.includes(adapter.adapter_type)) {
-      return json({ error: "adapter_protocol_type_mismatch", chain, adapter_type: adapter.adapter_type }, 403);
+      return json({ error: "wallet_not_bound_to_internal_signer" }, 403);
     }
 
     const { data: wallet, error: we } = await supabase
       .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,custody_type")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role")
       .eq("id", walletId)
       .maybeSingle();
-    if (we) return json({ error: "source_wallet_lookup_failed" }, 503);
+    if (we) return json({ error: we.message }, 500);
     if (
       !wallet ||
       wallet.status !== "active" ||
@@ -342,28 +295,6 @@ Deno.serve(async (req) => {
       wallet.chain !== chain
     ) {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
-    }
-    const expectedCustody = adapter.signer_provider === "turnkey" ? "turnkey" : "server_vault";
-    if (wallet.custody_type !== expectedCustody) {
-      return json({ error: "wallet_custody_provider_mismatch" }, 403);
-    }
-
-    // A hot wallet is not execution-eligible solely because its row is active.
-    // Require verified provenance and an explicit, owner-scoped approval before
-    // any signing or broadcast. Missing/ revoked approvals fail closed.
-    if (wallet.data_quality_status !== "verified") {
-      return json({ error: "source_wallet_not_verified" }, 403);
-    }
-    const { data: approvedWallet, error: approvalError } = await supabase
-      .from("approved_wallets")
-      .select("id")
-      .eq("owner_id", wallet.owner_id)
-      .eq("wallet_id", wallet.id)
-      .eq("status", "approved")
-      .maybeSingle();
-    if (approvalError) return json({ error: "wallet_approval_lookup_failed" }, 503);
-    if (!approvedWallet) {
-      return json({ error: "source_wallet_not_approved" }, 403);
     }
 
     if (chain === "bnb" || chain === "ethereum") {
@@ -432,7 +363,7 @@ Deno.serve(async (req) => {
     }
     const { data: attemptRow, error: attemptError } = await supabase
       .from("execution_attempts")
-      .select("id,owner_id,adapter_id,strategy_bot_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
+      .select("id,owner_id,adapter_id,chain,wallet_id,execution_mode,status,transaction_payload_hash")
       .eq("id", requestRow.execution_attempt_id)
       .maybeSingle();
     if (attemptError) return json({ error: "execution_attempt_lookup_failed" }, 500);
@@ -444,28 +375,11 @@ Deno.serve(async (req) => {
       attemptRow.chain !== chain ||
       attemptRow.execution_mode !== "on_chain" ||
       attemptRow.status !== "validated" ||
-      !attemptRow.strategy_bot_id ||
       attemptRow.transaction_payload_hash !== payloadHash
     ) {
       return json({ error: "execution_attempt_authorization_mismatch" }, 403);
     }
 
-    const { data: strategyWalletBinding, error: strategyWalletBindingError } = await supabase
-      .from("arbivault_strategy_wallets")
-      .select("id")
-      .eq("owner_id", wallet.owner_id)
-      .eq("strategy_bot_id", attemptRow.strategy_bot_id)
-      .eq("chain", chain)
-      .eq("wallet_id", walletId)
-      .eq("purpose", "strategy_execution")
-      .eq("status", "assigned")
-      .maybeSingle();
-    if (strategyWalletBindingError) {
-      return json({ error: "strategy_wallet_binding_lookup_failed" }, 503);
-    }
-    if (!strategyWalletBinding) {
-      return json({ error: "wallet_not_bound_to_strategy_on_chain" }, 403);
-    }
 
     const { data: executionPolicy, error: executionPolicyError } = await supabase
       .from("arbivault_execution_policy")
@@ -494,7 +408,7 @@ Deno.serve(async (req) => {
       return json({
         ok: true,
         signing_request_id: requestRow.id,
-        provider: adapter.signer_provider,
+        provider: "internal_vault",
         chain,
         mode,
         tx_hash: String(latestBeforeSigning.tx_hash),
@@ -507,7 +421,7 @@ Deno.serve(async (req) => {
       return json({ error: "signing_request_already_claimed_or_not_authorized", signing_blocked: true }, 409);
     }
 
-    const sv = adapter.signer_provider === "turnkey" ? "" : await getSecret(walletId);
+    const sv = await getSecret(walletId);
     let signed = "";
 
     if (chain === "bnb" || chain === "ethereum") {
@@ -727,83 +641,32 @@ Deno.serve(async (req) => {
       };
       signed = await account.signTransaction(tx);
     } else if (chain === "solana") {
-      const solanaRpcUrl = Deno.env.get("SOLANA_RPC_URL") || "";
-      if (!solanaRpcUrl) return json({ error: "solana_rpc_not_configured" }, 503);
-      const solanaConnection = new Connection(solanaRpcUrl, "confirmed");
-      try {
-        const genesisHash = await solanaConnection.getGenesisHash();
-        if (genesisHash !== "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp") {
-          return json({ error: "solana_rpc_cluster_mismatch" }, 403);
-        }
-      } catch {
-        return json({ error: "solana_rpc_cluster_verification_failed" }, 503);
-      }
       const raw = decode64(unsigned);
+      const secretBytes = Uint8Array.from((sv.match(/.{1,2}/g) || []).map(x => parseInt(x, 16)));
+      const kp = Keypair.fromSecretKey(secretBytes);
+      if (kp.publicKey.toBase58() !== wallet.address) {
+        return json({ error: "signer_secret_address_mismatch" }, 403);
+      }
+
       let versioned: VersionedTransaction | null = null;
       try {
         versioned = VersionedTransaction.deserialize(raw);
       } catch {
         versioned = null;
       }
-      const turnkeySigner = adapter.signer_provider === "turnkey" ? createTurnkeySolanaSigner() : null;
-      const internalSolanaKeypair = () => {
-        if (!/^[0-9a-fA-F]{128}$/.test(sv)) throw new Error("solana_internal_secret_format_invalid");
-        const secretBytes = Uint8Array.from(sv.match(/.{2}/g) || [], byte => Number.parseInt(byte, 16));
-        const keypair = Keypair.fromSecretKey(secretBytes);
-        if (keypair.publicKey.toBase58() !== wallet.address) throw new Error("signer_secret_address_mismatch");
-        return keypair;
-      };
       if (versioned) {
         const message: any = versioned.message;
         const required = Number(message?.header?.numRequiredSignatures || 0);
         const staticKeys: any[] = message?.staticAccountKeys || [];
         if (
           required < 1 ||
-          staticKeys[0]?.toBase58() !== wallet.address ||
-          !staticKeys.slice(0, required).some((key: any) => key.toBase58() === wallet.address)
+          !staticKeys[0]?.equals(kp.publicKey) ||
+          !staticKeys.slice(0, required).some((key: any) => key.equals(kp.publicKey))
         ) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
-        let lookupTableAccounts:any[] = [];
-        const lookups = Array.isArray(message?.addressTableLookups) ? message.addressTableLookups : [];
-        if (lookups.length > 0) {
-          try {
-            for (const lookup of lookups) {
-              const lookupKey = new PublicKey(lookup.accountKey);
-              const { value } = await solanaConnection.getAddressLookupTable(lookupKey);
-              if (!value || !value.key.equals(lookupKey)) {
-                return json({ error: "solana_address_lookup_table_unresolved" }, 403);
-              }
-              lookupTableAccounts.push(value);
-            }
-          } catch {
-            return json({ error: "solana_address_lookup_table_resolution_failed" }, 503);
-          }
-        }
-        let resolvedAccountKeys:any;
-        try {
-          resolvedAccountKeys = message.getAccountKeys({ addressLookupTableAccounts: lookupTableAccounts });
-        } catch {
-          return json({ error: "solana_message_account_keys_unresolved" }, 403);
-        }
-        const programIds = (message?.compiledInstructions || []).map((instruction: any) =>
-          resolvedAccountKeys.get(instruction.programIdIndex)?.toBase58() || ""
-        );
-        if (!solanaProgramAllowlist(adapter, programIds)) {
-          return json({ error: "solana_program_not_allowlisted" }, 403);
-        }
-        let signedVersioned: VersionedTransaction;
-        if (adapter.signer_provider === "turnkey") {
-          if (!turnkeySigner) return json({ error: "turnkey_solana_signer_not_configured" }, 503);
-          signedVersioned = await turnkeySigner.signTransaction(versioned, wallet.address) as VersionedTransaction;
-        } else {
-          versioned.sign([internalSolanaKeypair()]);
-          signedVersioned = versioned;
-        }
-        if (!signedVersioned.signatures?.length || signedVersioned.signatures.every((sig: Uint8Array) => sig.every((byte) => byte === 0))) {
-          return json({ error: "solana_signature_missing" }, 502);
-        }
-        signed = btoa(String.fromCharCode(...signedVersioned.serialize()));
+        versioned.sign([kp]);
+        signed = btoa(String.fromCharCode(...versioned.serialize()));
       } else {
         let legacy: Transaction;
         try {
@@ -811,26 +674,11 @@ Deno.serve(async (req) => {
         } catch {
           return json({ error: "solana_transaction_decode_failed" }, 400);
         }
-        if (!legacy.feePayer || legacy.feePayer.toBase58() !== wallet.address) {
+        if (!legacy.feePayer || !legacy.feePayer.equals(kp.publicKey)) {
           return json({ error: "solana_fee_payer_or_signer_mismatch" }, 403);
         }
-        const programIds = legacy.instructions.map((instruction: any) => instruction.programId.toBase58());
-        if (!solanaProgramAllowlist(adapter, programIds)) {
-          return json({ error: "solana_program_not_allowlisted" }, 403);
-        }
-        let signedLegacy: Transaction;
-        if (adapter.signer_provider === "turnkey") {
-          if (!turnkeySigner) return json({ error: "turnkey_solana_signer_not_configured" }, 503);
-          signedLegacy = await turnkeySigner.signTransaction(legacy, wallet.address) as Transaction;
-        } else {
-          legacy.partialSign(internalSolanaKeypair());
-          signedLegacy = legacy;
-        }
-        const signature = signedLegacy.signatures.find((item: any) => item.publicKey.toBase58() === wallet.address)?.signature;
-        if (!signature || signature.every((byte: number) => byte === 0)) {
-          return json({ error: "solana_signature_missing" }, 502);
-        }
-        signed = btoa(String.fromCharCode(...signedLegacy.serialize({ requireAllSignatures: false, verifySignatures: true })));
+        legacy.partialSign(kp);
+        signed = btoa(String.fromCharCode(...legacy.serialize()));
       }
     } else {
       const psbt = bitcoin.Psbt.fromBase64(unsigned, { network: bitcoin.networks.bitcoin });
@@ -889,33 +737,14 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Atomically claim the authorization before broadcasting. Two concurrent
-    // workers may both reach this point, but only one can transition authorized
-    // -> signed and therefore only one may broadcast this signing request.
-    const signingClaimAt = new Date().toISOString();
-    const { data: claimedRequest, error: claimError } = await supabase
-      .from("signing_requests")
-      .update({ status: "signed", signed_at: signingClaimAt })
-      .eq("id", requestRow.id)
-      .eq("status", "authorized")
-      .select("id")
-      .maybeSingle();
-
-    if (claimError) {
-      return json({ error: "signing_request_claim_failed", signing_blocked: true, broadcast_attempted: false }, 503);
-    }
-    if (!claimedRequest) {
-      return json({ error: "signing_request_claimed_by_another_worker", signing_blocked: true, broadcast_attempted: false }, 409);
-    }
-
     const txHash = await broadcastSigned(chain, signed);
     const broadcastAt = new Date().toISOString();
 
     const { error: markError } = await supabase
       .from("signing_requests")
-      .update({ status: "broadcast", signed_at: signingClaimAt, broadcast_at: broadcastAt, tx_hash: txHash })
+      .update({ status: "broadcast", signed_at: now, broadcast_at: broadcastAt, tx_hash: txHash })
       .eq("id", requestRow.id)
-      .eq("status", "signed");
+      .eq("status", "authorized");
 
     if (markError) {
       // The network broadcast already succeeded. Persist the execution attempt too,
