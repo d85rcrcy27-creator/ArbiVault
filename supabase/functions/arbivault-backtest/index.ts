@@ -163,7 +163,7 @@ Deno.serve(async (req) => {
           .filter((value: number) => Number.isFinite(value) && value >= 0);
         const latencyMs = quoteLatencies.length === 2 ? Math.max(...quoteLatencies) : null;
         const spreadPct = Number(row.value);
-        const rawVolume = Number(row.volume24h_usd);
+        const rawVolume = row.volume24h_usd == null ? Number.NaN : Number(row.volume24h_usd);
         const volume24hUsd = Number.isFinite(rawVolume) && rawVolume >= 0 ? rawVolume : null;
         const estimatedGrossProfitUsd = notional * spreadPct / 100;
         const estimatedNetProfitUsd = notional * (spreadPct - costPct) / 100;
@@ -204,7 +204,6 @@ Deno.serve(async (req) => {
         sample.estimatedNetProfitUsd > 0 &&
         skillConditions.every((condition: any) => conditionPasses(condition, sample))
       );
-      const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
 
       const potentialSignalEntries = builtSamples.filter((sample: any) =>
