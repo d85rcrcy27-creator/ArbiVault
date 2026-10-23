@@ -169,6 +169,8 @@ jobs:
         continue-on-error: true
         env:
           CONTRACT_ADDRESS: ${{ steps.deploy.outputs.contract_address }}
+          HOT_WALLET: ${{ steps.preflight.outputs.hot_wallet }}
+          PROFIT_RECIPIENT: ${{ steps.preflight.outputs.profit_recipient }}
         shell: bash
         run: |
           set -euo pipefail
