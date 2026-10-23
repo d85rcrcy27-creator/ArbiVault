@@ -473,6 +473,8 @@ Deno.serve(async (req) => {
   if (!receipt) return json({
     ok: true, mode: "deploy", status: "pending", chain: config.chain, chain_id: config.chainId,
     deployer_address: prepared.deployerAddress, executor_address: prepared.expectedAddress,
+    hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient,
+    profit_recipient_wallet_id: config.profitRecipientWalletId,
     deployment_tx_hash: txHash, broadcast_attempted: true, confirmed: false,
     note: "Transaction accepted by RPC; receipt not yet available. Do not resubmit.",
   }, 202);
