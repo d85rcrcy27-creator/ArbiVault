@@ -517,7 +517,7 @@ Deno.serve(async (req) => {
       network_fee_usd: networkFeeUsd,
       flash_loan_fee_usd: premiumUsd,
       x402_resource_fee_usd: x402FeeUsd,
-      estimated_network_fee_usd: estimatedNetworkFeeUsd,
+      estimated_network_fee_usd: estimatedFeeUsd,
       pnl_currency: "USD",
       fee_breakdown: feeBreakdown,
       gross_profit: gross,
