@@ -23,10 +23,11 @@ const JWKS = createRemoteJWKSet(new URL(OIDC_ISSUER + "/.well-known/jwks"));
 
 const BSC = {
   chain: "bnb", chainId: 56,
+  ownerId: "3406bc39-44c9-438b-b1ca-0a95683f7dda",
   workflow: REPOSITORY + "/.github/workflows/deploy-bnb-flash-executor.yml@refs/heads/main",
   confirmPhrase: "DEPLOY_TO_BSC_MAINNET",
   contractName: "ArbiVaultFlashExecutor",
-  sourceBlobSha: "4ba59361fa0a125db5d1e538707e8b0932d5c453",
+  sourceBlobSha: "7b8771f3b262813f746bc16c5436c95d2740fb04",
   walletId: "",
   hotWallet: "",
   profitRecipientWalletId: "",
@@ -36,6 +37,7 @@ const BSC = {
 };
 const ETH = {
   chain: "ethereum", chainId: 1,
+  ownerId: "3406bc39-44c9-438b-b1ca-0a95683f7dda",
   workflow: REPOSITORY + "/.github/workflows/deploy-ethereum-flash-executor.yml@refs/heads/main",
   confirmPhrase: "DEPLOY_TO_ETHEREUM_MAINNET",
   contractName: "ArbiVaultEthereumFlashExecutor",
@@ -304,6 +306,7 @@ async function sourcifyExact(config: ChainConfig, address: string) {
   } catch { return { checked: true, verified: false, error: "sourcify_lookup_failed" }; }
 }
 async function verifyAndRecord(config: ChainConfig, address: string, txHash: string | null) {
+  await verifyHotWalletRecord(config);
   const existing = await getExistingDeployment(config);
   if (!existing || String(existing.executor_address).toLowerCase() !== address.toLowerCase()) throw new Error("deployment_registry_address_mismatch");
   const code = await codeAt(config, address);
@@ -433,6 +436,8 @@ Deno.serve(async (req) => {
         required_with_reserve_wei: check.required_with_reserve_wei, broadcast_attempted: false,
       });
       return json({ ok: true, mode: "preflight", chain: config.chain, chain_id: config.chainId,
+        hot_wallet: config.hotWallet, profit_recipient: config.profitRecipient,
+        hot_wallet_id: config.walletId, profit_recipient_wallet_id: config.profitRecipientWalletId,
         deployer_address: check.deployerAddress, balance_wei: check.balance.toString(),
         estimated_gas: check.gas.toString(), gas_price_wei: check.gasPrice.toString(),
         required_with_reserve_wei: check.requiredWithReserve.toString(), expected_contract_address: check.expectedAddress,
