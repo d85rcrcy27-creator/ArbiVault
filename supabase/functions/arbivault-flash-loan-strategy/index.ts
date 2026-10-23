@@ -1077,22 +1077,45 @@ export default {
             ? transactionBuilt
             : transactionBuilt && cexExecutionConfigured
           const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
-          const executionGate = !strategyBot ? 'strategy_bot_not_linked'
-            : walletSafetyBlockedChains.has(executionRoute.chain) ? 'wallet_contract_code_check_unavailable'
-            : executionRoute.discovery_only ? 'strategy_route_discovery_only'
-            : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
-            : executionRoute.route_type === 'flash_liquidity' && (executionRoute.chain === 'ethereum' ? flashExecutorDiagnostic?.ethereum?.ready_for_flash_transaction_test !== true : flashExecutorDiagnostic?.bnb?.ready_for_flash_transaction_test !== true) ? 'flash_executor_not_ready'
-            : executionRoute.route_type === 'flash_liquidity' && builderError ? builderError
-            : executionRoute.route_type === 'flash_liquidity' && flashQuote?.profitable !== true ? 'flash_no_profitable_live_opportunity'
-            : executionRoute.route_type === 'flash_liquidity' && !transactionBuilt ? 'flash_atomic_transaction_not_built'
-            : !executionWindowActive ? 'execution_policy_not_active'
-            : ['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured ? 'atomic_multileg_builder_required'
-            : executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable ? cexExecutionBlocker
-            : builderError ? 'transaction_builder_preflight_failed'
-            : executionRoute.route_type === 'dex_cex' && !twoLegExecutionReady ? 'two_leg_execution_not_ready'
-            : !transactionBuilt ? 'transaction_builder_incomplete'
-            : !executionAdapterConfigured ? 'execution_signer_adapter_missing'
-            : !signerAdapters.length ? 'internal_signer_unavailable' : 'eligible'
+          const chainDiagnostic: any = executionRoute.chain === 'ethereum'
+            ? flashExecutorDiagnostic?.ethereum
+            : flashExecutorDiagnostic?.bnb
+          const liveTradingReady = chainDiagnostic?.ready_for_live_trading === true
+          const payoutTestReady = payoutTestMode &&
+            payoutTestClaimed &&
+            chainDiagnostic?.ready_for_flash_transaction_test === true &&
+            executionRoute.payout_test_authorized === true &&
+            executionRoute.payout_test_used_at != null
+          const executionBlockers: string[] = []
+          if (!strategyBot) executionBlockers.push('strategy_bot_not_linked')
+          if (walletSafetyBlockedChains.has(executionRoute.chain)) executionBlockers.push('wallet_contract_code_check_unavailable')
+          if (executionRoute.discovery_only && !payoutTestReady) executionBlockers.push('strategy_route_discovery_only')
+          if ((!executionRoute.builder_enabled || !executionRoute.transaction_builder) && !payoutTestReady) executionBlockers.push('transaction_builder_not_configured')
+          if (executionRoute.route_type === 'flash_liquidity' && !(payoutTestReady ? chainDiagnostic?.ready_for_flash_transaction_test === true : liveTradingReady)) {
+            executionBlockers.push(payoutTestReady ? 'flash_executor_not_ready_for_payout_test' : 'flash_executor_not_ready_for_live_trading')
+          }
+          if (executionRoute.route_type === 'flash_liquidity' && builderError) executionBlockers.push(builderError)
+          if (executionRoute.route_type === 'flash_liquidity' && flashQuote?.profitable !== true) executionBlockers.push('flash_no_profitable_live_opportunity')
+          if (executionRoute.route_type === 'flash_liquidity' && !transactionBuilt) executionBlockers.push('flash_atomic_transaction_not_built')
+          if (!executionWindowActive && !payoutTestReady) executionBlockers.push('execution_policy_not_active')
+          if (['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured) executionBlockers.push('atomic_multileg_builder_required')
+          if (executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable) executionBlockers.push(cexExecutionBlocker)
+          if (builderError && executionRoute.route_type !== 'flash_liquidity') executionBlockers.push('transaction_builder_preflight_failed')
+          if (executionRoute.route_type === 'dex_cex' && !twoLegExecutionReady) executionBlockers.push('two_leg_execution_not_ready')
+          if (!transactionBuilt) executionBlockers.push('transaction_builder_incomplete')
+          if (!executionAdapterConfigured) executionBlockers.push('execution_signer_adapter_missing')
+          if (!signerAdapters.length) executionBlockers.push('internal_signer_unavailable')
+          if (payoutTestMode && !payoutTestReady) executionBlockers.push('flash_payout_test_not_claimed_or_not_ready')
+          // One primary blocker is retained for old clients; all causes are preserved alongside it.
+          const executionGate = executionBlockers.length ? executionBlockers[0] : 'eligible'
+          executionContext.execution_blockers = executionBlockers
+          executionContext.execution_readiness = {
+            payout_test_mode: payoutTestMode,
+            payout_test_claimed: payoutTestClaimed,
+            payout_test_ready: payoutTestReady,
+            live_trading_ready: liveTradingReady,
+            chain: executionRoute.chain,
+          }
           const opportunityHash = await sha256(JSON.stringify(executionContext))
           const unsignedTransaction = executionRoute.route_type === 'flash_liquidity'
             ? (flashBuild?.transaction || null)
@@ -1109,6 +1132,7 @@ export default {
             opportunities.push({
               ...executionContext,
               execution_gate: executionGate === 'eligible' ? 'signing_payload_incomplete' : executionGate,
+              execution_blockers: executionBlockers,
               execution_route_id: executionRoute.id,
               execution_attempt_id: null,
               adapter_id: executionAdapterId,
@@ -1166,16 +1190,55 @@ export default {
             flash_loan_fee_usd: flashFeeAccounting?.flash_loan_fee_usd ?? null,
             x402_resource_fee_usd: 0,
             pnl_currency: 'USD',
-            fee_breakdown: flashFeeAccounting || {
-              pnl_currency: 'USD',
-              x402_resource_fee_usd: 0,
-              x402_fee_source: 'no_paid_x402_request_attributed_to_execution',
-              fee_accounting_status: 'no_flash_fee_quote',
+            fee_breakdown: {
+              ...(flashFeeAccounting || {
+                pnl_currency: 'USD',
+                x402_resource_fee_usd: 0,
+                x402_fee_source: 'no_paid_x402_request_attributed_to_execution',
+                fee_accounting_status: 'no_flash_fee_quote',
+              }),
+              payout_test_mode: payoutTestMode,
+              payout_test_claimed: payoutTestClaimed,
+              stop_loss_usd: -maxNetworkFeeBudgetUsd(strategyBot),
+              profit_evidence_policy: 'realized_flash_profit_requires_confirmed_settlement_event',
             },
             failure_reason: null,
             validated_at: now.toISOString(), wallet_id: wallet.id,
           }).select('id').single()
           if (attemptError) throw attemptError
+
+          if (payoutTestMode) {
+            const { data: boundRoute, error: bindError } = await supabase
+              .from('arbivault_strategy_routes')
+              .update({
+                payout_test_execution_attempt_id: attempt.id,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', executionRoute.id)
+              .eq('payout_test_authorized', true)
+              .not('payout_test_used_at', 'is', null)
+              .is('payout_test_execution_attempt_id', null)
+              .select('id')
+              .maybeSingle()
+            if (bindError || !boundRoute) {
+              await supabase.from('execution_attempts').update({
+                status: 'failed',
+                failure_reason: 'flash_payout_test_attempt_binding_failed',
+                updated_at: new Date().toISOString(),
+              }).eq('id', attempt.id)
+              opportunities.push({
+                ...executionContext,
+                execution_gate: 'flash_payout_test_attempt_binding_failed',
+                execution_attempt_id: attempt.id,
+                adapter_id: executionAdapterId,
+                signing_request_id: null,
+                attempt_created: true,
+                signing: 'not_created',
+                broadcast: 'not_attempted',
+              })
+              continue
+            }
+          }
 
           let signingRequestId: string | null = null
           if (executionGate === 'eligible' && unsignedTransaction && txPayloadHash && executionAdapterId && wallet?.id) {
