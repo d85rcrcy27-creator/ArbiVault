@@ -447,13 +447,13 @@ async function verifyExecutor(
       functionName: "HOT_WALLET",
       data: raw as `0x${string}`,
     }) as string;
-    result.payout_recipient_address = recipient;
+    result.trading_wallet_address = recipient;
     const match = generatedWallets.find((wallet) =>
       wallet.chain === chain &&
       /^0x[a-fA-F0-9]{40}$/.test(wallet.address || "") &&
       wallet.address.toLowerCase() === recipient.toLowerCase()
     );
-    result.payout_recipient_matches_generated_hot_wallet = !!match;
+    result.trading_wallet_matches_generated_hot_wallet = !!match;
     result.matched_generated_wallet_id = match?.id || null;
     result.matched_generated_wallet_owner_id = match?.owner_id || null;
   } catch (error) {
