@@ -867,7 +867,7 @@ export default {
 
           if (executionRoute.route_type === 'flash_liquidity') {
             try {
-              if (!wallet) throw new Error('flash_source_wallet_unavailable')
+              if (!wallet && executionRoute.discovery_only !== true) throw new Error('flash_source_wallet_unavailable')
               const isBnbFlash = executionRoute.chain === 'bnb' && executionRoute.pair === 'BNB/USDT'
               const isEthereumFlash = executionRoute.chain === 'ethereum' && executionRoute.pair === 'ETH/USDC'
               if (!isBnbFlash && !isEthereumFlash) {
@@ -895,7 +895,7 @@ export default {
               flashQuote = await callTransactionBuilder({
                 mode: 'flash_quote',
                 route_id: executionRoute.id,
-                source_wallet_id: wallet.id,
+                source_wallet_id: wallet?.id || undefined,
                 side: 'sell',
                 amount_raw: amountRaw,
                 flash_loan_asset: flashAsset,
@@ -935,6 +935,7 @@ export default {
               }
 
               if (
+                executionRoute.discovery_only !== true &&
                 !builderError &&
                 flashQuote.profitable === true &&
                 networkFlashDiagnostic?.ready_for_flash_transaction_test === true &&
