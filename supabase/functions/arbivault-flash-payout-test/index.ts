@@ -184,6 +184,17 @@ Deno.serve(async (req: Request) => {
     } catch (error) {
       blockers = [error instanceof Error ? error.message : "executor_diagnostic_failed"];
     }
+    const { data: executionPolicy, error: policyError } = await admin
+      .from("arbivault_execution_policy")
+      .select("enabled,starts_at,ends_at")
+      .eq("policy_key", "primary")
+      .maybeSingle();
+    const policyNow = Date.now();
+    const policyActive = !policyError && !!executionPolicy &&
+      executionPolicy.enabled === true &&
+      !!executionPolicy.starts_at && new Date(executionPolicy.starts_at).getTime() <= policyNow &&
+      (!executionPolicy.ends_at || new Date(executionPolicy.ends_at).getTime() > policyNow);
+    if (!policyActive) blockers.push(policyError ? "execution_policy_lookup_failed" : "execution_policy_not_active");
     const alreadyVerified = chainDiagnostic?.payout_behavior_verified === true ||
       chainDiagnostic?.executor?.payout_behavior_verified === true;
     if (alreadyVerified) blockers.push("executor_payout_behavior_already_verified");
