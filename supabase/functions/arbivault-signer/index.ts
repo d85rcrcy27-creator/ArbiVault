@@ -102,6 +102,67 @@ async function syncExecutorRegistry() {
     : ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
 }
 
+async function verifyExecutorPayoutBindings(chain: "ethereum" | "bnb", executorAddress: string, wallet: any) {
+  const endpoint = chain === "ethereum" ? ETH_RPC : BSC_RPC;
+  const { data: deployment, error: deploymentError } = await supabase
+    .from("flash_executor_deployments")
+    .select("chain,executor_address,status,source_verified,payout_audited,hot_wallet_id,hot_wallet_address,profit_recipient_wallet_id,profit_recipient_address")
+    .eq("chain", chain).eq("executor_address", executorAddress).maybeSingle();
+  if (deploymentError || !deployment || deployment.status !== "verified" ||
+      deployment.source_verified !== true || deployment.payout_audited !== true ||
+      !deployment.hot_wallet_id || !deployment.profit_recipient_wallet_id ||
+      !deployment.hot_wallet_address || !deployment.profit_recipient_address) {
+    return { ok: false, error: "executor_profit_destination_registry_not_verified" };
+  }
+  if (String(deployment.hot_wallet_id) !== String(wallet.id) ||
+      String(deployment.hot_wallet_address).toLowerCase() !== String(wallet.address).toLowerCase()) {
+    return { ok: false, error: "executor_trading_wallet_binding_mismatch" };
+  }
+  try {
+    const code = String(await rpc(endpoint, "eth_getCode", [executorAddress, "latest"]));
+    if (!hasContractCode(code)) return { ok: false, error: "executor_runtime_bytecode_missing" };
+    const hotGetter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
+    const recipientGetter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "PROFIT_RECIPIENT" });
+    const [hotRaw, recipientRaw] = await Promise.all([
+      rpc(endpoint, "eth_call", [{ to: executorAddress, data: hotGetter }, "latest"]),
+      rpc(endpoint, "eth_call", [{ to: executorAddress, data: recipientGetter }, "latest"]),
+    ]);
+    const hot = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: String(hotRaw) as `0x${string}` }) as string;
+    const recipient = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "PROFIT_RECIPIENT", data: String(recipientRaw) as `0x${string}` }) as string;
+    if (hot.toLowerCase() !== String(deployment.hot_wallet_address).toLowerCase() ||
+        recipient.toLowerCase() !== String(deployment.profit_recipient_address).toLowerCase()) {
+      return { ok: false, error: "executor_immutable_wallet_getter_mismatch" };
+    }
+    if (hot.toLowerCase() === recipient.toLowerCase()) return { ok: false, error: "executor_profit_recipient_must_be_separate" };
+
+    const { data: recipientWallet, error: recipientWalletError } = await supabase
+      .from("wallets")
+      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+      .eq("id", deployment.profit_recipient_wallet_id).maybeSingle();
+    if (recipientWalletError || !recipientWallet || recipientWallet.status !== "active" ||
+        recipientWallet.chain !== chain || recipientWallet.is_hot !== false ||
+        recipientWallet.wallet_role !== "profit_recipient" || recipientWallet.data_quality_status !== "verified" ||
+        !recipientWallet.secret_ref ||
+        String(recipientWallet.address).toLowerCase() !== recipient.toLowerCase() ||
+        recipientWallet.owner_id !== wallet.owner_id) {
+      return { ok: false, error: "profit_recipient_wallet_inactive_or_mismatched" };
+    }
+    const { data: profile, error: profileError } = await supabase
+      .from("profit_recipient_profiles")
+      .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
+      .eq("owner_id", wallet.owner_id).eq("wallet_id", recipientWallet.id)
+      .eq("chain", chain).eq("asset", "ALL").eq("status", "active").maybeSingle();
+    if (profileError || !profile ||
+        (profile.activation_at && new Date(profile.activation_at).getTime() > Date.now())) {
+      return { ok: false, error: "profit_recipient_profile_inactive_or_pending" };
+    }
+    return { ok: true, hot_wallet: hot, profit_recipient: recipient };
+  } catch {
+    return { ok: false, error: "executor_profit_destination_live_check_failed" };
+  }
+}
+
+
 const BSC_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const ETH_FLASH_ROUTER_ABI = parseAbi(["function swapExactTokensForTokens(uint256 amountIn,uint256 amountOutMin,address[] path,address to,uint256 deadline) returns (uint256[] amounts)"]);
 const BSC_PANCAKE_V2_ABI = parseAbi([
