@@ -213,7 +213,7 @@ Deno.serve(async (req) => {
       const minSpreadPct = body.min_spread_pct == null ? 0.30 : Number(body.min_spread_pct);
       const profitCondition = skillConditions.find((condition: any) =>
         /profit/i.test(String(condition?.label || "")) &&
-        !/%|bps|\\bms\\b|\\bx\\b/i.test(String(condition?.unit || ""))
+        !["%", "bps", "ms", "x"].includes(String(condition?.unit || "").toLowerCase())
       );
       const configuredProfitFloor = profitCondition
         ? Number.parseFloat(String(profitCondition.value ?? ""))
