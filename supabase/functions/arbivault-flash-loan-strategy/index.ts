@@ -1102,7 +1102,7 @@ export default {
           if (executionRoute.route_type === 'flash_liquidity' && builderError) executionBlockers.push(builderError)
           if (executionRoute.route_type === 'flash_liquidity' && flashQuote?.profitable !== true) executionBlockers.push('flash_no_profitable_live_opportunity')
           if (executionRoute.route_type === 'flash_liquidity' && !transactionBuilt) executionBlockers.push('flash_atomic_transaction_not_built')
-          if (!executionWindowActive && !payoutTestReady) executionBlockers.push('execution_policy_not_active')
+          if (!executionWindowActive) executionBlockers.push('execution_policy_not_active')
           if (['cyclic', 'multi_venue'].includes(executionRoute.route_type) && !multiLegBuilderConfigured) executionBlockers.push('atomic_multileg_builder_required')
           if (executionRoute.route_type === 'dex_cex' && !cexOrderExecutionAvailable) executionBlockers.push(cexExecutionBlocker)
           if (builderError && executionRoute.route_type !== 'flash_liquidity') executionBlockers.push('transaction_builder_preflight_failed')
