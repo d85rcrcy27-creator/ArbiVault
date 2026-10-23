@@ -20,6 +20,10 @@ const ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_BSC_FLASH_
 let BSC_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
 const ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = Deno.env.get("ARBIVAULT_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED") === "true";
 let ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+// This flag is evidence-based: only a confirmed payout transfer from a verified
+// executor may set it. Environment variables cannot assert a real payout occurred.
+let BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
+let ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = false;
 // Official Aave V3 BNB market provider. Resolve getPool() on-chain at runtime so
 // Pool proxy upgrades are picked up without manually rotating an env var.
 const BSC_AAVE_PROVIDER = (Deno.env.get("ARBIVAULT_BSC_AAVE_PROVIDER") || "0xff75B6da14FfbbfD355Daf7a2731456b3562Ba6D").trim();
@@ -31,7 +35,7 @@ const ETH_FLASH_EXPECTED_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
 async function syncExecutorRegistry() {
   const { data: rows, error } = await supabase
     .from("flash_executor_deployments")
-    .select("chain,executor_address,status,source_verified,payout_audited")
+    .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
     .in("chain", ["bnb", "ethereum"]);
   if (error) throw new Error("flash_executor_registry_lookup_failed");
 
@@ -51,6 +55,10 @@ async function syncExecutorRegistry() {
   ETH_FLASH_EXECUTOR_PAYOUT_AUDITED = ethereum
     ? (ethereum.status === "verified" && ethereum.source_verified === true && ethereum.payout_audited === true)
     : ENV_ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
+  BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = bnb?.status === "verified" &&
+    bnb.source_verified === true && bnb.payout_audited === true && bnb.payout_behavior_verified === true;
+  ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED = ethereum?.status === "verified" &&
+    ethereum.source_verified === true && ethereum.payout_audited === true && ethereum.payout_behavior_verified === true;
 }
 
 async function persistExecutorAudit(chain: string, executor: Record<string, any>) {
@@ -540,14 +548,17 @@ async function diagnoseFlashExecutor() {
     generatedWallets,
     BSC_FLASH_EXPECTED_POOL,
   );
+  bnb.payout_behavior_verified = BSC_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED === true;
   bnb.ready_for_flash_transaction_test =
     bnb.rpc_chain_ok === true &&
     bnb.aave_pool_resolved === true &&
     (bnb.executor as any).configured === true &&
     (bnb.executor as any).code_deployed === true &&
+    (bnb.executor as any).pool_matches_expected === true &&
     (bnb.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (bnb.executor as any).source_verification?.verified === true &&
     BSC_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+  bnb.ready_for_live_trading = bnb.ready_for_flash_transaction_test === true && bnb.payout_behavior_verified === true;
 
   try {
     const chainId = String(await ethereumRpc("eth_chainId", [])).toLowerCase();
@@ -576,17 +587,29 @@ async function diagnoseFlashExecutor() {
   await persistExecutorAudit("bnb", bnb.executor as Record<string, any>);
   await persistExecutorAudit("ethereum", eth.executor as Record<string, any>);
 
+  eth.payout_behavior_verified = ETH_FLASH_EXECUTOR_PAYOUT_BEHAVIOR_VERIFIED === true;
   eth.ready_for_flash_transaction_test =
     eth.rpc_chain_ok === true &&
     eth.aave_pool_resolved === true &&
     (eth.executor as any).configured === true &&
     (eth.executor as any).code_deployed === true &&
+    (eth.executor as any).pool_matches_expected === true &&
     (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true &&
     (eth.executor as any).source_verification?.verified === true &&
     ETH_FLASH_EXECUTOR_PAYOUT_AUDITED === true;
+  eth.ready_for_live_trading = eth.ready_for_flash_transaction_test === true && eth.payout_behavior_verified === true;
 
-  result.ready_for_flash_transaction_test = bnb.ready_for_flash_transaction_test === true || eth.ready_for_flash_transaction_test === true;
-  result.executor_configured = (bnb.executor as any).configured === true;
+  // The combined flags mean ALL supported chains are ready; separate any-chain
+  // fields prevent one chain being shown as ready when the other is blocked.
+  result.ready_for_flash_transaction_test = bnb.ready_for_flash_transaction_test === true && eth.ready_for_flash_transaction_test === true;
+  result.any_chain_ready_for_flash_transaction_test = bnb.ready_for_flash_transaction_test === true || eth.ready_for_flash_transaction_test === true;
+  result.ready_for_live_trading = bnb.ready_for_live_trading === true && eth.ready_for_live_trading === true;
+  result.any_chain_ready_for_live_trading = bnb.ready_for_live_trading === true || eth.ready_for_live_trading === true;
+  result.payout_behavior_verified = bnb.payout_behavior_verified === true && eth.payout_behavior_verified === true;
+  result.bnb_payout_behavior_verified = bnb.payout_behavior_verified === true;
+  result.ethereum_payout_behavior_verified = eth.payout_behavior_verified === true;
+  result.executor_configured = (bnb.executor as any).configured === true && (eth.executor as any).configured === true;
+  result.any_executor_configured = (bnb.executor as any).configured === true || (eth.executor as any).configured === true;
   result.bsc_flash_executor_payout_audited = BSC_FLASH_EXECUTOR_PAYOUT_AUDITED;
   result.executor_address = (bnb.executor as any).address || null;
   result.executor_code_deployed = (bnb.executor as any).code_deployed === true;
@@ -600,7 +623,6 @@ async function diagnoseFlashExecutor() {
   result.ethereum_flash_executor_configured = (eth.executor as any).configured === true;
   result.ethereum_flash_executor_payout_audited = ETH_FLASH_EXECUTOR_PAYOUT_AUDITED;
   result.ethereum_flash_executor_address = (eth.executor as any).address || null;
-  result.ethereum_payout_behavior_verified = false;
   result.ethereum_payout_recipient_address = (eth.executor as any).payout_recipient_address || null;
   result.ethereum_payout_recipient_matches_generated_hot_wallet = (eth.executor as any).payout_recipient_matches_generated_hot_wallet === true;
   result.ethereum_matched_generated_wallet_id = (eth.executor as any).matched_generated_wallet_id || null;
