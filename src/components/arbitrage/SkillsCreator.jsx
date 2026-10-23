@@ -437,7 +437,36 @@ export default function SkillsCreator({ routes = [], onExecute, minimumSpreadPct
               ? <>Realized WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Confirmed trades: {s.backtest.trades}</>
               : <>Realized WR: UNVERIFIED · {s.backtest.source === 'historical_strategy_training' ? 'Qualified historical samples' : 'Qualified signal entries'}: {s.backtest.trades}</>} · Strategy net (est.): <span className={Number(s.backtest.strategy_qualified_net_pnl ?? s.backtest.pnl) >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.strategy_qualified_net_pnl ?? s.backtest.pnl).toFixed(2)}</span>{s.backtest.source === 'recorded_live_market_observations' && s.backtest.potential_signal_events == null
                   ? <> · Legacy quote-poll totals hidden; refresh backtest</>
-                  : <>{s.backtest.potential_gross_pnl_all_samples != null && <> · Gross potential from distinct signals: <span className="text-[#e0e4f0]">${Number(s.backtest.potential_gross_pnl_all_samples).toFixed(2)}</span></>}{s.backtest.potential_net_pnl_all_samples != null && <> · Estimated net from distinct signals: <span className={Number(s.backtest.potential_net_pnl_all_samples) >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>${Number(s.backtest.potential_net_pnl_all_samples).toFixed(2)}</span></>}</>)} : 'No backtest yet'}</div><button onClick={() => runSkillBacktest(s)} disabled={loading} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40"><FlaskConical className="h-3 w-3" />Refresh Backtest</button></div>
+            <div className="flex items-center justify-between">
+              <div className="font-mono text-[0.625rem] text-[#5a6080]">
+                {!s.backtest
+                  ? 'No backtest yet'
+                  : s.backtest.legacy_aggregate_invalidated === true
+                    ? <span className="text-[#FFB800]">Previous backtest withdrawn · Refresh Backtest</span>
+                    : <>
+                      {s.backtest.pnl_is_realized === true
+                        ? <>Realized WR: <span className="text-[#00FF87]">{s.backtest.winRate}%</span> · Confirmed trades: {s.backtest.trades}</>
+                        : <>Realized WR: UNVERIFIED · {s.backtest.source === 'historical_strategy_training' ? 'Qualified historical samples' : 'Qualified signal entries'}: {s.backtest.trades ?? 0}</>}
+                      {' · Strategy net (est.): '}
+                      <span className={Number(s.backtest.strategy_qualified_net_pnl ?? s.backtest.estimated_net_pnl ?? 0) >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>
+                        ${Number(s.backtest.strategy_qualified_net_pnl ?? s.backtest.estimated_net_pnl ?? 0).toFixed(2)}
+                      </span>
+                      {s.backtest.potential_gross_pnl_all_samples != null && <>
+                        {' · Gross potential from distinct signals: '}
+                        <span className="text-[#e0e4f0]">${Number(s.backtest.potential_gross_pnl_all_samples).toFixed(2)}</span>
+                      </>}
+                      {s.backtest.potential_net_pnl_all_samples != null && <>
+                        {' · Estimated net from distinct signals: '}
+                        <span className={Number(s.backtest.potential_net_pnl_all_samples) >= 0 ? 'text-[#00FF87]' : 'text-[#FF4D4D]'}>
+                          ${Number(s.backtest.potential_net_pnl_all_samples).toFixed(2)}
+                        </span>
+                      </>}
+                    </>}
+              </div>
+              <button onClick={() => runSkillBacktest(s)} disabled={loading} className="flex items-center gap-1 rounded border border-[#232738] px-2 py-1 font-mono text-[0.625rem] text-[#8a90b0] disabled:opacity-40">
+                <FlaskConical className="h-3 w-3" />Refresh Backtest
+              </button>
+            </div>
             {editingSkillId === s.id && <div className="mb-2 flex items-center gap-1 font-mono text-[0.55rem] uppercase tracking-wider text-[#FFB800]"><X className="h-3 w-3" />Editing this strategy bot</div>}
             {s.backtest && <div className="mt-1 space-y-1 font-mono text-[0.5rem] uppercase tracking-wider text-[#5a6080]">
               {Number(s.backtest.samples) > 0 && <div>HISTORICAL OBSERVATIONS · {s.backtest.samples}{Number(s.backtest.available_dataset_samples) > 0 ? ` / ${s.backtest.available_dataset_samples} available` : ''} · {s.backtest.data_scope || 'recorded market data'} · {s.backtest.first_observation ? new Date(s.backtest.first_observation).toLocaleString() : '—'} → {s.backtest.last_observation ? new Date(s.backtest.last_observation).toLocaleString() : '—'}</div>}
