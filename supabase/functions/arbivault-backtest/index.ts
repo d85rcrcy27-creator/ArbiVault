@@ -16,26 +16,6 @@ const corsHeaders = {
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { ...corsHeaders, "cache-control": "no-store" } });
 
-// Repeated quote polls are not independent trades. Count a signal entry once
-// per symbol + buy/sell venue route, and only re-arm after an observed
-// non-qualifying sample. This is intentionally conservative after time sampling:
-// a gap in the sampled data is not proof the opportunity ended.
-function distinctSignalEntries(
-  samples: any[],
-  predicate: (sample: any) => boolean,
-) {
-  const state = new Map<string, { qualifies: boolean }>();
-  const entries: any[] = [];
-  for (const sample of samples) {
-    const key = String(sample.routeKey || sample.symbol || "unknown");
-    const qualifies = predicate(sample);
-    const previous = state.get(key);
-    if (qualifies && (!previous || !previous.qualifies)) entries.push(sample);
-    state.set(key, { qualifies });
-  }
-  return entries;
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -110,61 +90,6 @@ Deno.serve(async (req) => {
       const chronologicallyOrderedLiveRows = liveRows.slice().sort(
         (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
       );
-      const bases = [...new Set(chronologicallyOrderedLiveRows.map((row: any) => String(row.symbol || "").split("/")[0]).filter(Boolean))];
-      const volumeSymbols = bases.map((symbol) => symbol + "/USD");
-      const volumeRows: any[] = [];
-      if (volumeSymbols.length) {
-        const { data: sampledVolumeRows, error: volumeRowsError } = await admin.rpc(
-          "sample_arbivault_market_observations",
-          {
-            p_owner_id: skill.owner_id,
-            p_source_key: "coingecko",
-            p_domain: null,
-            p_metric: "public_market_price",
-            p_symbols: volumeSymbols,
-            p_start_at: startAt.toISOString(),
-            p_end_at: endAt.toISOString(),
-            p_sample_limit: liveSampleLimit,
-          },
-        );
-        if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
-        volumeRows.push(...(sampledVolumeRows || []));
-      }
-
-      const volumeHistory = new Map<string, any[]>();
-      const chronologicallyOrderedVolumeRows = volumeRows.slice().sort(
-        (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
-      );
-      for (const row of chronologicallyOrderedVolumeRows) {
-        const key = String(row.symbol || "").toUpperCase();
-        const list = volumeHistory.get(key) || [];
-        const volume = Number(row.metadata?.volume24h);
-        if (Number.isFinite(volume) && volume >= 0) list.push({
-          at: new Date(row.observed_at).getTime(),
-          volume24hUsd: volume,
-        });
-        volumeHistory.set(key, list);
-      }
-
-      const nearestVolume = (symbol: string, observedAt: string) => {
-        const list = volumeHistory.get((symbol.split("/")[0] + "/USD").toUpperCase()) || [];
-        if (!list.length) return null;
-        const target = new Date(observedAt).getTime();
-        let lo = 0;
-        let hi = list.length;
-        while (lo < hi) {
-          const mid = (lo + hi) >> 1;
-          if (list[mid].at < target) lo = mid + 1;
-          else hi = mid;
-        }
-        const candidates = [list[lo - 1], list[lo]].filter(Boolean);
-        if (!candidates.length) return null;
-        const chosen = candidates.reduce((best, item) =>
-          Math.abs(item.at - target) < Math.abs(best.at - target) ? item : best
-        );
-        return Math.abs(chosen.at - target) <= 10 * 60 * 1000 ? chosen.volume24hUsd : null;
-      };
-
       const notional = Number(body.notional ?? skill?.risk_limits?.maxNotional ?? skill?.risk_limits?.max_trade_size ?? 1000);
       // CEX quote observations require a venue-fee model, not a made-up gas fee.
       // Default to 0.10% taker fee per venue (0.20% round trip) plus 0.05%
@@ -188,36 +113,7 @@ Deno.serve(async (req) => {
           minSpreadPct < 0 || minimumPotentialNetProfitUsd < 0) {
         return json({ error: "invalid_cost_assumptions_or_notional" }, 400);
       }
-      const builtSamples = chronologicallyOrderedLiveRows.map((row: any) => {
-        const metadata = row.metadata || {};
-        const quotes = Array.isArray(metadata.quotes) ? metadata.quotes : [];
-        const buyExchange = String(metadata.buy_exchange || "");
-        const sellExchange = String(metadata.sell_exchange || "");
-        const buyQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === buyExchange.toLowerCase());
-        const sellQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === sellExchange.toLowerCase());
-        const quoteLatencies = [buyQuote?.latencyMs, sellQuote?.latencyMs]
-          .map(Number)
-          .filter((value: number) => Number.isFinite(value) && value >= 0);
-        const latencyMs = quoteLatencies.length === 2 ? Math.max(...quoteLatencies) : null;
-        const spreadPct = Number(row.value);
-        const volume24hUsd = nearestVolume(String(row.symbol || ""), row.observed_at);
-        const estimatedNetProfitUsd = notional * (spreadPct - costPct) / 100;
-        const buyVenue = String(metadata.buy_exchange ?? metadata.buyExchange ?? "");
-        const sellVenue = String(metadata.sell_exchange ?? metadata.sellExchange ?? "");
-        return {
-          id: row.id,
-          symbol: row.symbol,
-          routeKey: `${String(row.symbol || "")}|${buyVenue}|${sellVenue}`,
-          observed_at: row.observed_at,
-          spreadPct,
-          latencyMs,
-          volume24hUsd,
-          estimatedGrossProfitUsd: notional * spreadPct / 100,
-          estimatedNetProfitUsd,
-        };
-      }).filter((sample: any) => Number.isFinite(sample.spreadPct));
-
-      if (!builtSamples.length) {
+      if (!chronologicallyOrderedLiveRows.length) {
         return json({
           ok: false, supported: false, reason: "no_recorded_live_market_observations",
           skill_id: skillId, strategy: skill?.name || null, samples: 0, trades: 0,
@@ -225,12 +121,54 @@ Deno.serve(async (req) => {
         }, 409);
       }
 
-      const spreadCondition = skillConditions.find((condition: any) =>
-        String(condition?.label || "").toLowerCase().includes("spread")
+      // Pull actual threshold-entry events from the full history, rather than
+      // pretending the 10k sampled rows are 10k trades. The SQL function detects
+      // the first crossing per symbol + venue route and joins contemporaneous volume.
+      const entryThreshold = Math.max(
+        minSpreadPct,
+        Number.isFinite(spreadThreshold) ? spreadThreshold : minSpreadPct,
+        costPct + (minimumPotentialNetProfitUsd * 100 / notional),
       );
-      const spreadThreshold = spreadCondition
-        ? Number.parseFloat(String(spreadCondition.value ?? ""))
-        : null;
+      const { data: signalEntryRows, error: signalEntryError } = await admin.rpc(
+        "arbivault_backtest_signal_entries",
+        {
+          p_owner_id: skill.owner_id,
+          p_start_at: startAt.toISOString(),
+          p_end_at: endAt.toISOString(),
+          p_min_spread_pct: entryThreshold,
+        },
+      );
+      if (signalEntryError) return json({ error: "signal_entry_lookup_failed", detail: signalEntryError.message }, 500);
+
+      const builtSamples = (signalEntryRows || []).map((row: any) => {
+        const metadata = row.metadata || {};
+        const quotes = Array.isArray(metadata.quotes) ? metadata.quotes : [];
+        const buyExchange = String(metadata.buy_exchange ?? metadata.buyExchange ?? "");
+        const sellExchange = String(metadata.sell_exchange ?? metadata.sellExchange ?? "");
+        const buyQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === buyExchange.toLowerCase());
+        const sellQuote = quotes.find((quote: any) => String(quote.exchange || "").toLowerCase() === sellExchange.toLowerCase());
+        const quoteLatencies = [buyQuote?.latencyMs, sellQuote?.latencyMs]
+          .map(Number)
+          .filter((value: number) => Number.isFinite(value) && value >= 0);
+        const latencyMs = quoteLatencies.length === 2 ? Math.max(...quoteLatencies) : null;
+        const spreadPct = Number(row.value);
+        const rawVolume = Number(row.volume24h_usd);
+        const volume24hUsd = Number.isFinite(rawVolume) && rawVolume >= 0 ? rawVolume : null;
+        const estimatedGrossProfitUsd = notional * spreadPct / 100;
+        const estimatedNetProfitUsd = notional * (spreadPct - costPct) / 100;
+        return {
+          id: row.id,
+          symbol: row.symbol,
+          routeKey: `${String(row.symbol || "")}|${buyExchange}|${sellExchange}`,
+          observed_at: row.observed_at,
+          spreadPct,
+          latencyMs,
+          volume24hUsd,
+          estimatedGrossProfitUsd,
+          estimatedNetProfitUsd,
+        };
+      }).filter((sample: any) => Number.isFinite(sample.spreadPct));
+
       const conditionThresholds = skillConditions.map((condition: any) => ({
         label: String(condition?.label || ""),
         value: condition?.value == null ? null : String(condition.value),
@@ -247,10 +185,10 @@ Deno.serve(async (req) => {
         if (label.includes("profit")) return sample.estimatedNetProfitUsd > threshold;
         return false;
       };
-      // Negative spreads are observations, not executed losses. Count only distinct
-      // entries that pass the configured market spread floor and net-profit floor.
+      // Rows in builtSamples are exact entry events from the complete observed
+      // history, not repeated polling observations. Each signal entry is counted once.
       const positiveSpreadSamples = builtSamples.filter((sample: any) => sample.spreadPct > 0);
-      const qualifying = distinctSignalEntries(builtSamples, (sample: any) =>
+      const qualifying = builtSamples.filter((sample: any) =>
         sample.spreadPct >= minSpreadPct &&
         sample.estimatedNetProfitUsd > 0 &&
         skillConditions.every((condition: any) => conditionPasses(condition, sample))
@@ -258,10 +196,7 @@ Deno.serve(async (req) => {
       const wins = qualifying.filter((sample: any) => sample.estimatedNetProfitUsd > 0);
       const netPnl = qualifying.reduce((sum: number, sample: any) => sum + sample.estimatedNetProfitUsd, 0);
 
-      // Polling every few seconds must not charge the same hypothetical trade fee
-      // repeatedly. These totals include only distinct signal entries above the
-      // gross-spread floor and configured minimum net profit, never all 10,000 polls.
-      const potentialSignalEntries = distinctSignalEntries(builtSamples, (sample: any) =>
+      const potentialSignalEntries = builtSamples.filter((sample: any) =>
         sample.spreadPct >= minSpreadPct &&
         sample.estimatedNetProfitUsd >= minimumPotentialNetProfitUsd
       );
@@ -272,23 +207,25 @@ Deno.serve(async (req) => {
         sum + sample.estimatedNetProfitUsd, 0);
       const bestSample = positiveSpreadSamples.reduce((best: any, sample: any) =>
         !best || sample.estimatedNetProfitUsd > best.estimatedNetProfitUsd ? sample : best, null);
-      const observedTimes = builtSamples.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
+      const observedTimes = chronologicallyOrderedLiveRows.map((sample: any) => new Date(sample.observed_at).getTime()).filter(Number.isFinite);
       const observedSpanDays = observedTimes.length
         ? Math.max(0, (Math.max(...observedTimes) - Math.min(...observedTimes)) / 86400000)
         : 0;
+      const sampledMaxSpread = Math.max(...chronologicallyOrderedLiveRows.map((sample: any) => Number(sample.value)).filter(Number.isFinite), 0);
+      const historicalMaxSpread = Math.max(sampledMaxSpread, ...builtSamples.map((sample: any) => sample.spreadPct), 0);
       const result: any = {
         ok: true,
         supported: true,
         source: "recorded_live_market_observations",
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
-        data_methodology: "A time-stratified sample of up to 10,000 recorded live order-book observations distributed across the full requested window; CoinGecko 24h USD volume observations are independently time-stratified across that same window and matched within ten minutes. Repeated polls are de-duplicated into signal entries by symbol and buy/sell venue.",
+        data_methodology: "Up to 10,000 observations are sampled across the full requested window for coverage and range statistics. Profit totals use exact first-crossing signal entries calculated over the complete recorded spread history, with closest CoinGecko 24h volume joined within ten minutes. A signal is not treated as a confirmed trade.",
         available_dataset_samples: liveRowsCount ?? builtSamples.length,
         sample_limit: liveSampleLimit,
         newest_samples_selected: false,
         time_stratified_sample: true,
         live_market_observations_only: true,
         condition_thresholds: conditionThresholds,
-        threshold_pct: Number.isFinite(spreadThreshold) ? Math.max(spreadThreshold, minSpreadPct) : minSpreadPct,
+        threshold_pct: entryThreshold,
         configured_skill_spread_threshold_pct: Number.isFinite(spreadThreshold) ? spreadThreshold : null,
         market_min_spread_pct: minSpreadPct,
         threshold_reached: qualifying.length > 0,
@@ -308,11 +245,11 @@ Deno.serve(async (req) => {
         total_cost_assumption_pct: costPct,
         minimum_potential_net_profit_usd: minimumPotentialNetProfitUsd,
         potential_signal_events: potentialSignalEntries.length,
-        potential_event_methodology: "One entry per symbol + buy/sell venue route when observed spread clears the configured floor and estimated net clears the USD profit floor; repeated polls of the same signal are not added as separate trades.",
+        potential_event_methodology: "Exact first-crossing entry per symbol + buy/sell venue route over the complete stored observation window. Entries must clear both the gross-spread floor and the estimated net-profit floor; repeated polls are not added as separate trades.",
         network_fee_included: false,
         network_fee_estimate_usd: null,
         network_fee_policy: "Not included: observations come from centralized-exchange order books, not a confirmed on-chain route or gas estimate.",
-        samples: builtSamples.length,
+        samples: chronologicallyOrderedLiveRows.length,
         samples_with_latency: builtSamples.filter((sample: any) => sample.latencyMs != null).length,
         samples_with_volume: builtSamples.filter((sample: any) => sample.volume24hUsd != null).length,
         trades: qualifying.length,
@@ -333,15 +270,15 @@ Deno.serve(async (req) => {
         best_sample_potential_net_profit_usd: bestSample ? Number(bestSample.estimatedNetProfitUsd.toFixed(2)) : null,
         estimated_not_realized: true,
         cost_methodology: "Assumes 0.10% taker fees at each CEX venue (0.20% round trip) plus a 0.05% slippage reserve by default. Costs are estimated assumptions, not measured user fees or blockchain gas. Potential totals sum distinct entries that clear the configured spread and net-profit floors; they are not realized or executable PnL.",
-        historical_max_spread_pct: Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)),
+        historical_max_spread_pct: Number(historicalMaxSpread.toFixed(6)),
         historical_min_route_latency_ms: Math.min(...builtSamples.filter((sample: any) => sample.latencyMs != null).map((sample: any) => sample.latencyMs), Infinity),
         reason: qualifying.length
           ? "live_observation_conditions_matched"
-          : (Number(Math.max(...builtSamples.map((sample: any) => sample.spreadPct)).toFixed(6)) < minSpreadPct
-              ? "historical_max_spread_below_market_floor"
+          : (historicalMaxSpread < entryThreshold
+              ? "historical_max_spread_below_profitability_floor"
               : "no_recorded_observations_matched_all_skill_conditions"),
-        first_observation: builtSamples[0]?.observed_at || null,
-        last_observation: builtSamples[builtSamples.length - 1]?.observed_at || null,
+        first_observation: chronologicallyOrderedLiveRows[0]?.observed_at || null,
+        last_observation: chronologicallyOrderedLiveRows[chronologicallyOrderedLiveRows.length - 1]?.observed_at || null,
       };
       if (skillId) {
         const { error: saveError } = await admin.from("bot_skills").update({ backtest: result }).eq("id", skillId).eq("owner_id", skill.owner_id);
