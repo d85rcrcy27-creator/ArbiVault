@@ -187,13 +187,28 @@ Deno.serve(async (req: Request) => {
     const alreadyVerified = chainDiagnostic?.payout_behavior_verified === true ||
       chainDiagnostic?.executor?.payout_behavior_verified === true;
     if (alreadyVerified) blockers.push("executor_payout_behavior_already_verified");
+    const alreadyAuthorizedByUser = route.payout_test_authorized === true &&
+      String(route.payout_test_authorized_by || "") === String(user.id);
+    const authorizedByAnotherUser = route.payout_test_authorized === true && !alreadyAuthorizedByUser;
+    if (authorizedByAnotherUser) blockers.push("one_shot_payout_test_authorized_by_another_owner");
 
-    const canAuthorize = blockers.length === 0 && !alreadyVerified;
+    const canAuthorize = blockers.length === 0 && !alreadyVerified &&
+      route.payout_test_authorized !== true &&
+      route.payout_test_used_at == null &&
+      route.payout_test_execution_attempt_id == null;
     if (action === "status") {
       return json({
         ok: true, chain, route_id: route.id, pair: route.pair, strategy_bot_id: bot.id,
         wallet_id: wallet.id, wallet_address: wallet.address, executor: chainDiagnostic?.executor || null,
-        chain_diagnostic: chainDiagnostic, payout_test_authorized: route.payout_test_authorized === true,
+        chain_diagnostic: chainDiagnostic,
+        payout_test_authorized: alreadyAuthorizedByUser,
+        payout_test_authorization_state: alreadyAuthorizedByUser
+          ? "authorized_waiting_for_profitable_quote_and_manual_passkey_approval"
+          : authorizedByAnotherUser
+            ? "authorized_by_another_owner"
+            : route.payout_test_used_at != null || route.payout_test_execution_attempt_id != null
+              ? "previous_test_requires_reconciliation"
+              : "not_authorized",
         can_authorize: canAuthorize, blockers,
         policy: { max_notional_usd: 25, min_estimated_net_profit_usd: Number((bot as any).min_profit_threshold || 2), requires_passkey: true, broadcasts_without_manual_approval: false },
       });
