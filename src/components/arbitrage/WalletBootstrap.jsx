@@ -61,30 +61,9 @@ export default function WalletBootstrap() {
     setLoading(false)
   }
 
-  useEffect(()=>{
-    if(authLoading||!user)return
-    let active=true
-    const ensure=async()=>{
-      await load()
-      try{
-        const session=await waitForSession()
-        const {data:existing}=await supabase.from('wallets').select('chain').eq('owner_id',session.user.id).eq('wallet_role','trading_hot').eq('status','active')
-        const required=['bnb','solana','ethereum','bitcoin','xrp']
-        const missing=required.some((chain)=>!(existing||[]).some((w)=>w.chain===chain))
-        if(missing){
-          const {data,error}=await supabase.functions.invoke('arbivault-wallet-bootstrap',{
-            body:{chains:required}
-          })
-          if(error){let detail=error.message;try{const payload=await error.context?.json?.();if(payload?.error)detail=payload.error}catch { /* Keep the original request error when the response body is unreadable. */ };throw new Error(detail)}
-          if(active&&data?.wallets)setWallets(data.wallets)
-        }
-      }catch(e){
-        if(active)setError(e.message||'Wallet bootstrap failed')
-      }
-    }
-    ensure()
-    return()=>{active=false}
-  },[authLoading,user?.id])
+  useEffect(() => {
+    if (!authLoading && user) load()
+  }, [authLoading, user?.id])
 
   const generate=async()=>{
     setBusy(true);setError('')
