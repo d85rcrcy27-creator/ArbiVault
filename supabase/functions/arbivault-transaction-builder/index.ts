@@ -111,7 +111,7 @@ const FLASH_EXECUTOR_PAYOUT_ABI = parseAbi([
 const BSC_ATOMIC_ALLOWED_TARGETS = new Set([PANCAKE_V2_ROUTER.toLowerCase(), BISWAP_ROUTER_V2.toLowerCase()]);
 const ETH_ATOMIC_ALLOWED_TARGETS = new Set([ETH_UNISWAP_V2_ROUTER.toLowerCase(), ETH_SUSHISWAP_V2_ROUTER.toLowerCase()]);
 
-const MAX_SLIPPAGE_BPS = 100;
+const MAX_SLIPPAGE_BPS = 30;
 const MAX_PRICE_IMPACT_PCT = 5;
 
 const CORS_HEADERS = {
@@ -1357,7 +1357,7 @@ Deno.serve(async (req) => {
     const sourceWalletId = String(body.source_wallet_id || "");
     const side = String(body.side || "sell").toLowerCase();
     const amountRaw = String(body.amount_raw || "");
-    const slippageBps = Number(body.slippage_bps ?? 50);
+    const slippageBps = Number(body.slippage_bps ?? 30);
     const priceImpactPct = Number(body.price_impact_pct ?? 0);
     const quoteOnlyMode = body.mode === "flash_quote" || body.mode === "quote";
     const mode = quoteOnlyMode ? "quote" : "build";
