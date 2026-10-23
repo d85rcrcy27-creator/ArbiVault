@@ -7,6 +7,9 @@ on:
       - "supabase/functions/arbivault-flash-loan-strategy/index.ts"
       - "supabase/functions/arbivault-signer/index.ts"
       - "supabase/functions/arbivault-jupiter-flashloan/index.ts"
+      - "supabase/functions/arbivault-executor-deployer/index.ts"
+      - "supabase/functions/arbivault-executor-audit/index.ts"
+      - "supabase/functions/arbivault-wallet-bootstrap/index.ts"
       - ".github/workflows/flash-pipeline-edge-ci.yml"
   pull_request:
     paths:
@@ -14,6 +17,9 @@ on:
       - "supabase/functions/arbivault-flash-loan-strategy/index.ts"
       - "supabase/functions/arbivault-signer/index.ts"
       - "supabase/functions/arbivault-jupiter-flashloan/index.ts"
+      - "supabase/functions/arbivault-executor-deployer/index.ts"
+      - "supabase/functions/arbivault-executor-audit/index.ts"
+      - "supabase/functions/arbivault-wallet-bootstrap/index.ts"
       - ".github/workflows/flash-pipeline-edge-ci.yml"
 
 permissions:
@@ -38,3 +44,9 @@ jobs:
         run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-signer/index.ts
       - name: Type-check Jupiter flashloan preflight
         run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-jupiter-flashloan/index.ts
+      - name: Type-check executor deployer
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-executor-deployer/index.ts
+      - name: Type-check executor audit
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-executor-audit/index.ts
+      - name: Type-check wallet bootstrap
+        run: deno check --node-modules-dir=auto --no-lock supabase/functions/arbivault-wallet-bootstrap/index.ts
