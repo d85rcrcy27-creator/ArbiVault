@@ -8,11 +8,6 @@ const CHAINS = [
   { id: 'bnb', label: 'BNB Smart Chain', asset: 'BNB' },
 ]
 
-function short(value) {
-  if (!value) return '—'
-  return value.length > 24 ? value.slice(0, 12) + '…' + value.slice(-8) : value
-}
-
 function formatDate(value) {
   if (!value) return '—'
   const date = new Date(value)
