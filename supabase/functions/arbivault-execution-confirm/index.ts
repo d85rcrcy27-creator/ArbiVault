@@ -242,7 +242,7 @@ async function valueNetworkFeeUsd(chain: string, confirmation: any, estimatedFee
 }
 
 async function flashSettlementUsd(chain: string, settlement: any) {
-  if (!settlement?.asset || !/^\d+$/.test(settlement.premium_raw) || !/^\d+$/.test(settlement.profit_paid_raw)) {
+  if (!settlement?.asset || settlement.payout_transfer_verified !== true || !/^\d+$/.test(settlement.premium_raw) || !/^\d+$/.test(settlement.profit_paid_raw)) {
     return null;
   }
   const asset = settlement.asset.toLowerCase();
@@ -324,6 +324,64 @@ Deno.serve(async (req) => {
     const oldBreakdown = attempt.fee_breakdown && typeof attempt.fee_breakdown === "object"
       ? attempt.fee_breakdown
       : {};
+    const { data: route } = await supabase
+      .from("arbivault_strategy_routes")
+      .select("strategy,pair,strategy_bot_id,route_type,payout_test_authorized,payout_test_authorized_by,payout_test_used_at,payout_test_execution_attempt_id,payout_test_tx_hash")
+      .eq("id", attempt.execution_route_id)
+      .maybeSingle();
+    const payoutTestAttempt = oldBreakdown.payout_test_mode === true &&
+      route?.payout_test_authorized === true &&
+      String(route?.payout_test_authorized_by || "") === String(attempt.owner_id) &&
+      route?.payout_test_used_at != null &&
+      String(route?.payout_test_execution_attempt_id || "") === String(attempt.id);
+    let payoutTransferVerified = false;
+    if (confirmation.succeeded === true && payoutTestAttempt && confirmation.flash_settlement?.payout_transfer_verified === true) {
+      const [walletResult, registryResult] = await Promise.all([
+        supabase.from("wallets")
+          .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status")
+          .eq("id", attempt.wallet_id)
+          .maybeSingle(),
+        supabase.from("flash_executor_deployments")
+          .select("chain,executor_address,status,source_verified,payout_audited,payout_behavior_verified")
+          .eq("chain", attempt.chain)
+          .eq("executor_address", confirmation.flash_settlement.executor_address)
+          .maybeSingle(),
+      ]);
+      const proofWallet = walletResult.data;
+      const registry = registryResult.data;
+      payoutTransferVerified = !walletResult.error && !registryResult.error &&
+        !!proofWallet && proofWallet.owner_id === attempt.owner_id && proofWallet.chain === attempt.chain &&
+        proofWallet.status === "active" && proofWallet.is_hot === true &&
+        proofWallet.wallet_role === "trading_hot" && proofWallet.data_quality_status === "verified" &&
+        String(proofWallet.address || "").toLowerCase() === String(confirmation.flash_settlement.hot_wallet || "").toLowerCase() &&
+        !!registry && registry.status === "verified" && registry.source_verified === true &&
+        registry.payout_audited === true &&
+        String(registry.executor_address || "").toLowerCase() === String(confirmation.flash_settlement.executor_address || "").toLowerCase();
+      if (payoutTransferVerified) {
+        const { error: behaviorUpdateError } = await supabase.from("flash_executor_deployments")
+          .update({ payout_behavior_verified: true, updated_at: now })
+          .eq("chain", attempt.chain)
+          .eq("executor_address", confirmation.flash_settlement.executor_address)
+          .eq("status", "verified")
+          .eq("source_verified", true)
+          .eq("payout_audited", true);
+        if (behaviorUpdateError) payoutTransferVerified = false;
+      }
+    }
+    if (payoutTestAttempt) {
+      const { error: consumeTestError } = await supabase.from("arbivault_strategy_routes")
+        .update({
+          payout_test_authorized: false,
+          payout_test_tx_hash: payoutTransferVerified ? txHash : null,
+          updated_at: now,
+        })
+        .eq("id", attempt.execution_route_id)
+        .eq("payout_test_execution_attempt_id", attempt.id)
+        .eq("payout_test_authorized", true);
+      if (consumeTestError) {
+        return Response.json({ error: "payout_test_consumption_update_failed", tx_hash: txHash }, { status: 500 });
+      }
+    }
 
     if (confirmation.succeeded !== true) {
       const failureBreakdown = {
@@ -376,12 +434,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { data: route } = await supabase
-      .from("arbivault_strategy_routes")
-      .select("strategy,pair,strategy_bot_id,route_type,payout_test_authorized,payout_test_authorized_by,payout_test_used_at,payout_test_execution_attempt_id,payout_test_tx_hash")
-      .eq("id", attempt.execution_route_id)
-      .maybeSingle();
-
     const settlementPnl = await flashSettlementUsd(attempt.chain, confirmation.flash_settlement);
     const preflightGross = finiteNumber(attempt.gross_profit);
     const isFlashRoute = route?.route_type === "flash_liquidity"
@@ -416,6 +468,8 @@ Deno.serve(async (req) => {
       stop_loss_usd: finiteNumber(oldBreakdown.stop_loss_usd) ?? -5,
       loss_limit_breached: networkFeeUsd === null ? null : networkFeeUsd > Math.abs(finiteNumber(oldBreakdown.stop_loss_usd) ?? 5),
       x402_resource_fee_usd: x402FeeUsd,
+      payout_transfer_verified: payoutTransferVerified,
+      payout_test_mode: oldBreakdown.payout_test_mode === true,
       x402_fee_source: x402FeeUsd > 0
         ? "explicitly_attributed_to_execution_attempt"
         : "no_paid_x402_resource_call_attributed_to_execution_attempt",
