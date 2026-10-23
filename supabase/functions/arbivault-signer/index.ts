@@ -591,10 +591,8 @@ Deno.serve(async (req) => {
             return json({ error: "ethereum_flash_second_leg_must_return_borrowed_asset" }, 403);
           }
         }
-        const getter = encodeFunctionData({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET" });
-        const payoutRaw = String(await rpc(ETH_RPC, "eth_call", [{ to: ETH_FLASH_EXECUTOR, data: getter }, "latest"]));
-        const payout = decodeFunctionResult({ abi: FLASH_EXECUTOR_ABI, functionName: "HOT_WALLET", data: payoutRaw as `0x${string}` }) as string;
-        if (payout.toLowerCase() !== wallet.address.toLowerCase()) return json({ error: "ethereum_flash_executor_payout_wallet_mismatch" }, 403);
+        const payoutBinding = await verifyExecutorPayoutBindings("ethereum", ETH_FLASH_EXECUTOR, wallet);
+        if (!payoutBinding.ok) return json({ error: payoutBinding.error }, 403);
       } else if (chain === "bnb" && BSC_FLASH_EXECUTOR && to.toLowerCase() === BSC_FLASH_EXECUTOR.toLowerCase()) {
         if (!BSC_FLASH_EXECUTOR_PAYOUT_AUDITED) return json({ error: "flash_executor_payout_audit_not_enabled" }, 403);
         const executorCode = String(await rpc(BSC_RPC, "eth_getCode", [BSC_FLASH_EXECUTOR, "latest"]));
