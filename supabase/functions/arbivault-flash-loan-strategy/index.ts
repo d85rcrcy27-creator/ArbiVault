@@ -199,7 +199,7 @@ async function invokeAuthorizedSigners(skipChains: Set<string> = new Set<string>
 
     const { data: attempt } = await supabase
       .from('execution_attempts')
-      .select('id,adapter_id,chain,wallet_id,status,execution_route_id,strategy_bot_id')
+      .select('id,adapter_id,chain,wallet_id,status,execution_route_id,strategy_bot_id,fee_breakdown')
       .eq('id', request.execution_attempt_id)
       .maybeSingle()
 
@@ -212,7 +212,7 @@ async function invokeAuthorizedSigners(skipChains: Set<string> = new Set<string>
     // authorizations from another bot or a discovery-only route.
     const { data: route } = await supabase
       .from('arbivault_strategy_routes')
-      .select('id,route_type,enabled,discovery_only,builder_enabled,strategy_bot_id')
+      .select('id,route_type,enabled,discovery_only,builder_enabled,strategy_bot_id,payout_test_authorized,payout_test_used_at,payout_test_execution_attempt_id')
       .eq('id', attempt.execution_route_id)
       .maybeSingle()
     const { data: strategyBot } = await supabase
@@ -220,22 +220,42 @@ async function invokeAuthorizedSigners(skipChains: Set<string> = new Set<string>
       .select('enabled,execution_enabled,flash_loan_enabled')
       .eq('id', attempt.strategy_bot_id)
       .maybeSingle()
+    const chainDiagnostic: any = String(attempt.chain) === 'ethereum'
+      ? flashExecutorDiagnostic?.ethereum
+      : flashExecutorDiagnostic?.bnb
+    const feeBreakdown = attempt.fee_breakdown && typeof attempt.fee_breakdown === 'object'
+      ? attempt.fee_breakdown
+      : {}
+    const payoutTestAttempt = feeBreakdown.payout_test_mode === true &&
+      route?.payout_test_authorized === true &&
+      route?.payout_test_used_at != null &&
+      String(route?.payout_test_execution_attempt_id || '') === String(attempt.id)
+    const normalExecutionReady = route?.discovery_only !== true &&
+      route?.builder_enabled === true &&
+      chainDiagnostic?.ready_for_live_trading === true
+    const payoutTestReady = payoutTestAttempt &&
+      route?.discovery_only === true &&
+      chainDiagnostic?.ready_for_flash_transaction_test === true
     if (
       !route ||
       route.route_type !== 'flash_liquidity' ||
       route.enabled !== true ||
-      route.discovery_only === true ||
-      route.builder_enabled !== true ||
       route.strategy_bot_id !== attempt.strategy_bot_id ||
       !strategyBot ||
       strategyBot.enabled !== true ||
       strategyBot.execution_enabled !== true ||
-      strategyBot.flash_loan_enabled !== true
+      strategyBot.flash_loan_enabled !== true ||
+      (!normalExecutionReady && !payoutTestReady)
     ) {
       results.push({
         signing_request_id: request.id,
         invoked: false,
-        reason: 'single_style_atomic_flash_route_not_execution_ready',
+        reason: !route ? 'flash_route_not_found'
+          : payoutTestAttempt && !payoutTestReady ? 'flash_payout_test_executor_not_ready'
+          : 'single_style_atomic_flash_route_not_execution_ready',
+        payout_test_attempt: payoutTestAttempt,
+        live_trading_ready: chainDiagnostic?.ready_for_live_trading === true,
+        payout_test_ready: chainDiagnostic?.ready_for_flash_transaction_test === true,
       })
       continue
     }
