@@ -1,6 +1,6 @@
 import { RefreshCw, SlidersHorizontal } from 'lucide-react'
 
-const SPREAD_OPTIONS = [0.1, 0.25, 0.5, 0.75, 1, 2]
+const SPREAD_OPTIONS = [0.3, 0.5, 0.75, 1, 2]
 const POLL_OPTIONS = [2000, 5000, 10000, 15000]
 const ROUTE_OPTIONS = [4, 8, 12, 24]
 
@@ -12,7 +12,7 @@ export default function RuntimeControls({ controls, latency, status, onChange, o
           <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
             <SlidersHorizontal className="h-3.5 w-3.5" /> Runtime Controls
           </div>
-          <p className="mt-1 text-[0.6rem] text-[#5a6080]">These controls change the live market hook and server-side scout request.</p>
+          <p className="mt-1 text-[0.6rem] text-[#5a6080]">These controls screen public quotes only. The minimum spread filters displayed candidates; it does not enable or authorize execution.</p>
         </div>
         <button onClick={onRefresh} title="Refresh market data" className="text-[#5a6080] hover:text-[#00F0FF]">
           <RefreshCw className="h-3.5 w-3.5" />

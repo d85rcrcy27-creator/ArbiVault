@@ -5,17 +5,22 @@ import { supabase } from '@/lib/supabase'
 const EMPTY_ROUTES = []
 const DEFAULT_MARKET_CONTROLS = {
   pollMs: 5000,
-  minSpreadPct: 0.5,
+  minSpreadPct: 0.3,
   maxRoutes: 12,
 }
 
 function loadMarketControls() {
   try {
     const saved = JSON.parse(localStorage.getItem('arbivault.market_controls') || '{}')
+    const savedSpread = Number(saved.minSpreadPct)
+    const minSpreadPct = saved.marketControlsVersion === 2 && savedSpread >= 0.3
+      ? savedSpread
+      : DEFAULT_MARKET_CONTROLS.minSpreadPct
     return {
       pollMs: Number(saved.pollMs) >= 2000 ? Number(saved.pollMs) : DEFAULT_MARKET_CONTROLS.pollMs,
-      minSpreadPct: Number(saved.minSpreadPct) >= 0.05 ? Number(saved.minSpreadPct) : DEFAULT_MARKET_CONTROLS.minSpreadPct,
+      minSpreadPct,
       maxRoutes: Number(saved.maxRoutes) >= 1 ? Number(saved.maxRoutes) : DEFAULT_MARKET_CONTROLS.maxRoutes,
+      marketControlsVersion: 2,
     }
   } catch {
     return DEFAULT_MARKET_CONTROLS
@@ -106,6 +111,8 @@ export function useLiveMarketData() {
   const setMarketControls = useCallback((updates) => {
     setMarketControlsState((prev) => {
       const next = { ...prev, ...updates }
+      next.minSpreadPct = Math.max(0.3, Number(next.minSpreadPct) || DEFAULT_MARKET_CONTROLS.minSpreadPct)
+      next.marketControlsVersion = 2
       try { localStorage.setItem('arbivault.market_controls', JSON.stringify(next)) } catch {}
       return next
     })
@@ -250,7 +257,11 @@ export function useLiveMarketData() {
       })
       if (error) throw error
       const nextRoutes = Array.isArray(data?.routes)
-        ? data.routes.slice().sort((a, b) => Number(b.spreadPct || 0) - Number(a.spreadPct || 0)).slice(0, marketControls.maxRoutes)
+        ? data.routes
+          .filter((route) => Number.isFinite(Number(route.spreadPct)) && Number(route.spreadPct) >= marketControls.minSpreadPct)
+          .slice()
+          .sort((a, b) => Number(b.spreadPct || 0) - Number(a.spreadPct || 0))
+          .slice(0, marketControls.maxRoutes)
         : []
       const nextSnapshot = Array.isArray(data?.market_snapshot)
         ? data.market_snapshot
