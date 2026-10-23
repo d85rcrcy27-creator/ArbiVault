@@ -95,41 +95,25 @@ Deno.serve(async (req) => {
       const startAt = new Date(endAt.getTime() - days * 86400000);
       const liveSampleLimit = 10000;
       const queryPageSize = 1000;
-      const { data: firstLivePage, error: liveRowsError, count: liveRowsCount } = await admin
-        .from("strategy_observations")
-        .select("id,symbol,metric,value,observed_at,metadata", { count: "exact" })
-        .eq("owner_id", skill.owner_id)
-        .eq("source_key", "public_exchange_order_books")
-        .eq("domain", "execution_scout")
-        .eq("metric", "spread_pct")
-        .gte("observed_at", startAt.toISOString())
-        .lte("observed_at", endAt.toISOString())
-        .order("observed_at", { ascending: false })
-        .range(0, queryPageSize - 1);
+      const { data: sampledLiveRows, error: liveRowsError } = await admin.rpc(
+        "sample_arbivault_market_observations",
+        {
+          p_owner_id: skill.owner_id,
+          p_source_key: "public_exchange_order_books",
+          p_domain: "execution_scout",
+          p_metric: "spread_pct",
+          p_symbols: null,
+          p_start_at: startAt.toISOString(),
+          p_end_at: endAt.toISOString(),
+          p_sample_limit: liveSampleLimit,
+        },
+      );
       if (liveRowsError) return json({ error: "live_observation_lookup_failed", detail: liveRowsError.message }, 500);
 
-      // Supabase REST responses may be capped at 1,000 rows regardless of .limit().
-      // Fetch pages explicitly, up to 10,000 of the newest recorded samples.
-      const liveRows: any[] = [...(firstLivePage || [])];
-      for (let offset = liveRows.length; offset < liveSampleLimit; offset += queryPageSize) {
-        const { data: page, error: pageError } = await admin
-          .from("strategy_observations")
-          .select("id,symbol,metric,value,observed_at,metadata")
-          .eq("owner_id", skill.owner_id)
-          .eq("source_key", "public_exchange_order_books")
-          .eq("domain", "execution_scout")
-          .eq("metric", "spread_pct")
-          .gte("observed_at", startAt.toISOString())
-          .lte("observed_at", endAt.toISOString())
-          .order("observed_at", { ascending: false })
-          .range(offset, Math.min(offset + queryPageSize - 1, liveSampleLimit - 1));
-        if (pageError) return json({ error: "live_observation_page_lookup_failed", detail: pageError.message }, 500);
-        if (!page?.length) break;
-        liveRows.push(...page);
-        if (page.length < queryPageSize) break;
-      }
-
-      // Put newest-selected samples back into chronological order for calculations.
+      // This SQL sampler spreads the cap across the full time window, instead of
+      // treating the newest 10,000 polls as a trading history.
+      const liveRows: any[] = sampledLiveRows || [];
+      const liveRowsCount = Number(liveRows[0]?.available_count ?? liveRows.length);
       const chronologicallyOrderedLiveRows = liveRows.slice().sort(
         (a: any, b: any) => new Date(a.observed_at).getTime() - new Date(b.observed_at).getTime()
       );
@@ -137,36 +121,21 @@ Deno.serve(async (req) => {
       const volumeSymbols = bases.map((symbol) => symbol + "/USD");
       const volumeRows: any[] = [];
       if (volumeSymbols.length) {
-        const { data: firstVolumePage, error: volumeRowsError } = await admin
-          .from("strategy_observations")
-          .select("symbol,value,observed_at,metadata")
-          .eq("owner_id", skill.owner_id)
-          .eq("source_key", "coingecko")
-          .eq("metric", "public_market_price")
-          .in("symbol", volumeSymbols)
-          .gte("observed_at", startAt.toISOString())
-          .lte("observed_at", endAt.toISOString())
-          .order("observed_at", { ascending: false })
-          .range(0, queryPageSize - 1);
+        const { data: sampledVolumeRows, error: volumeRowsError } = await admin.rpc(
+          "sample_arbivault_market_observations",
+          {
+            p_owner_id: skill.owner_id,
+            p_source_key: "coingecko",
+            p_domain: null,
+            p_metric: "public_market_price",
+            p_symbols: volumeSymbols,
+            p_start_at: startAt.toISOString(),
+            p_end_at: endAt.toISOString(),
+            p_sample_limit: liveSampleLimit,
+          },
+        );
         if (volumeRowsError) return json({ error: "live_volume_lookup_failed", detail: volumeRowsError.message }, 500);
-        volumeRows.push(...(firstVolumePage || []));
-        for (let offset = volumeRows.length; offset < liveSampleLimit; offset += queryPageSize) {
-          const { data: page, error: pageError } = await admin
-            .from("strategy_observations")
-            .select("symbol,value,observed_at,metadata")
-            .eq("owner_id", skill.owner_id)
-            .eq("source_key", "coingecko")
-            .eq("metric", "public_market_price")
-            .in("symbol", volumeSymbols)
-            .gte("observed_at", startAt.toISOString())
-            .lte("observed_at", endAt.toISOString())
-            .order("observed_at", { ascending: false })
-            .range(offset, Math.min(offset + queryPageSize - 1, liveSampleLimit - 1));
-          if (pageError) return json({ error: "live_volume_page_lookup_failed", detail: pageError.message }, 500);
-          if (!page?.length) break;
-          volumeRows.push(...page);
-          if (page.length < queryPageSize) break;
-        }
+        volumeRows.push(...(sampledVolumeRows || []));
       }
 
       const volumeHistory = new Map<string, any[]>();
@@ -319,10 +288,11 @@ Deno.serve(async (req) => {
         supported: true,
         source: "recorded_live_market_observations",
         data_scope: "public_exchange_order_books + contemporaneous CoinGecko 24h volume",
-        data_methodology: "Newest recorded live order-book observations up to the 10,000-sample computation limit, sorted chronologically after retrieval; volume is matched to the nearest recorded CoinGecko 24h USD volume within ten minutes. Repeated polls are de-duplicated into signal entries by symbol and buy/sell venue.",
+        data_methodology: "A time-stratified sample of up to 10,000 recorded live order-book observations distributed across the full requested window; CoinGecko 24h USD volume observations are independently time-stratified across that same window and matched within ten minutes. Repeated polls are de-duplicated into signal entries by symbol and buy/sell venue.",
         available_dataset_samples: liveRowsCount ?? builtSamples.length,
         sample_limit: liveSampleLimit,
-        newest_samples_selected: true,
+        newest_samples_selected: false,
+        time_stratified_sample: true,
         live_market_observations_only: true,
         condition_thresholds: conditionThresholds,
         threshold_pct: Number.isFinite(spreadThreshold) ? Math.max(spreadThreshold, minSpreadPct) : minSpreadPct,
