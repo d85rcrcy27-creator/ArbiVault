@@ -346,6 +346,65 @@ Deno.serve(async (req) => {
     const preflightGross = finiteNumber(attempt.gross_profit);
     const isFlashRoute = route?.route_type === "flash_liquidity"
       || oldBreakdown.fee_estimate_source === "transaction-builder-live-router-quote";
+
+    // Accrue the builder fee only for EVM atomic flash routes with a verified
+    // successful receipt AND the executor's settlement event. Unique(chain, tx_hash)
+    // makes retries idempotent. This records an amount owed; it does not transfer funds.
+    if (isFlashRoute && settlementPnl && confirmation.flash_settlement) {
+      const settlement = confirmation.flash_settlement;
+      const asset = String(settlement.asset || "").toLowerCase();
+      const amountRaw = String(settlement.amount_raw || "");
+      if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+        return Response.json({ error: "builder_fee_settlement_amount_invalid" }, { status: 409 });
+      }
+
+      let decimals: number;
+      let usdPrice: number;
+      let settlementAsset: string;
+      if (attempt.chain === "bnb" && asset === BSC_USDT) {
+        decimals = 18; usdPrice = 1; settlementAsset = "USDT";
+      } else if (attempt.chain === "ethereum" && asset === ETH_USDC) {
+        decimals = 6; usdPrice = 1; settlementAsset = "USDC";
+      } else if (attempt.chain === "bnb" && asset === BSC_WBNB) {
+        decimals = 18; settlementAsset = "WBNB";
+        const price = await assetPriceUsd("BNB");
+        if (price === null) return Response.json({ error: "builder_fee_asset_usd_price_unavailable" }, { status: 503 });
+        usdPrice = price;
+      } else if (attempt.chain === "ethereum" && asset === ETH_WETH) {
+        decimals = 18; settlementAsset = "WETH";
+        const price = await assetPriceUsd("ETH");
+        if (price === null) return Response.json({ error: "builder_fee_asset_usd_price_unavailable" }, { status: 503 });
+        usdPrice = price;
+      } else {
+        return Response.json({ error: "builder_fee_settlement_asset_not_supported" }, { status: 409 });
+      }
+
+      const eligibleValueUsd = (Number(BigInt(amountRaw)) / (10 ** decimals)) * usdPrice;
+      if (!Number.isFinite(eligibleValueUsd) || eligibleValueUsd <= 0) {
+        return Response.json({ error: "builder_fee_eligible_value_invalid" }, { status: 409 });
+      }
+      const feeDueUsd = eligibleValueUsd * 0.02;
+      const { error: ledgerError } = await supabase
+        .from("arbivault_builder_fee_ledger")
+        .upsert({
+          execution_attempt_id: attempt.id,
+          chain: attempt.chain,
+          tx_hash: txHash,
+          route_id: attempt.execution_route_id || null,
+          settlement_asset: settlementAsset,
+          settled_amount_raw: amountRaw,
+          eligible_transaction_value_usd: eligibleValueUsd,
+          fee_rate: 0.02000,
+          fee_due_usd: feeDueUsd,
+          settlement_status: "confirmed",
+          collection_status: "accrued_not_collected",
+          settlement_block: confirmation.block_number || null,
+          updated_at: now,
+        }, { onConflict: "chain,tx_hash", ignoreDuplicates: true });
+      if (ledgerError) {
+        return Response.json({ error: "builder_fee_ledger_write_failed" }, { status: 503 });
+      }
+    }
     // Successful receipt != proof of profit. Flash-loan realized profit is recorded
     // only from the executor's settlement event, never from a preflight estimate.
     const gross = isFlashRoute
