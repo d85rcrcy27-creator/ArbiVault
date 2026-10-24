@@ -347,14 +347,14 @@ Deno.serve(async (req) => {
     const isFlashRoute = route?.route_type === "flash_liquidity"
       || oldBreakdown.fee_estimate_source === "transaction-builder-live-router-quote";
 
-    // Accrue the builder fee only for EVM atomic flash routes with a verified
-    // successful receipt AND the executor's settlement event. Unique(chain, tx_hash)
-    // makes retries idempotent. This records an amount owed; it does not transfer funds.
+    // Builder fee is a variable share of verified positive net profit, never
+    // of borrowed principal alone. It is accrued only after a successful EVM
+    // receipt and the executor's on-chain settlement event. Retry-safe by tx hash.
     if (isFlashRoute && settlementPnl && confirmation.flash_settlement) {
       const settlement = confirmation.flash_settlement;
       const asset = String(settlement.asset || "").toLowerCase();
       const amountRaw = String(settlement.amount_raw || "");
-      if (!/^\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+      if (!/^\\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
         return Response.json({ error: "builder_fee_settlement_amount_invalid" }, { status: 409 });
       }
 
@@ -379,30 +379,48 @@ Deno.serve(async (req) => {
         return Response.json({ error: "builder_fee_settlement_asset_not_supported" }, { status: 409 });
       }
 
-      const eligibleValueUsd = (Number(BigInt(amountRaw)) / (10 ** decimals)) * usdPrice;
-      if (!Number.isFinite(eligibleValueUsd) || eligibleValueUsd <= 0) {
+      const eligibleValueUsd = rawTokenAmountUsd(amountRaw, decimals, usdPrice);
+      if (eligibleValueUsd === null || eligibleValueUsd <= 0) {
         return Response.json({ error: "builder_fee_eligible_value_invalid" }, { status: 409 });
       }
-      const feeDueUsd = eligibleValueUsd * 0.02;
-      const { error: ledgerError } = await supabase
-        .from("arbivault_builder_fee_ledger")
-        .upsert({
-          execution_attempt_id: attempt.id,
-          chain: attempt.chain,
-          tx_hash: txHash,
-          route_id: attempt.execution_route_id || null,
-          settlement_asset: settlementAsset,
-          settled_amount_raw: amountRaw,
-          eligible_transaction_value_usd: eligibleValueUsd,
-          fee_rate: 0.02000,
-          fee_due_usd: feeDueUsd,
-          settlement_status: "confirmed",
-          collection_status: "accrued_not_collected",
-          settlement_block: confirmation.block_number || null,
-          updated_at: now,
-        }, { onConflict: "chain,tx_hash", ignoreDuplicates: true });
-      if (ledgerError) {
-        return Response.json({ error: "builder_fee_ledger_write_failed" }, { status: 503 });
+
+      // Positive realized net profit only; no fee when actual gas or paid resource
+      // fees cannot be valued, or when the trade breaks even/loses money.
+      if (networkFeeUsd !== null) {
+        const grossUsd = settlementPnl.gross_profit_usd;
+        const premiumUsd = settlementPnl.flash_loan_fee_usd;
+        if (grossUsd !== null && premiumUsd !== null) {
+          const verifiedNetProfitUsd = grossUsd - premiumUsd - networkFeeUsd - x402FeeUsd;
+          if (Number.isFinite(verifiedNetProfitUsd) && verifiedNetProfitUsd > 0) {
+            const profitShare = verifiedNetProfitUsd * 0.10;
+            const notionalCap = eligibleValueUsd * 0.0025;
+            const feeDueUsd = Math.min(profitShare, notionalCap);
+            if (feeDueUsd > 0) {
+              const { error: ledgerError } = await supabase
+                .from("arbivault_builder_fee_ledger")
+                .upsert({
+                  execution_attempt_id: attempt.id,
+                  chain: attempt.chain,
+                  tx_hash: txHash,
+                  route_id: attempt.execution_route_id || null,
+                  settlement_asset: settlementAsset,
+                  settled_amount_raw: amountRaw,
+                  eligible_transaction_value_usd: eligibleValueUsd,
+                  fee_rate: 0.10000,
+                  fee_due_usd: feeDueUsd,
+                  fee_basis: "10_percent_of_verified_positive_net_profit_capped_at_0.25_percent_of_settled_principal",
+                  verified_net_profit_usd: verifiedNetProfitUsd,
+                  settlement_status: "confirmed",
+                  collection_status: "accrued_not_collected",
+                  settlement_block: confirmation.block_number || null,
+                  updated_at: now,
+                }, { onConflict: "chain,tx_hash", ignoreDuplicates: true });
+              if (ledgerError) {
+                return Response.json({ error: "builder_fee_ledger_write_failed" }, { status: 503 });
+              }
+            }
+          }
+        }
       }
     }
     // Successful receipt != proof of profit. Flash-loan realized profit is recorded
