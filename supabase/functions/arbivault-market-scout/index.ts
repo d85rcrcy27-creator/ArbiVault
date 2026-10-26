@@ -1,5 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2'
-import { analyzeTemporalFlux } from '../_shared/temporal-flux.ts'
+import { analyzeTemporalFlux } from './temporal-flux.ts'
 
 const url = Deno.env.get('SUPABASE_URL')!
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
