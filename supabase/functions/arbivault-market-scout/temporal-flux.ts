@@ -51,6 +51,9 @@ export function analyzeTemporalFlux(
     .slice(-120);
 
   const latest = points[points.length - 1] ?? null;
+  const feedLatencies = points.map((point) => finiteNumber(point.metadata?.latency_ms)).filter((value): value is number => value !== null && value >= 0).sort((a, b) => a - b);
+  const medianFeedLatencyMs = feedLatencies.length ? feedLatencies[Math.floor((feedLatencies.length - 1) / 2)] : null;
+  const latestFeedLatencyMs = latest ? finiteNumber(latest.metadata?.latency_ms) : null;
   const latestAgeMs = latest ? Math.max(0, nowMs - latest.t) : null;
   const sampleCount = points.length;
   const spanSeconds = sampleCount > 1 ? Math.round((points[sampleCount - 1].t - points[0].t) / 1000) : 0;
@@ -63,7 +66,8 @@ export function analyzeTemporalFlux(
     ? points.filter((point) => point.value > 0).length / sampleCount
     : null;
 
-  const routeCounts = new Set(points.map((point) => routeKey(point.metadata)).filter(Boolean));
+  const observedRouteKeys = points.map((point) => routeKey(point.metadata)).filter((key): key is string => Boolean(key));
+  const routeRotationCount = observedRouteKeys.slice(1).filter((key, index) => key !== observedRouteKeys[index]).length;
   const desiredRouteKey = routeKey(currentRoute)
     ?? routeKey(latest?.metadata);
   const matchingRoutePoints = desiredRouteKey
@@ -93,9 +97,10 @@ export function analyzeTemporalFlux(
   const stale = latestAgeMs === null || latestAgeMs > 60_000;
   const freshnessFactor = latestAgeMs === null ? 0 : latestAgeMs <= 15_000 ? 1 : latestAgeMs <= 60_000 ? 0.5 : 0;
   const persistenceFactor = routePersistenceRatio ?? positiveRatio ?? 0;
+  const trendFactor = slope === null ? 0.5 : slope < -0.005 ? 0.15 : slope > 0.005 ? 1 : 0.65;
   const priorityScore = confidence === "insufficient" || stale
     ? 0
-    : Math.round(100 * (0.45 * persistenceFactor + 0.35 * (positiveRatio ?? 0) + 0.20 * freshnessFactor));
+    : Math.round(100 * (0.35 * persistenceFactor + 0.25 * (positiveRatio ?? 0) + 0.20 * freshnessFactor + 0.20 * trendFactor));
   const status = sampleCount < 5 ? "insufficient_history"
     : stale ? "stale_history"
     : slope !== null && slope < -0.005 ? "decaying"
@@ -114,11 +119,13 @@ export function analyzeTemporalFlux(
     positive_spread_ratio: positiveRatio === null ? null : Number(positiveRatio.toFixed(4)),
     slope_pct_points_per_min: slope === null ? null : Number(slope.toFixed(6)),
     estimated_decay_to_zero_seconds: decayToZeroSeconds,
-    route_rotation_count: routeCounts.size,
+    route_rotation_count: routeRotationCount,
     current_route_key: desiredRouteKey,
     current_route_sample_count: matchingRoutePoints.length,
     current_route_persistence_ratio: routePersistenceRatio === null ? null : Number(routePersistenceRatio.toFixed(4)),
     latest_observation_age_ms: latestAgeMs,
+    median_feed_latency_ms: medianFeedLatencyMs,
+    latest_feed_latency_ms: latestFeedLatencyMs,
     priority_score: priorityScore,
     timestamp_quality: "collector_observed_at; exchange-native timestamps not available in this feed",
     execution_authorization: "not_an_authorization; live quote and net-profit checks remain mandatory",
