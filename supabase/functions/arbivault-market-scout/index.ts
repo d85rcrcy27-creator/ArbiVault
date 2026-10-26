@@ -448,8 +448,7 @@ Deno.serve(async (req) => {
         .eq('enabled', true),
       admin.from('arbivault_strategy_bots')
         .select('id,strategy,enabled,execution_enabled')
-        .eq('enabled', true)
-        .eq('execution_enabled', true),
+        .eq('enabled', true),
       admin.from('bot_configs')
         .select('id,owner_id,bot_role,enabled,autonomy_enabled,autonomy_mode')
         .eq('owner_id', user.id)
