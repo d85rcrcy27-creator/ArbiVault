@@ -506,9 +506,10 @@ Deno.serve(async (req) => {
       // One market observation can feed several independent strategy bots. Link by
       // exact chain/pair to each enabled bot route; do not require an obsolete
       // orderbook-only route to exist before a bot can scout the opportunity.
+      const marketBase = String(route.pair || '').split('/')[0]
       const matchedRoutes = (routeCatalog || []).filter((candidate: any) =>
         candidate.chain === route.chain &&
-        candidate.pair === route.pair &&
+        (candidate.pair === route.pair || String(candidate.pair || '').split('/')[0] === marketBase) &&
         candidate.enabled === true &&
         candidate.strategy_bot_id &&
         strategyBotIds.has(candidate.strategy_bot_id)
@@ -537,6 +538,8 @@ Deno.serve(async (req) => {
         ...base,
         observed_route_id: matched.id,
         strategy_bot_id: matched.strategy_bot_id,
+        temporal_symbol: matched.pair,
+        quote_asset_mismatch: String(matched.pair || '').split('/')[1] !== String(route.pair || '').split('/')[1],
       }))
     })
 
@@ -549,13 +552,16 @@ Deno.serve(async (req) => {
       .eq('source_key', 'public_exchange_order_books')
       .eq('domain', 'execution_scout')
       .eq('metric', 'spread_pct')
-      .in('symbol', PAIRS.map((item) => item.pair))
       .gte('observed_at', temporalSince)
       .order('observed_at', { ascending: false })
       .limit(600)
 
     for (const route of linkedRoutes as any[]) {
-      const history = (temporalHistory || []).filter((point: any) => point.symbol === route.pair)
+      const temporalSymbol = route.temporal_symbol || route.pair
+      const history = (temporalHistory || []).filter((point: any) =>
+        point.symbol === temporalSymbol &&
+        (point.metadata?.market_pair || point.metadata?.pair || point.symbol) === route.pair
+      )
       const currentPoint = {
         value: route.spreadPct,
         observed_at: new Date().toISOString(),
@@ -574,13 +580,16 @@ Deno.serve(async (req) => {
         bot_skill_id: null,
         source_key: 'public_exchange_order_books',
         domain: 'execution_scout',
-        symbol: route.pair,
+        symbol: route.temporal_symbol || route.pair,
         metric: 'spread_pct',
         value: route.spreadPct,
         observed_at: new Date().toISOString(),
         metadata: {
           chain: route.chain,
           pair: route.pair,
+          market_pair: route.pair,
+          route_pair: route.temporal_symbol || route.pair,
+          quote_asset_mismatch: route.quote_asset_mismatch === true,
           buy_exchange: route.buyExchange,
           sell_exchange: route.sellExchange,
           buy_price: route.buyPrice,
