@@ -502,14 +502,17 @@ Deno.serve(async (req) => {
       public_observation_persisted = saved?.length || 0
     }
 
-    const linkedRoutes = marketRoutes.map((route: any) => {
-      const observedRoute = (routeCatalog || []).find((candidate: any) =>
+    const linkedRoutes = marketRoutes.flatMap((route: any) => {
+      // One market observation can feed several independent strategy bots. Link by
+      // exact chain/pair to each enabled bot route; do not require an obsolete
+      // orderbook-only route to exist before a bot can scout the opportunity.
+      const matchedRoutes = (routeCatalog || []).filter((candidate: any) =>
         candidate.chain === route.chain &&
         candidate.pair === route.pair &&
-        candidate.route_type === 'orderbook' &&
+        candidate.enabled === true &&
         candidate.strategy_bot_id &&
         strategyBotIds.has(candidate.strategy_bot_id)
-      ) || null
+      )
       const assetSymbol = String(route.pair || '').split('/')[0]
       const liveAssetMetrics = publicApis.coingecko.find((item: any) => item.symbol === assetSymbol) || null
       const volume24hUsd = Number(liveAssetMetrics?.volume24h)
@@ -519,19 +522,22 @@ Deno.serve(async (req) => {
       const routeLatencyMs = selectedQuotes.length === 2
         ? Math.max(...selectedQuotes.map((quote: any) => Number(quote.latencyMs || 0)))
         : Number(route.latency || 0)
-
-      return {
+      const base = {
         ...route,
         latency: routeLatencyMs,
         volume: Number.isFinite(volume24hUsd) ? volume24hUsd : null,
         volume24hUsd: Number.isFinite(volume24hUsd) ? volume24hUsd : null,
         live_metrics_at: liveAssetMetrics ? new Date().toISOString() : null,
         live_metrics_source: liveAssetMetrics ? 'coingecko_24h_volume' : null,
-        observed_route_id: observedRoute?.id || null,
         execution_route_id: null,
-        strategy_bot_id: observedRoute?.strategy_bot_id || null,
         execution_bot_config_id: null,
       }
+      if (!matchedRoutes.length) return [{ ...base, observed_route_id: null, strategy_bot_id: null }]
+      return matchedRoutes.map((matched: any) => ({
+        ...base,
+        observed_route_id: matched.id,
+        strategy_bot_id: matched.strategy_bot_id,
+      }))
     })
 
     // Build a temporal baseline from recent persisted spreads. Current quotes are appended
@@ -605,7 +611,7 @@ Deno.serve(async (req) => {
       if (!observationError) observation_persisted = savedObservations?.length || 0
     }
 
-    const routes = linkedRoutes
+    const routes = [...new Map(linkedRoutes.map((route: any) => [route.id, route])).values()]
     const successfulQuotes = snapshots.flatMap((snapshot) => snapshot.quotes || [])
     const averageLatency = successfulQuotes.length
       ? Math.round(successfulQuotes.reduce((sum, quote) => sum + Number(quote.latencyMs || 0), 0) / successfulQuotes.length)
