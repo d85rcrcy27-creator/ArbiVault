@@ -46,6 +46,15 @@ export default function Home() {
           <div className="mb-2 flex items-center justify-between"><span className="font-mono text-xs font-semibold text-[#e0e4f0]">{s.pair}</span><span className="font-mono text-[0.55rem] uppercase text-[#5a6080]">{s.chain} · {s.quote_count} feeds</span></div>
           <div className="space-y-1">{(s.quotes || []).map((q) => <div key={q.exchange} className="flex items-center justify-between font-mono text-[0.6rem]"><span className="text-[#8a90b0]">{q.exchange.toUpperCase()}</span><span className="text-[#e0e4f0]">B {Number(q.bid).toFixed(4)} · A {Number(q.ask).toFixed(4)}</span><span className="text-[#5a6080]">{Number(q.latencyMs || 0)}ms</span></div>)}</div>
           <div className="mt-2 border-t border-[#1a1d2b] pt-2 font-mono text-[0.55rem] text-[#5a6080]">BEST BUY {s.best_buy ? Number(s.best_buy.price).toFixed(4) + ' @ ' + s.best_buy.exchange.toUpperCase() : '—'} · BEST SELL {s.best_sell ? Number(s.best_sell.price).toFixed(4) + ' @ ' + s.best_sell.exchange.toUpperCase() : '—'} · SPREAD {s.spread_pct == null ? '—' : Number(s.spread_pct).toFixed(3) + '%'}</div>
+           {s.temporal_flux && <div className="mt-2 rounded border border-[#232738] bg-[#0C0E16] px-2 py-2 font-mono text-[0.55rem]">
+             <div className="flex items-center justify-between"><span className="uppercase tracking-wider text-[#8a90b0]">Temporal flux · observed</span><span className={s.temporal_flux.status === 'expanding' ? 'text-[#00FF87]' : s.temporal_flux.status === 'decaying' ? 'text-[#FFB84D]' : 'text-[#8a90b0]'}>{String(s.temporal_flux.status || 'insufficient_history').replaceAll('_', ' ')}</span></div>
+             <div className="mt-1 grid grid-cols-2 gap-1 text-[#8a90b0]">
+               <span>Trend {s.temporal_flux.slope_pct_points_per_min == null ? '—' : Number(s.temporal_flux.slope_pct_points_per_min).toFixed(4) + ' pp/min'}</span>
+               <span>Positive {s.temporal_flux.positive_spread_ratio == null ? '—' : Math.round(Number(s.temporal_flux.positive_spread_ratio) * 100) + '%'}</span>
+               <span>Rotation {s.temporal_flux.route_rotation_count ?? '—'} paths</span>
+               <span>Confidence {s.temporal_flux.confidence || 'insufficient'}</span>
+             </div>
+           </div>}
         </div>
       )) : <div className="sm:col-span-2 rounded border border-[#232738] bg-[#090A0F] p-4 text-center font-mono text-[0.65rem] text-[#5a6080]">Waiting for live quote feeds…</div>}
     </div>
