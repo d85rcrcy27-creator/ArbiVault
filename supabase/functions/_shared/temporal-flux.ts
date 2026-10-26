@@ -16,7 +16,7 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function routeKey(metadata?: Record<string, unknown> | null): string | null {
+function routeKey(metadata?: Record<string, unknown> | TemporalFluxRoute | null): string | null {
   const buy = String(metadata?.buy_exchange ?? metadata?.buyExchange ?? "").trim().toLowerCase();
   const sell = String(metadata?.sell_exchange ?? metadata?.sellExchange ?? "").trim().toLowerCase();
   return buy && sell ? `${buy}->${sell}` : null;
@@ -64,7 +64,7 @@ export function analyzeTemporalFlux(
     : null;
 
   const routeCounts = new Set(points.map((point) => routeKey(point.metadata)).filter(Boolean));
-  const desiredRouteKey = routeKey(currentRoute as Record<string, unknown> | null | undefined)
+  const desiredRouteKey = routeKey(currentRoute)
     ?? routeKey(latest?.metadata);
   const matchingRoutePoints = desiredRouteKey
     ? points.filter((point) => routeKey(point.metadata) === desiredRouteKey)
