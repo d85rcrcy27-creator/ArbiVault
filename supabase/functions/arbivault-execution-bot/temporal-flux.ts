@@ -38,6 +38,7 @@ export function analyzeTemporalFlux(
   currentRoute?: TemporalFluxRoute | null,
   nowMs = Date.now(),
 ) {
+  const seenPoints = new Set<string>();
   const points = rawPoints
     .map((point) => ({
       value: finiteNumber(point.value),
@@ -48,6 +49,13 @@ export function analyzeTemporalFlux(
       point.value !== null && point.t !== null && nowMs - point.t >= -5_000 && nowMs - point.t <= 15 * 60_000
     )
     .sort((a, b) => a.t - b.t)
+    .filter((point) => {
+      // Fan-out creates one row per bot; count the same feed observation only once.
+      const key = `${point.t}:${point.value}:${routeKey(point.metadata) ?? "unrouted"}`;
+      if (seenPoints.has(key)) return false;
+      seenPoints.add(key);
+      return true;
+    })
     .slice(-120);
 
   const latest = points[points.length - 1] ?? null;
