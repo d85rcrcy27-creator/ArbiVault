@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2'
+import { analyzeTemporalFlux } from '../_shared/temporal-flux.ts'
 
 const url = Deno.env.get('SUPABASE_URL')!
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
@@ -512,6 +513,35 @@ Deno.serve(async (req) => {
       }
     })
 
+    // Build a temporal baseline from recent persisted spreads. Current quotes are appended
+    // as a new point, but this signal remains observational and never authorizes a trade.
+    const temporalSince = new Date(Date.now() - 15 * 60_000).toISOString()
+    const { data: temporalHistory } = await admin.from('strategy_observations')
+      .select('symbol,value,observed_at,metadata')
+      .eq('owner_id', user.id)
+      .eq('source_key', 'public_exchange_order_books')
+      .eq('domain', 'execution_scout')
+      .eq('metric', 'spread_pct')
+      .in('symbol', PAIRS.map((item) => item.pair))
+      .gte('observed_at', temporalSince)
+      .order('observed_at', { ascending: false })
+      .limit(600)
+
+    for (const route of linkedRoutes as any[]) {
+      const history = (temporalHistory || []).filter((point: any) => point.symbol === route.pair)
+      const currentPoint = {
+        value: route.spreadPct,
+        observed_at: new Date().toISOString(),
+        metadata: { buy_exchange: route.buyExchange, sell_exchange: route.sellExchange, latency_ms: route.latency },
+      }
+      route.temporal_flux = analyzeTemporalFlux([...history, currentPoint], {
+        buyExchange: route.buyExchange,
+        sellExchange: route.sellExchange,
+      })
+      const snapshot = snapshots.find((item: any) => item.pair === route.pair)
+      if (snapshot) snapshot.temporal_flux = route.temporal_flux
+    }
+
     const observations = linkedRoutes.map((route: any) => ({
         owner_id: user.id,
         bot_skill_id: null,
@@ -530,6 +560,7 @@ Deno.serve(async (req) => {
           sell_price: route.sellPrice,
           spread_pct: route.spreadPct,
           latency_ms: route.latency,
+          temporal_flux: route.temporal_flux,
           quotes: route.quotes,
           public_market_data: {
             coingecko: publicApis.coingecko.length,
