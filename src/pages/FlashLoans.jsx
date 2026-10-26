@@ -49,7 +49,7 @@ export default function FlashLoans() {
       }))
       const { data: routeData, error: routeError } = await supabase
         .from('arbivault_strategy_routes')
-        .select('id,strategy,strategy_family,chain,pair,dex_venue,route_type,enabled,discovery_only,builder_enabled,transaction_builder')
+        .select('id,strategy,strategy_family,chain,pair,dex_venue,reference_venue,route_type,enabled,discovery_only,builder_enabled,builder_status,transaction_builder')
         .in('route_type', ['flash_liquidity', 'dex_cex', 'cyclic', 'multi_venue'])
         .order('chain', { ascending: true })
         .order('pair', { ascending: true })
