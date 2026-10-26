@@ -6,7 +6,7 @@ const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const admin = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 const corsHeaders = {
   'Access-Control-Allow-Origin': 'https://arbivault.vercel.app',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-arbivault-cron-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Vary': 'Origin',
 }
@@ -433,8 +433,30 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('Authorization') ?? ''
     const client = createClient(url, anonKey, { global: { headers: { Authorization: authHeader } } })
-    const { data: { user }, error } = await client.auth.getUser()
-    if (error || !user) return json({ error: 'authentication_required' }, 401)
+    const cronToken = req.headers.get('x-arbivault-cron-token')
+    const expectedCronToken = (await admin.rpc('get_bot_cron_token')).data
+    const isAuthorizedCron = typeof expectedCronToken === 'string' &&
+      expectedCronToken.length > 0 &&
+      typeof cronToken === 'string' &&
+      cronToken.length > 0 &&
+      cronToken === expectedCronToken
+
+    let user: { id: string } | null = null
+    if (isAuthorizedCron) {
+      const { data: executionOwner, error: ownerError } = await admin
+        .from('bot_configs')
+        .select('owner_id')
+        .eq('bot_role', 'execution')
+        .eq('enabled', true)
+        .limit(1)
+        .maybeSingle()
+      if (ownerError) return json({ error: 'cron_owner_lookup_failed' }, 500)
+      if (executionOwner?.owner_id) user = { id: executionOwner.owner_id }
+    } else {
+      const { data: authData, error } = await client.auth.getUser()
+      if (!error && authData.user) user = { id: authData.user.id }
+    }
+    if (!user) return json({ error: 'authentication_required' }, 401)
 
     const body = await req.json().catch(() => ({}))
     const routeResults = await Promise.all(PAIRS.map(buildRoute))
