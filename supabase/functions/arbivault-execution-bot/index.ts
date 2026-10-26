@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2'
+import { analyzeTemporalFlux } from './temporal-flux.ts'
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL')!,
@@ -756,15 +757,46 @@ export default {
           ['dex_cex', 'cyclic', 'multi_venue', 'flash_liquidity'].includes(candidate.route_type)
         )
 
+        // Temporal history only prioritizes which configured route is examined first.
+        // It never overrides fresh executable quotes, net-profit, signer, or policy gates.
+        const temporalPairs = [...new Set(executionCandidates.map((candidate: any) => candidate.pair).filter(Boolean))]
+        const { data: temporalHistory } = temporalPairs.length
+          ? await supabase.from('strategy_observations')
+              .select('symbol,value,observed_at,metadata')
+              .eq('owner_id', bot.owner_id)
+              .eq('source_key', 'public_exchange_order_books')
+              .eq('domain', 'execution_scout')
+              .eq('metric', 'spread_pct')
+              .in('symbol', temporalPairs)
+              .gte('observed_at', new Date(Date.now() - 15 * 60_000).toISOString())
+              .order('observed_at', { ascending: false })
+              .limit(300)
+          : { data: [] }
+        const temporalByPair = new Map<string, any[]>()
+        for (const point of temporalHistory || []) {
+          const rows = temporalByPair.get(point.symbol) || []
+          rows.push(point)
+          temporalByPair.set(point.symbol, rows)
+        }
+        const temporalScoreByPair = new Map<string, number>()
+        for (const [pairName, points] of temporalByPair.entries()) {
+          temporalScoreByPair.set(pairName, analyzeTemporalFlux(points).priority_score)
+        }
+        executionCandidates.sort((a: any, b: any) =>
+          (temporalScoreByPair.get(b.pair) || 0) - (temporalScoreByPair.get(a.pair) || 0)
+        )
+
         for (const executionRoute of executionCandidates) {
           const pair = PAIRS.find((candidate) => candidate.chain === executionRoute.chain && candidate.pair === executionRoute.pair)
           if (!pair) continue
           const strategyBot = (strategyBots || []).find((candidate: any) => candidate.id === executionRoute.strategy_bot_id) || null
           const wallet = executionEligibleWallets.find((candidate: any) => candidate.chain === executionRoute.chain) || null
+          const temporalFlux = analyzeTemporalFlux(temporalByPair.get(executionRoute.pair) || [])
           const executionContext: any = {
             chain: executionRoute.chain, pair: executionRoute.pair, execution_route_id: executionRoute.id,
             strategy_bot_id: strategyBot?.id || null, strategy: strategyBot?.strategy || executionRoute.strategy || null,
             builder: executionRoute.transaction_builder,
+            temporal_flux: temporalFlux,
             execution_source: executionRoute.route_type === 'flash_liquidity' ? 'flash_skill_to_atomic_execution_pipeline' : 'explicit_execution_route',
             cex_execution: executionRoute.route_type === 'dex_cex'
               ? {
