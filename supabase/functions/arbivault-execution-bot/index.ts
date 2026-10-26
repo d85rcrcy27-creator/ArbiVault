@@ -553,7 +553,6 @@ export default {
       .from('arbivault_strategy_bots')
       .select('id,strategy,enabled,execution_enabled,flash_loan_enabled,max_trade_size,min_profit_threshold,slippage_tolerance,max_gas_budget,cooldown_ms,chains')
       .eq('enabled', true)
-      .eq('execution_enabled', true)
 
     if (strategyBotError) return Response.json({ error: strategyBotError.message }, { status: 500 })
 
@@ -944,6 +943,7 @@ export default {
             : transactionBuilt && cexExecutionConfigured
           const cexOrderExecutionAvailable = executionRoute.route_type !== 'dex_cex' || cexExecutionConfigured
           const executionGate = !strategyBot ? 'strategy_bot_not_linked'
+            : strategyBot.execution_enabled !== true ? 'strategy_bot_execution_disabled'
             : walletSafetyBlockedChains.has(executionRoute.chain) ? 'wallet_contract_code_check_unavailable'
             : executionRoute.discovery_only ? 'strategy_route_discovery_only'
             : !executionRoute.builder_enabled || !executionRoute.transaction_builder ? 'transaction_builder_not_configured'
