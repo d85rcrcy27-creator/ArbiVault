@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import PoolLiquidityRegistry from '@/components/arbitrage/PoolLiquidityRegistry'
 
 const FIELDS = 'id,chain,strategy,pair,borrowed_amount,notional_amount,gross_profit,fees_paid,net_profit,network_fee_usd,estimated_network_fee_usd,flash_loan_fee_usd,x402_resource_fee_usd,pnl_currency,fee_breakdown,status,execution_mode,tx_hash,explorer_url,metadata,created_at,confirmed_at'
 
@@ -138,6 +139,7 @@ export default function FlashLoans() {
           })}</tbody></table></div>}
           <p className="border-t border-[#232738] px-4 py-3 text-[11px] leading-5 text-[#8a90b0]">A configured builder does not prove that a route is executable. The transaction builder must resolve the live pool, validate chain and token addresses, estimate fees, and pass wallet, signer, and approval checks. This explorer does not enable strategies or broadcast transactions.</p>
         </section>
+        <PoolLiquidityRegistry />
         <p className="text-[11px] leading-5 text-[#5a6080]">Repayment is shown as verified only when the stored record explicitly contains repayment evidence. A transaction hash and a positive profit field are not independently re-verified on-chain by this page.</p>
       </div>
     </main>
