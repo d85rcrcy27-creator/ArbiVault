@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ExternalLink, RefreshCw } from 'lucide-react'
 
 const DEX_CHAIN_IDS = { ethereum: 'ethereum', bnb: 'bsc', solana: 'solana' }
@@ -59,7 +59,7 @@ export default function LiveLiquidityRegistry({ routes = [] }) {
     })
     return [...unique.entries()].map(([key, route]) => ({ key, route }))
   }, [routes])
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true)
     const nextPools = {}
     const nextErrors = {}
@@ -75,8 +75,8 @@ export default function LiveLiquidityRegistry({ routes = [] }) {
     setErrorsByKey(nextErrors)
     setUpdatedAt(new Date())
     setLoading(false)
-  }
-  useEffect(() => { refresh() }, [poolRoutes])
+  }, [poolRoutes])
+  useEffect(() => { refresh() }, [refresh])
   const totalPools = Object.values(poolsByKey).reduce((n, pools) => n + pools.length, 0)
   return (
     <section className="overflow-hidden rounded border border-[#232738] bg-[#0C0E16]">
