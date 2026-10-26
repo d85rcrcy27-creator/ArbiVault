@@ -51,8 +51,10 @@ export default function Home() {
              <div className="mt-1 grid grid-cols-2 gap-1 text-[#8a90b0]">
                <span>Trend {s.temporal_flux.slope_pct_points_per_min == null ? '—' : Number(s.temporal_flux.slope_pct_points_per_min).toFixed(4) + ' pp/min'}</span>
                <span>Positive {s.temporal_flux.positive_spread_ratio == null ? '—' : Math.round(Number(s.temporal_flux.positive_spread_ratio) * 100) + '%'}</span>
-               <span>Rotation {s.temporal_flux.route_rotation_count ?? '—'} paths</span>
+               <span>Rotation {s.temporal_flux.route_rotation_count ?? '—'} changes</span>
                <span>Confidence {s.temporal_flux.confidence || 'insufficient'}</span>
+               <span>Feed latency {s.temporal_flux.median_feed_latency_ms == null ? '—' : Math.round(Number(s.temporal_flux.median_feed_latency_ms)) + 'ms'}</span>
+               <span>Decay {s.temporal_flux.estimated_decay_to_zero_seconds == null ? '—' : Math.round(Number(s.temporal_flux.estimated_decay_to_zero_seconds)) + 's to zero'}</span>
              </div>
            </div>}
         </div>
