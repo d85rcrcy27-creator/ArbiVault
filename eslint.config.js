@@ -1,9 +1,7 @@
 import { defineConfig } from "eslint/config";
 import globals from "globals";
 import pluginJs from "@eslint/js";
-import pluginReact from "@eslint-react/eslint-plugin";
 import pluginReactHooks from "eslint-plugin-react-hooks";
-import pluginReactDom from "eslint-plugin-react-dom";
 import pluginUnusedImports from "eslint-plugin-unused-imports";
 
 export default defineConfig([
@@ -29,8 +27,6 @@ export default defineConfig([
     ignores: ["src/lib/**/*", "src/components/ui/**/*"],
     extends: [
       pluginJs.configs.recommended,
-      pluginReact.configs.recommended,
-      pluginReactDom.configs.recommended,
     ],
     languageOptions: {
       globals: globals.browser,
@@ -57,10 +53,6 @@ export default defineConfig([
           args: "after-used",
           argsIgnorePattern: "^_",
         },
-      ],
-      "react-dom/no-unknown-property": [
-        "error",
-        { ignore: ["cmdk-input-wrapper", "toast-close"] },
       ],
       "react-hooks/rules-of-hooks": "error",
     },
