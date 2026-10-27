@@ -3,7 +3,7 @@ import { privateKeyToAccount, generatePrivateKey } from 'npm:viem@2.39.0/account
 import * as bitcoin from 'npm:bitcoinjs-lib@7.0.0'
 import * as ecc from 'npm:tiny-secp256k1@2.2.3'
 import { ECPairFactory } from 'npm:ecpair@3.0.0'
-import { Keypair } from 'npm:@solana/web3.js@1.98.4'
+import { Keypair, PublicKey, SystemProgram } from 'npm:@solana/web3.js@1.98.4'
 import { Wallet as XrplWallet } from 'npm:xrpl@4.2.5'
 const ECPair=ECPairFactory(ecc)
 const BSC_PANCAKE_V2_ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E"
@@ -27,10 +27,28 @@ async function walletAddressHasContractCode(chain:'bnb'|'ethereum',address:strin
  return body.result!=='0x'&&body.result!=='0x0'
 }
 async function ensureWallet(userId:string,chain:'bnb'|'solana'|'bitcoin'|'ethereum'|'xrp'){
- const {data:activeRows,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').order('created_at',{ascending:false}).limit(2)
+ const {data:activeRows,error:existingError}=await admin.from('wallets').select('id,owner_id,chain,address,label,status,is_hot,custody_type,wallet_role,created_at,secret_ref').eq('owner_id',userId).eq('chain',chain).eq('wallet_role','trading_hot').eq('status','active').eq('custody_type','server_vault').order('created_at',{ascending:false}).limit(2)
  if(existingError)throw new Error('active_wallet_lookup_failed:'+String(existingError.code||'db_error'))
  if((activeRows||[]).length>1)throw new Error('multiple_active_trading_wallets_detected:'+chain)
  const existing=(activeRows||[])[0]||null
+ // Never treat legacy-import rows or a default/program public key as a trading wallet.
+ if(existing && chain==='solana'){
+  let parsed:PublicKey
+  try{parsed=new PublicKey(existing.address)}catch{throw new Error('solana_wallet_address_invalid_review_required')}
+  if(parsed.toBase58()!==existing.address||parsed.equals(SystemProgram.programId))throw new Error('solana_wallet_address_is_not_a_trading_wallet_review_required')
+  if(!existing.secret_ref)throw new Error('solana_wallet_secret_reference_missing_review_required')
+  const {data:storedSecret,error:secretError}=await admin.rpc('get_wallet_secret',{p_wallet_id:existing.id})
+  if(secretError||typeof storedSecret!=='string'||!storedSecret)throw new Error('solana_wallet_secret_unavailable_review_required')
+  try{
+   if(!/^(?:[0-9a-fA-F]{2})+$/.test(storedSecret))throw new Error('secret_format_invalid')
+   const bytes=Uint8Array.from((storedSecret.match(/.{2}/g)||[]).map((x:string)=>Number.parseInt(x,16)))
+   const derived=Keypair.fromSecretKey(bytes).publicKey
+   if(!derived.equals(parsed))throw new Error('key_address_mismatch')
+  }catch{throw new Error('solana_wallet_key_binding_mismatch_review_required')}
+  const {error:bindingUpdateError}=await admin.from('wallets').update({key_binding_verified_at:new Date().toISOString(),data_quality_status:'verified',verification_source:'arbivault-wallet-bootstrap-key-match',last_verified_at:new Date().toISOString(),updated_at:new Date().toISOString()}).eq('id',existing.id).eq('owner_id',userId)
+  if(bindingUpdateError)throw new Error('solana_wallet_key_binding_persist_failed')
+  return {...existing,key_binding_verified_at:new Date().toISOString(),data_quality_status:'verified'}
+ }
  let replacedWalletId:string|null=null
  let contractCodeDetected=false
  if(existing?.address&&(chain==='bnb'||chain==='ethereum'))contractCodeDetected=await walletAddressHasContractCode(chain,existing.address)
