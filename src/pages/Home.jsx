@@ -82,7 +82,8 @@ export default function Home() {
   return <div className="min-h-screen bg-[#090A0F] text-[#e0e4f0]">
     <UtilityBar globalLatency={globalLatency} livePnl={livePnl} engineStatus={engineStatus} engineStatusDetail={engineStatusDetail} status={status} connected={connected} onOpenWallets={() => navigate('/wallets')} />
 
-    <nav aria-label="Tools" className="grid grid-cols-1 gap-2 px-4 pt-4 sm:grid-cols-2">
+    <nav aria-label="Tools" className="grid grid-cols-1 gap-2 px-4 pt-4 sm:grid-cols-3">
+      <Link to="/revenue-stream" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Mad Man Revenue Stream</span><span className="mt-1 block text-xs text-[#8a90b0]">Live paid-task activity and a separate confirmed-trading ledger</span></Link>
       <Link to="/flash-loans" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Flash Loan Explorer</span><span className="mt-1 block text-xs text-[#8a90b0]">Review recorded borrow, repayment and profit data</span></Link>
       <Link to="/key-backup" className="rounded border border-[#232738] bg-[#0C0E16] p-3 hover:border-[#00F0FF]"><span className="block font-mono text-xs font-semibold uppercase tracking-wider text-[#00F0FF]">Wallet Key Backup</span><span className="mt-1 block text-xs text-[#8a90b0]">Review secure backup and recovery guidance</span></Link>
     </nav>
