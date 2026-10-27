@@ -346,6 +346,83 @@ Deno.serve(async (req) => {
     const preflightGross = finiteNumber(attempt.gross_profit);
     const isFlashRoute = route?.route_type === "flash_liquidity"
       || oldBreakdown.fee_estimate_source === "transaction-builder-live-router-quote";
+
+    // Builder fee is a variable share of verified positive net profit, never
+    // of borrowed principal alone. It is accrued only after a successful EVM
+    // receipt and the executor's on-chain settlement event. Retry-safe by tx hash.
+    if (isFlashRoute && settlementPnl && confirmation.flash_settlement) {
+      const settlement = confirmation.flash_settlement;
+      const asset = String(settlement.asset || "").toLowerCase();
+      const amountRaw = String(settlement.amount_raw || "");
+      if (!/^\\d+$/.test(amountRaw) || BigInt(amountRaw) <= 0n) {
+        return Response.json({ error: "builder_fee_settlement_amount_invalid" }, { status: 409 });
+      }
+
+      let decimals: number;
+      let usdPrice: number;
+      let settlementAsset: string;
+      if (attempt.chain === "bnb" && asset === BSC_USDT) {
+        decimals = 18; usdPrice = 1; settlementAsset = "USDT";
+      } else if (attempt.chain === "ethereum" && asset === ETH_USDC) {
+        decimals = 6; usdPrice = 1; settlementAsset = "USDC";
+      } else if (attempt.chain === "bnb" && asset === BSC_WBNB) {
+        decimals = 18; settlementAsset = "WBNB";
+        const price = await assetPriceUsd("BNB");
+        if (price === null) return Response.json({ error: "builder_fee_asset_usd_price_unavailable" }, { status: 503 });
+        usdPrice = price;
+      } else if (attempt.chain === "ethereum" && asset === ETH_WETH) {
+        decimals = 18; settlementAsset = "WETH";
+        const price = await assetPriceUsd("ETH");
+        if (price === null) return Response.json({ error: "builder_fee_asset_usd_price_unavailable" }, { status: 503 });
+        usdPrice = price;
+      } else {
+        return Response.json({ error: "builder_fee_settlement_asset_not_supported" }, { status: 409 });
+      }
+
+      const eligibleValueUsd = rawTokenAmountUsd(amountRaw, decimals, usdPrice);
+      if (eligibleValueUsd === null || eligibleValueUsd <= 0) {
+        return Response.json({ error: "builder_fee_eligible_value_invalid" }, { status: 409 });
+      }
+
+      // Positive realized net profit only; no fee when actual gas or paid resource
+      // fees cannot be valued, or when the trade breaks even/loses money.
+      if (networkFeeUsd !== null) {
+        const grossUsd = settlementPnl.gross_profit_usd;
+        const premiumUsd = settlementPnl.flash_loan_fee_usd;
+        if (grossUsd !== null && premiumUsd !== null) {
+          const verifiedNetProfitUsd = grossUsd - premiumUsd - networkFeeUsd - x402FeeUsd;
+          if (Number.isFinite(verifiedNetProfitUsd) && verifiedNetProfitUsd > 0) {
+            const profitShare = verifiedNetProfitUsd * 0.10;
+            const notionalCap = eligibleValueUsd * 0.0025;
+            const feeDueUsd = Math.min(profitShare, notionalCap);
+            if (feeDueUsd > 0) {
+              const { error: ledgerError } = await supabase
+                .from("arbivault_builder_fee_ledger")
+                .upsert({
+                  execution_attempt_id: attempt.id,
+                  chain: attempt.chain,
+                  tx_hash: txHash,
+                  route_id: attempt.execution_route_id || null,
+                  settlement_asset: settlementAsset,
+                  settled_amount_raw: amountRaw,
+                  eligible_transaction_value_usd: eligibleValueUsd,
+                  fee_rate: 0.10000,
+                  fee_due_usd: feeDueUsd,
+                  fee_basis: "10_percent_of_verified_positive_net_profit_capped_at_0.25_percent_of_settled_principal",
+                  verified_net_profit_usd: verifiedNetProfitUsd,
+                  settlement_status: "confirmed",
+                  collection_status: "accrued_not_collected",
+                  settlement_block: confirmation.block_number || null,
+                  updated_at: now,
+                }, { onConflict: "chain,tx_hash", ignoreDuplicates: true });
+              if (ledgerError) {
+                return Response.json({ error: "builder_fee_ledger_write_failed" }, { status: 503 });
+              }
+            }
+          }
+        }
+      }
+    }
     // Successful receipt != proof of profit. Flash-loan realized profit is recorded
     // only from the executor's settlement event, never from a preflight estimate.
     const gross = isFlashRoute
