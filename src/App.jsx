@@ -17,6 +17,7 @@ import FlashLoans from '@/pages/FlashLoans'
 import KeyBackup from '@/pages/KeyBackup'
 import SigningPasskeys from '@/pages/SigningPasskeys'
 import ArbitrumYieldAggregator from '@/pages/ArbitrumYieldAggregator'
+import RevenueStream from '@/pages/RevenueStream'
 
 function App() {
   return (
@@ -41,6 +42,7 @@ function App() {
               <Route path="/transactions" element={<Transactions />} />
               <Route path="/flash-loans" element={<FlashLoans />} />
               <Route path="/yield-aggregator" element={<ArbitrumYieldAggregator />} />
+              <Route path="/revenue-stream" element={<RevenueStream />} />
               <Route path="/key-backup" element={<KeyBackup />} />
               <Route path="/security/passkeys" element={<SigningPasskeys />} />
             </Route>
