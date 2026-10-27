@@ -8,8 +8,11 @@ const MONO = 'font-mono'
 const money = (value, currency = 'USD') => {
   const n = Number(value)
   if (!Number.isFinite(n)) return '—'
-  try { return new Intl.NumberFormat('en-US', { style: 'currency', currency: /^[A-Z]{3}$/.test(currency || '') ? currency : 'USD', maximumFractionDigits: 4 }).format(n) }
-  catch { return String(n) }
+  const code = String(currency || '').toUpperCase()
+  if (['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF'].includes(code)) {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: code, maximumFractionDigits: 4 }).format(n)
+  }
+  return n.toLocaleString('en-US', { maximumFractionDigits: 8 }) + (code ? ' ' + code : ' (currency not set)')
 }
 const date = (value) => value ? new Date(value).toLocaleString() : '—'
 const asTime = (row, fields) => fields.map((field) => row?.[field]).find(Boolean) || null
