@@ -82,7 +82,6 @@ Deno.serve(async (req: Request) => {
         const qSpecs = [
           ["payments", "id,owner_id,task_id,provider,provider_payment_id,amount,currency,status,paid_at,created_at,tx_hash,chain,asset,network,confirmation_count,metadata", "owner_id", "created_at"],
           ["tasks", "id,owner_id,opportunity_id,title,description,status,price,currency,payment_confirmed_at,completed_at,created_at,updated_at", "owner_id", "created_at"],
-          ["trades", "id,owner_id,chain,strategy,pair,notional_amount,gross_profit,fees_paid,net_profit,status,execution_mode,tx_hash,explorer_url,created_at,updated_at,confirmed_at,network_fee_usd,flash_loan_fee_usd,x402_resource_fee_usd,pnl_currency,fee_breakdown", "owner_id", "created_at"],
           ["bot_execution_runs", "id,owner_id,workflow,status,started_at,completed_at,error", "owner_id", "started_at"],
         ] as const;
         const qResults = await Promise.all(qSpecs.map(([table, columns, ownerColumn, orderColumn]) =>
@@ -108,7 +107,6 @@ Deno.serve(async (req: Request) => {
         responseData.payments = [...(responseData.payments as unknown[]), ...(qData.payments || [])];
         responseData.tasks = [...(responseData.tasks as unknown[]), ...(qData.tasks || [])];
         responseData.opportunities = [...(responseData.opportunities as unknown[]), ...normalizedOpps];
-        responseData.trades = [...(responseData.trades as unknown[]), ...(qData.trades || [])];
         responseData.runs = [...(responseData.runs as unknown[]), ...(qData.bot_execution_runs || [])];
         sourceStatus.quantum = { connected: true };
       }
