@@ -4,7 +4,7 @@ import { privateKeyToAccount } from "npm:viem@2.39.0/accounts";
 import * as bitcoin from "npm:bitcoinjs-lib@7.0.0";
 import * as ecc from "npm:tiny-secp256k1@2.2.3";
 import { ECPairFactory } from "npm:ecpair@3.0.0";
-import { VersionedTransaction, Transaction, Keypair } from "npm:@solana/web3.js@1.98.4";
+import { VersionedTransaction, Transaction, Keypair, PublicKey, SystemProgram } from "npm:@solana/web3.js@1.98.4";
 
 const ECPair = ECPairFactory(ecc);
 const supabase = createClient(
@@ -295,6 +295,17 @@ Deno.serve(async (req) => {
       wallet.chain !== chain
     ) {
       return json({ error: "source_wallet_not_active_trading_hot" }, 403);
+    }
+
+    if (chain === "solana") {
+      try {
+        const resolved = new PublicKey(wallet.address);
+        if (resolved.equals(SystemProgram.programId) || resolved.toBase58() !== wallet.address) {
+          return json({ error: "solana_system_program_or_invalid_trading_wallet_address", signing_blocked: true, broadcast_attempted: false }, 409);
+        }
+      } catch {
+        return json({ error: "solana_trading_wallet_address_invalid", signing_blocked: true, broadcast_attempted: false }, 409);
+      }
     }
 
     if (chain === "bnb" || chain === "ethereum") {
