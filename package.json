@@ -84,7 +84,7 @@
     "postcss": "^8.5.31",
     "tailwindcss": "^4.3.3",
     "terser": "^5.36.0",
-    "typescript": "7.0.2",
+    "typescript": "5.9.3",
     "vite": "^8.3.4",
     "@eslint-react/eslint-plugin": "^5.28.3",
     "eslint-plugin-react-dom": "^5.28.3",
