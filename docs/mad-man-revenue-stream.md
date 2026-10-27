@@ -4,7 +4,7 @@ The `mad-man-revenue-stream` Edge Function reads the authenticated user's ArbiVa
 
 ## Required server-side secret
 
-Set `QUANTUM_SUPABASE_SERVICE_ROLE_KEY` as a Supabase Edge Function secret on the **ArbiVault Shared Backend** project. The Quantum Lead AI project URL is the public endpoint already configured in the function. The service-role key must never be added to Vercel client variables or frontend source.
+Set `QUANTUM_SUPABASE_SERVICE_ROLE_KEY` as a Supabase Edge Function secret on the **ArbiVault Shared Backend** project. From a trusted terminal, the command shape is `supabase secrets set QUANTUM_SUPABASE_SERVICE_ROLE_KEY=\"<Quantum project service-role key>\" --project-ref karbtrfzxfyipxkhhqjz`. Obtain the key from the Quantum Lead AI project's server-side API keys. The Quantum Lead AI project URL is the public endpoint already configured in the function. The service-role key must never be added to Vercel client variables or frontend source, and must not be pasted into chat.
 
 The function returns Quantum as disconnected until the secret is configured and a matching account email exists in both projects. It only counts records with explicit payment / trade confirmation evidence, and currency totals only include records whose currency is explicitly USD.
 
