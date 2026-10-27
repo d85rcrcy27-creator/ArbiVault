@@ -123,8 +123,10 @@ export default function RevenueStream() {
 
   const confirmedPayments = useMemo(() => data.payments.filter(isPaidPayment), [data.payments])
   const confirmedTrades = useMemo(() => data.trades.filter(isConfirmedTrade), [data.trades])
-  const taskRevenue = confirmedPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-  const tradePnl = confirmedTrades.reduce((sum, row) => sum + Number(row.net_profit || 0), 0)
+  const confirmedUsdPayments = confirmedPayments.filter((row) => String(row.currency || '').toUpperCase() === 'USD')
+  const taskRevenue = confirmedUsdPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+  const confirmedUsdTrades = confirmedTrades.filter((row) => String(row.pnl_currency || '').toUpperCase() === 'USD')
+  const tradePnl = confirmedUsdTrades.reduce((sum, row) => sum + Number(row.net_profit || 0), 0)
   const activity = useMemo(() => {
     const paymentRows = data.payments.map((p) => ({
       id: p.id, time: asTime(p, ['paid_at', 'created_at']), title: 'Task payment',
@@ -151,7 +153,7 @@ export default function RevenueStream() {
     const tradeRows = data.trades.map((t) => ({
       id: t.id, time: asTime(t, ['confirmed_at', 'updated_at', 'created_at']),
       title: t.pair || 'Trading execution', subtitle: [t.chain, t.strategy, t.execution_mode].filter(Boolean).join(' · '),
-      status: t.status, amountLabel: isConfirmedTrade(t) ? 'Net P&L ' + money(t.net_profit, t.pnl_currency || 'USD') : 'Not confirmed',
+      status: t.status, amountLabel: isConfirmedTrade(t) ? (t.pnl_currency ? 'Net P&L ' + money(t.net_profit, t.pnl_currency) : 'Net P&L ' + String(t.net_profit ?? '—') + ' (currency not set)') : 'Not confirmed',
       proofLabel: t.tx_hash ? t.tx_hash.slice(0, 16) + '…' : 'No transaction hash',
       proofUrl: t.explorer_url || null, bucket: 'trading',
     }))
@@ -184,8 +186,8 @@ export default function RevenueStream() {
       {error && <div role="alert" className="rounded border border-[#FF4D4D]/50 bg-[#2a1014] p-3 font-mono text-xs text-[#ffb4b4]">Backend read warning: {error}</div>}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Confirmed task payments" value={money(taskRevenue, 'USD')} note={confirmedPayments.length + ' payment records marked paid with paid_at'} />
-        <Metric label="Confirmed trading net P&L" value={money(tradePnl, 'USD')} note={confirmedTrades.length + ' trades with confirmed status, timestamp and transaction hash'} />
+        <Metric label="Confirmed task payments" value={money(taskRevenue, 'USD')} note={confirmedUsdPayments.length + ' USD payment records marked paid with paid_at; other currencies excluded from total'} />
+        <Metric label="Confirmed trading net P&L" value={money(tradePnl, 'USD')} note={confirmedUsdTrades.length + ' USD-denominated trades with confirmed status, timestamp and transaction hash; other currencies excluded'} />
         <Metric label="Open work opportunities" value={data.opportunities.filter((o) => ['new','qualified','contacted','contracted','in_progress'].includes(String(o.status).toLowerCase())).length.toLocaleString()} note="Opportunity count only; not revenue" />
         <Metric label="Recent bot execution runs" value={data.runs.length.toLocaleString()} note="Latest run records returned; run status is not proof of profit" />
       </div>
@@ -194,12 +196,12 @@ export default function RevenueStream() {
         <section className={PANEL + ' p-4'}>
           <div className={MONO + ' text-xs font-bold uppercase tracking-wider text-[#00F0FF]'}>Paid task ledger</div>
           <div className="mt-2 text-2xl font-bold">{money(taskRevenue, 'USD')}</div>
-          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts only payment records with status = paid and a recorded paid_at timestamp. Estimated opportunity values and unpaid task prices are excluded.</p>
+          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts only payment records marked paid with a paid_at timestamp and currency = USD. Other currencies, estimates, and unpaid task prices are excluded from this total.</p>
         </section>
         <section className={PANEL + ' p-4'}>
           <div className={MONO + ' text-xs font-bold uppercase tracking-wider text-[#00F0FF]'}>Trading ledger</div>
           <div className="mt-2 text-2xl font-bold">{money(tradePnl, 'USD')}</div>
-          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts net_profit only for trades marked confirmed that also have a confirmation timestamp and transaction hash. Fees are expected to be included in the stored net_profit calculation.</p>
+          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts USD-denominated net_profit only for trades marked confirmed that also have a confirmation timestamp and transaction hash. Other currencies are excluded from the USD total; fees must already be included in stored net_profit.</p>
         </section>
       </div>
 
