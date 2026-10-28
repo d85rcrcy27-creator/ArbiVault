@@ -111,223 +111,23 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "create") {
-      const chain = String(body.chain || "").toLowerCase();
-      const asset = String(body.asset || "").toUpperCase();
-      if (!(chain in assets) || !assets[chain].includes(asset)) {
-        return json({ error: "unsupported_chain_or_asset", supported_assets: assets }, 400);
-      }
-
-      const { data: existing, error: existingError } = await admin
-        .from("profit_recipient_profiles")
-        .select("id,wallet_id,chain,asset,status,activation_at,verified_at,created_at")
-        .eq("owner_id", user.id)
-        .eq("chain", chain)
-        .eq("asset", asset)
-        .in("status", ["pending", "active"])
-        .maybeSingle();
-      if (existingError) return json({ error: "profit_recipient_lookup_failed" }, 500);
-      if (existing) {
-        const { data: existingWallet } = await admin.from("wallets")
-          .select("id,chain,address,label,status,last_balance,balance_usd,last_balance_at,last_verified_at")
-          .eq("id", existing.wallet_id).eq("owner_id", user.id).maybeSingle();
-        return json({ ok: true, existing: true, recipient: { ...existing, wallet: existingWallet || null } });
-      }
-
-      // This creates an independent recipient key. It never reads, rotates, or rebinds trading wallets.
-      const privateKey = generatePrivateKey();
-      const account = privateKeyToAccount(privateKey);
-      const keyCommitment = await sha256Hex(privateKey);
-      const { data: wallet, error: walletError } = await admin.from("wallets").insert({
-        owner_id: user.id,
-        chain,
-        address: account.address,
-        label: "ArbiVault Profit Recipient · " + chain.toUpperCase() + " · " + asset,
-        status: "active",
-        is_hot: false,
-        custody_type: "server_vault",
-        wallet_role: "profit_recipient",
-        verification_source: "arbivault-profit-recipients",
-        data_quality_status: "verified",
-        derivation_path: "internal-random-secp256k1",
-      }).select("id,owner_id,chain,address,label,status").single();
-
-      if (walletError || !wallet) return json({ error: "profit_recipient_wallet_create_failed" }, 500);
-
-      const { data: secretRef, error: secretError } = await admin.rpc("store_wallet_secret", {
-        p_wallet_id: wallet.id,
-        p_secret: privateKey,
-      });
-      // Erase local references as soon as the vault write has completed; neither value is returned or logged.
-      if (secretError || !secretRef) {
-        await admin.from("wallets").update({ status: "quarantined" }).eq("id", wallet.id).eq("owner_id", user.id);
-        return json({ error: "profit_recipient_secret_storage_failed", quarantined: true }, 500);
-      }
-
-      const addressBinding = await sha256Hex(`${user.id.toLowerCase()}:${wallet.id.toLowerCase()}:${chain.toLowerCase()}:${wallet.address.toLowerCase()}:${keyCommitment}`);
-      const bindingTimestamp = new Date().toISOString();
-      const { error: referenceError } = await admin.from("wallets")
-        .update({
-          secret_ref: secretRef,
-          key_commitment_sha256: keyCommitment,
-          address_binding_sha256: addressBinding,
-          key_binding_verified_at: bindingTimestamp,
-          updated_at: bindingTimestamp,
-        })
-        .eq("id", wallet.id).eq("owner_id", user.id);
-      if (referenceError) {
-        await admin.from("wallets").update({ status: "quarantined" }).eq("id", wallet.id).eq("owner_id", user.id);
-        return json({ error: "profit_recipient_secret_reference_failed", quarantined: true }, 500);
-      }
-
-      const walletVerified = await verifySupabaseVaultWallet(user.id, wallet.id, chain, wallet.address);
-      if (walletVerified !== "verified") {
-        await admin.from("wallets").update({ status: "quarantined", updated_at: new Date().toISOString() })
-          .eq("id", wallet.id).eq("owner_id", user.id);
-        return json({ error: "profit_recipient_vault_address_verification_failed", quarantined: true }, 409);
-      }
-
-      const activatedAt = new Date().toISOString();
-      const { data: profile, error: profileError } = await admin.from("profit_recipient_profiles").insert({
-        owner_id: user.id,
-        wallet_id: wallet.id,
-        chain,
-        asset,
-        status: "active",
-        activation_at: activatedAt,
-        verified_at: activatedAt,
-        verification_source: "supabase_vault_non_exporting_commitment_binding",
-      }).select("id,owner_id,wallet_id,chain,asset,status,activation_at,verified_at,verification_source,created_at,updated_at").single();
-
-      if (profileError || !profile) {
-        await admin.from("wallets").update({ status: "quarantined" }).eq("id", wallet.id).eq("owner_id", user.id);
-        return json({ error: "profit_recipient_profile_create_failed", quarantined: true }, 500);
-      }
-
-      await recordEvent(user.id, profile.id, "created", chain, asset, {
-        custody: "server_vault",
-        secret_reference_saved: true,
-        payout_wallet_verified: true,
-        verification_method: "database_vault_secret_commitment_binding_check",
-        activation_delay_hours: 0,
-        private_key_returned: false,
-      });
-      await recordEvent(user.id, profile.id, "verified", chain, asset, {
-        custody: "server_vault",
-        payout_wallet_verified: true,
-      });
-      await recordEvent(user.id, profile.id, "activated", chain, asset, {
-        activation_delay_hours: 0,
-        payout_wallet_verified: true,
-        live_routing_enabled: false,
-      });
-
+      // Fail closed: do not generate an internal Supabase-Vault key as a payout
+      // destination. The requested policy requires a verified Turnkey-managed wallet.
       return json({
-        ok: true,
-        recipient: {
-          ...profile,
-          wallet: {
-            id: wallet.id, chain: wallet.chain, address: wallet.address, label: wallet.label,
-            status: wallet.status, last_balance: null, balance_usd: null,
-            last_balance_at: null, last_verified_at: null,
-          },
-        },
-        security: {
-          private_key_returned: false,
-          payout_wallet_verified: true,
-          verification_method: "supabase_vault_key_matches_address",
-          signer_configured: false,
-          live_transfer_enabled: false,
-        },
-      }, 201);
+        error: "turnkey_profit_destination_integration_required",
+        message: "No payout destination was created. Configure and verify a Turnkey-managed wallet for this chain first.",
+        live_transfer_enabled: false,
+      }, 409);
     }
 
     if (action === "activate") {
-      const recipientId = String(body.recipient_id || "");
-      if (!recipientId) return json({ error: "recipient_id_required" }, 400);
-      const { data: recipient, error: lookupError } = await admin.from("profit_recipient_profiles")
-        .select("id,owner_id,wallet_id,chain,asset,status,activation_at")
-        .eq("id", recipientId).eq("owner_id", user.id).maybeSingle();
-      if (lookupError) return json({ error: "profit_recipient_lookup_failed" }, 500);
-      if (!recipient) return json({ error: "profit_recipient_not_found" }, 404);
-      if (recipient.status === "revoked" || recipient.status === "quarantined") return json({ error: "profit_recipient_not_activatable" }, 409);
-      const wasActive = recipient.status === "active";
-      const { data: wallet, error: walletError } = await admin.from("wallets")
-        .select("id,owner_id,chain,address,status,is_hot,custody_type,wallet_role,data_quality_status,secret_ref")
-        .eq("id", recipient.wallet_id).eq("owner_id", user.id).maybeSingle();
-      if (walletError) return json({ error: "profit_recipient_wallet_lookup_failed" }, 500);
-      if (!wallet || wallet.status !== "active" || wallet.is_hot !== false ||
-          wallet.wallet_role !== "profit_recipient" || wallet.custody_type !== "server_vault" ||
-          wallet.data_quality_status !== "verified" || wallet.chain !== recipient.chain || !wallet.secret_ref ||
-          !/^0x[a-fA-F0-9]{40}$/.test(String(wallet.address || ""))) {
-        await admin.from("profit_recipient_profiles").update({ status: "quarantined", updated_at: new Date().toISOString() })
-          .eq("id", recipient.id).eq("owner_id", user.id);
-        if (wallet?.id) await admin.from("wallets").update({ status: "quarantined", updated_at: new Date().toISOString() })
-          .eq("id", wallet.id).eq("owner_id", user.id);
-        await recordEvent(user.id, recipient.id, "quarantined", recipient.chain, recipient.asset, { reason: "recipient_integrity_check_failed" });
-        return json({ error: "profit_recipient_integrity_check_failed", quarantined: true }, 409);
-      }
-      const walletVerification = await verifySupabaseVaultWallet(user.id, wallet.id, recipient.chain, wallet.address);
-      if (walletVerification !== "verified") {
-        const checkedAt = new Date().toISOString();
-        if (walletVerification === "missing_binding") {
-          // Legacy entries have no proof tying this vault value to the derived address.
-          // Keep them inactive (rather than exporting the secret to retrofit a check).
-          await admin.from("profit_recipient_profiles").update({
-            status: "pending",
-            verified_at: null,
-            updated_at: checkedAt,
-            verification_source: "legacy_unbound_key_requires_reverification",
-          }).eq("id", recipient.id).eq("owner_id", user.id);
-          await recordEvent(user.id, recipient.id, "verification_blocked", recipient.chain, recipient.asset, {
-            reason: "legacy_wallet_missing_non_exporting_binding",
-          });
-          return json({ error: "profit_recipient_secure_reverification_required", status: "pending" }, 409);
-        }
-
-        await admin.from("profit_recipient_profiles").update({
-          status: "quarantined", updated_at: checkedAt,
-          verification_source: "supabase_vault_commitment_verification_failed",
-        }).eq("id", recipient.id).eq("owner_id", user.id);
-        await admin.from("wallets").update({ status: "quarantined", updated_at: checkedAt })
-          .eq("id", wallet.id).eq("owner_id", user.id);
-        await recordEvent(user.id, recipient.id, "quarantined", recipient.chain, recipient.asset, {
-          reason: walletVerification,
-        });
-        return json({ error: "profit_recipient_vault_address_verification_failed", quarantined: true }, 409);
-      }
-      if (wasActive) return json({ ok: true, already_active: true, recipient_id: recipient.id, payout_wallet_verified: true });
-
-      const activatedAt = new Date().toISOString();
-      const { error: updateError } = await admin.from("profit_recipient_profiles")
-        .update({
-          status: "active",
-          activation_at: activatedAt,
-          verified_at: activatedAt,
-          updated_at: activatedAt,
-          verification_source: "supabase_vault_key_matches_address",
-        })
-        .eq("id", recipient.id).eq("owner_id", user.id);
-      if (updateError) return json({ error: "profit_recipient_activation_failed" }, 500);
-      await recordEvent(user.id, recipient.id, "verified", recipient.chain, recipient.asset, {
-        custody: "server_vault",
-        payout_wallet_verified: true,
-        verification_method: "vault_secret_derives_stored_address",
-      });
-      await recordEvent(user.id, recipient.id, "activated", recipient.chain, recipient.asset, {
-        activation_delay_hours: 0,
-        payout_wallet_verified: true,
-        payout_compatibility_verified: false,
-        live_routing_enabled: false,
-      });
+      // Do not activate legacy server-vault recipients. Turnkey address/account
+      // lookup and signer-control verification must exist before activation.
       return json({
-        ok: true,
-        recipient_id: recipient.id,
-        status: "active",
-        payout_wallet_verified: true,
-        verification_method: "supabase_vault_key_matches_address",
-        payout_compatibility_verified: false,
-        live_routing_enabled: false,
-      });
+        error: "turnkey_profit_destination_verification_required",
+        message: "Activation is blocked until Turnkey wallet identity and signing control are verified.",
+        live_transfer_enabled: false,
+      }, 409);
     }
 
     if (action === "revoke") {

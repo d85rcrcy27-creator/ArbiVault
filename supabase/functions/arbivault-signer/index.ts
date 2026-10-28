@@ -115,10 +115,10 @@ async function verifyExecutorPayoutBindings(chain: "ethereum" | "bnb", executorA
     }
     const { data: recipientWallet, error: recipientWalletError } = await supabase
       .from("wallets")
-      .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+      .select("id,owner_id,chain,address,status,is_hot,custody_type,wallet_role,data_quality_status,secret_ref")
       .eq("id", deployment.profit_recipient_wallet_id).maybeSingle();
     if (recipientWalletError || !recipientWallet || recipientWallet.status !== "active" ||
-        recipientWallet.chain !== chain || recipientWallet.is_hot !== false ||
+        recipientWallet.chain !== chain || recipientWallet.custody_type !== "turnkey" || recipientWallet.is_hot !== false ||
         recipientWallet.wallet_role !== "profit_recipient" || recipientWallet.data_quality_status !== "verified" ||
         !recipientWallet.secret_ref || String(recipientWallet.address).toLowerCase() !== recipient.toLowerCase() ||
         recipientWallet.owner_id !== wallet.owner_id) {

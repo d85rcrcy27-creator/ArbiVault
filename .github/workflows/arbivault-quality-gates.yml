@@ -1,0 +1,50 @@
+name: ArbiVault quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arbivault-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frozen dependencies, typecheck, lint, audit, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm audit --prod
+      - run: pnpm build
+
+  edge-functions:
+    name: Supabase Edge Function type checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Enable Deno npm auto-install
+        run: echo '{"nodeModulesDir":"auto"}' > deno.json
+      - name: Check transaction and wallet security functions
+        run: |
+          deno check supabase/functions/arbivault-transaction-builder/index.ts
+          deno check supabase/functions/arbivault-signer/index.ts
+          deno check supabase/functions/arbivault-executor-deployer/index.ts
+          deno check supabase/functions/arbivault-profit-recipients/index.ts
+          deno check supabase/functions/arbivault-market-scout/index.ts
