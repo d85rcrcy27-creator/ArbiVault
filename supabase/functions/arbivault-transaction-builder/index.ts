@@ -1371,7 +1371,12 @@ Deno.serve(async (req) => {
     if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > MAX_SLIPPAGE_BPS) {
       return json({ error: "slippage_out_of_bounds" }, 400);
     }
-    if (Number.isFinite(priceImpactPct) && priceImpactPct > MAX_PRICE_IMPACT_PCT) {
+    // Reject malformed, infinite, or negative impact values instead of allowing NaN
+    // to bypass the execution limit. A caller cannot disable this gate with "NaN".
+    if (!Number.isFinite(priceImpactPct) || priceImpactPct < 0) {
+      return json({ error: "price_impact_invalid" }, 400);
+    }
+    if (priceImpactPct > MAX_PRICE_IMPACT_PCT) {
       return json({
         error: "price_impact_above_execution_limit",
         max_price_impact_pct: MAX_PRICE_IMPACT_PCT,
