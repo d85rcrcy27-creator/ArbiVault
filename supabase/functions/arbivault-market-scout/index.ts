@@ -572,7 +572,7 @@ Deno.serve(async (req) => {
         sellExchange: route.sellExchange,
       })
       const snapshot = snapshots.find((item: any) => item.pair === route.pair)
-      if (snapshot) snapshot.temporal_flux = route.temporal_flux
+      if (snapshot) (snapshot as any).temporal_flux = route.temporal_flux
     }
 
     const observations = linkedRoutes.map((route: any) => ({
@@ -725,15 +725,19 @@ Deno.serve(async (req) => {
       source: 'public_exchange_order_books',
     })
   } catch (error) {
-    await admin.from('security_alerts').insert({
-      owner_id: null,
-      alert_type: 'security',
-      severity: 'warning',
-      dedupe_key: `market-scout:${new Date().toISOString().slice(0, 16)}`,
-      title: 'Market scout failure',
-      message: error instanceof Error ? error.message : 'market_scout_failed',
-      requires_user_authorization: false,
-    }).then(() => undefined).catch(() => undefined)
+    try {
+      await admin.from('security_alerts').insert({
+        owner_id: null,
+        alert_type: 'security',
+        severity: 'warning',
+        dedupe_key: `market-scout:${new Date().toISOString().slice(0, 16)}`,
+        title: 'Market scout failure',
+        message: error instanceof Error ? error.message : 'market_scout_failed',
+        requires_user_authorization: false,
+      })
+    } catch {
+      // Preserve the original market-scout error if alert persistence also fails.
+    }
     return json({ error: error instanceof Error ? error.message : 'market_scout_failed' }, 500)
   }
 })
