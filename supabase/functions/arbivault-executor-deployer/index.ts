@@ -192,7 +192,7 @@ async function resolveConfiguredChain(base: ChainConfig): Promise<ChainConfig> {
   if (profile.activation_at && new Date(profile.activation_at).getTime() > Date.now()) throw new Error("profit_destination_activation_delay_pending");
 
   const { data: recipient, error: recipientError } = await supabase.from("wallets")
-    .select("id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status,secret_ref")
+    .select("id,owner_id,chain,address,status,is_hot,custody_type,wallet_role,data_quality_status,secret_ref")
     .eq("id", profile.wallet_id).eq("owner_id", base.ownerId).maybeSingle();
   if (recipientError) throw new Error("profit_destination_wallet_lookup_failed");
   if (!recipient || recipient.status !== "active" || recipient.chain !== base.chain || recipient.wallet_role !== "profit_recipient" || recipient.custody_type !== "turnkey" ||
