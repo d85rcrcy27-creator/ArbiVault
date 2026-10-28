@@ -29,15 +29,15 @@ const PAIRS = [
 const EXCHANGES = ['binance', 'bybit', 'okx', 'kraken', 'kucoin', 'gateio', 'coinbase', 'bitget']
 
 const PUBLIC_MARKET_ASSETS = [
-  { chain: 'ethereum', symbol: 'BTC', coingecko: 'bitcoin' },
+  { chain: 'bitcoin', symbol: 'BTC', coingecko: 'bitcoin' },
   { chain: 'ethereum', symbol: 'ETH', coingecko: 'ethereum' },
   { chain: 'solana', symbol: 'SOL', coingecko: 'solana' },
   { chain: 'bnb', symbol: 'BNB', coingecko: 'binancecoin' },
   { chain: 'xrp', symbol: 'XRP', coingecko: 'ripple' },
-  { chain: 'ethereum', symbol: 'ADA', coingecko: 'cardano' },
-  { chain: 'ethereum', symbol: 'AVAX', coingecko: 'avalanche-2' },
+  { chain: 'cardano', symbol: 'ADA', coingecko: 'cardano' },
+  { chain: 'avalanche', symbol: 'AVAX', coingecko: 'avalanche-2' },
   { chain: 'ethereum', symbol: 'LINK', coingecko: 'chainlink' },
-  { chain: 'ethereum', symbol: 'DOGE', coingecko: 'dogecoin' },
+  { chain: 'dogecoin', symbol: 'DOGE', coingecko: 'dogecoin' },
 ]
 
 async function publicApiData() {
