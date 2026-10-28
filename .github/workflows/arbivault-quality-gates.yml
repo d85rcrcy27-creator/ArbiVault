@@ -39,11 +39,9 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Install Deno npm dependencies
-        run: deno install --node-modules-dir=auto
       - name: Check transaction and wallet security functions
         run: |
-          deno check supabase/functions/arbivault-transaction-builder/index.ts
+          deno check --node-modules-dir=auto supabase/functions/arbivault-transaction-builder/index.ts
           deno check supabase/functions/arbivault-signer/index.ts
           deno check supabase/functions/arbivault-executor-deployer/index.ts
           deno check supabase/functions/arbivault-profit-recipients/index.ts
