@@ -29,7 +29,7 @@ const LOOKUPS = [
     allowedPairs: [
       { pair: 'BNB/USDT', a: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', b: '0x55d398326f99059ff775485246999027b3197955' },
       { pair: 'BNB/USDC', a: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', b: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d' },
-      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bc bfae4f2634d864a1ee1ce3ead9c'.replaceAll(' ', ''), b: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' },
+      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' },
     ],
   },
   {
@@ -37,7 +37,7 @@ const LOOKUPS = [
     chainLabel: 'BNB Chain',
     queryToken: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c',
     allowedPairs: [
-      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0xbb4cdb9cb d36b01bd1cbaebf2de08d9173bc095c'.replaceAll(' ', '') },
+      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' },
       { pair: 'BTCB/USDT', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0x55d398326f99059ff775485246999027b3197955' },
     ],
   },
