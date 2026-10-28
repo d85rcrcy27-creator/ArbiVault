@@ -8,6 +8,18 @@ const LOOKUPS = [
     queryToken: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
     allowedPairs: [
       { pair: 'ETH/USDC', a: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2', b: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' },
+      { pair: 'ETH/USDT', a: '0xc02aaa39b223fe8d0a0e5c4f27eAD9083C756Cc2', b: '0xdac17f958d2ee523a2206206994597c13d831ec7' },
+      { pair: 'ETH/DAI', a: '0xc02aaa39b223fe8d0a0e5c4f27eAD9083C756Cc2', b: '0x6b175474e89094c44da98b954eedeac495271d0f' },
+      { pair: 'WBTC/ETH', a: '0x2260fac5e5542a773a44fbcfedf7c193bc2c599', b: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2' },
+    ],
+  },
+  {
+    chainId: 'ethereum',
+    chainLabel: 'Ethereum',
+    queryToken: '0x2260fac5e5542a773a44fbcfedf7c193bc2c599',
+    allowedPairs: [
+      { pair: 'WBTC/ETH', a: '0x2260fac5e5542a773a44fbcfedf7c193bc2c599', b: '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2' },
+      { pair: 'WBTC/USDC', a: '0x2260fac5e5542a773a44fbcfedf7c193bc2c599', b: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' },
     ],
   },
   {
@@ -16,6 +28,17 @@ const LOOKUPS = [
     queryToken: '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
     allowedPairs: [
       { pair: 'BNB/USDT', a: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', b: '0x55d398326f99059ff775485246999027b3197955' },
+      { pair: 'BNB/USDC', a: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', b: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d' },
+      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bc bfae4f2634d864a1ee1ce3ead9c'.replaceAll(' ', ''), b: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' },
+    ],
+  },
+  {
+    chainId: 'bsc',
+    chainLabel: 'BNB Chain',
+    queryToken: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c',
+    allowedPairs: [
+      { pair: 'BTCB/BNB', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0xbb4cdb9cb d36b01bd1cbaebf2de08d9173bc095c'.replaceAll(' ', '') },
+      { pair: 'BTCB/USDT', a: '0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c', b: '0x55d398326f99059ff775485246999027b3197955' },
     ],
   },
   {
@@ -23,8 +46,8 @@ const LOOKUPS = [
     chainLabel: 'Solana',
     queryToken: 'So11111111111111111111111111111111111111112',
     allowedPairs: [
-      { pair: 'SOL/USDC', a: 'So11111111111111111111111111111111111111112'.toLowerCase(), b: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'.toLowerCase() },
-      { pair: 'SOL/USDT', a: 'So11111111111111111111111111111111111111112'.toLowerCase(), b: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'.toLowerCase() },
+      { pair: 'SOL/USDC', a: 'So11111111111111111111111111111111111111112', b: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' },
+      { pair: 'SOL/USDT', a: 'So11111111111111111111111111111111111111112', b: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB' },
     ],
   },
 ]
@@ -132,7 +155,7 @@ export default function PoolLiquidityRegistry() {
         </button>
       </div>
       <div className="grid gap-2 border-b border-[#232738] p-3 sm:grid-cols-4">
-        {['ETH/USDC', 'BNB/USDT', 'SOL/USDC', 'SOL/USDT'].map((pair) => (
+        {['ETH/USDC', 'ETH/USDT', 'ETH/DAI', 'WBTC/ETH', 'WBTC/USDC', 'BNB/USDT', 'BNB/USDC', 'BTCB/BNB', 'BTCB/USDT', 'SOL/USDC', 'SOL/USDT'].map((pair) => (
           <div key={pair} className="rounded border border-[#232738] bg-[#090A0F] p-3">
             <div className="font-mono text-[10px] text-[#8a90b0]">{pair}</div>
             <div className="mt-1 font-mono text-lg">{loading ? '…' : (poolCounts[pair] || 0)}</div>
