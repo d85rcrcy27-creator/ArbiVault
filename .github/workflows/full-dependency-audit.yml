@@ -31,6 +31,6 @@ jobs:
           version: "10.34.0"
           run_install: false
       - name: Install from committed lockfile
-        run: pnpm install --no-frozen-lockfile --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Audit production and development dependency trees
         run: pnpm audit
