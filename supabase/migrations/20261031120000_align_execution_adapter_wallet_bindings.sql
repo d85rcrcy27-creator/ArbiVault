@@ -14,6 +14,16 @@ alter table public.execution_adapters
     'bitcoin_psbt'::text
   ]));
 
+-- Assign the signer adapter family expected by the execution bot for each chain.
+update public.execution_adapters
+set adapter_type = case chain
+      when 'bitcoin' then 'bitcoin_psbt'
+      when 'solana' then 'solana_program'
+      else 'dex_router'
+    end,
+    updated_at = now()
+where chain in ('bitcoin','bnb','ethereum','solana');
+
 update public.execution_adapters ea
 set adapter_type = case ea.chain
       when 'bitcoin' then 'bitcoin_psbt'
