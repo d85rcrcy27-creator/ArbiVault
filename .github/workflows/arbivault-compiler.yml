@@ -31,7 +31,7 @@ jobs:
           node-version: "24.21.0"
           cache: pnpm
       - name: Install locked dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Run compiler, audits and asset integrity checks
         run: pnpm doctor
       - name: Upload compiler report
