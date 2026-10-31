@@ -72,6 +72,7 @@ export default function SigningPasskeys() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [selectedCredentials, setSelectedCredentials] = useState({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,13 +111,18 @@ export default function SigningPasskeys() {
   };
 
   const approve = async (request) => {
+    const credentialId = selectedCredentials[request.id];
+    if (!credentialId) {
+      setError("Select the passkey you want to use for this transfer.");
+      return;
+    }
     if (!navigator.credentials?.get) {
       setError("This browser does not support WebAuthn passkeys.");
       return;
     }
     setBusy(request.id); setError(""); setNotice("");
     try {
-      const challenge = await invoke("approval_options", { signing_request_id: request.id });
+      const challenge = await invoke("approval_options", { signing_request_id: request.id, credential_id: credentialId });
       const assertion = await navigator.credentials.get({ publicKey: authenticationOptions(challenge.options) });
       if (!assertion) throw new Error("Passkey approval was cancelled.");
       const result = await invoke("approve", { signing_request_id: request.id, challenge_id: challenge.challenge_id, response: serializeCredential(assertion) });
@@ -161,7 +167,7 @@ export default function SigningPasskeys() {
           {loading ? <p className="mt-4 text-sm text-muted-foreground">Loading pending requests…</p> : pending.length ? (
             <div className="mt-4 space-y-3">{pending.map((item) => <article key={item.id} className="rounded-md border border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="font-medium">{String(item.chain || "unknown").toUpperCase()} · {item.transaction?.transaction_class === "transfer" ? "Internal transfer" : item.transaction?.transaction_class === "withdrawal" ? "Withdrawal" : "Pending authorization"}</div><div className="mt-1 text-sm text-foreground">Amount: {item.transaction ? Number(item.transaction.amount).toLocaleString("en-US", { maximumFractionDigits: 8 }) + " " + item.transaction.asset : "See payload hash"}</div><div className="mt-1 break-all text-sm text-muted-foreground">Destination: {item.destination_address || "Not provided"}</div></div>
-                <button type="button" onClick={() => approve(item)} disabled={!!busy || !credentials.length} className="inline-flex min-h-10 items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{busy === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}{busy === item.id ? "Verifying…" : "Approve with passkey"}</button>
+                <div className="flex flex-col items-stretch gap-2 sm:min-w-64"><label className="text-xs font-medium text-muted-foreground" htmlFor={"passkey-" + item.id}>Choose passkey</label><select id={"passkey-" + item.id} value={selectedCredentials[item.id] || ""} onChange={(event) => setSelectedCredentials((current) => ({ ...current, [item.id]: event.target.value }))} disabled={!!busy || !credentials.length} className="min-h-10 rounded-md border border-border bg-background px-3 py-2 text-sm"><option value="">Select a registered passkey…</option>{credentials.map((credential) => <option key={credential.id} value={credential.credential_id}>{short(credential.credential_id)} · {credential.device_type === "multiDevice" ? "Synced passkey" : credential.device_type === "singleDevice" ? "This-device passkey" : "Passkey"}{credential.backed_up ? " · backed up" : ""}</option>)}</select><button type="button" onClick={() => approve(item)} disabled={!!busy || !credentials.length || !selectedCredentials[item.id]} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">{busy === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" />}{busy === item.id ? "Verifying…" : "Approve with selected passkey"}</button></div>
               </div>
               <div className="mt-3 text-xs text-muted-foreground">Request: <span className="font-mono">{item.id}</span></div>
               <div className="mt-1 break-all text-xs text-muted-foreground">Payload SHA-256: <span className="font-mono">{item.payload_hash}</span></div>
