@@ -298,9 +298,9 @@ export default function StrategyReviewDashboard() {
     <section className="rounded border border-[#232738] bg-[#0C0E16] p-4">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
-            <Sparkles className="h-3.5 w-3.5" /> AI Strategy Generator · Human Review
-          </div>
+          <h2 className="flex items-center gap-2 font-mono text-xs font-bold uppercase tracking-wider text-[#00F0FF]">
+            <Sparkles aria-hidden="true" className="h-3.5 w-3.5" /> AI Strategy Generator · Human Review
+          </h2>
           <p className="mt-1 max-w-3xl text-[0.68rem] leading-relaxed text-[#8a90b0]">
             Generate candidate strategies for DEX arbitrage, collateral swaps, liquidations and debt refinancing. Each candidate is stored as a proposal only; approval does not register a contract or start live execution.
           </p>
