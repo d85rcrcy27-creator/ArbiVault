@@ -96,10 +96,13 @@ Deno.serve(async (req) => {
       if (!requestId) return json({ error: "signing_request_id_required" }, 400);
       const enrolled = await credentials(user.id);
       if (!enrolled.length) return json({ error: "passkey_enrollment_required" }, 409);
+      const credentialId = String(body.credential_id || "");
+      const selectedCredential = enrolled.find((credential: any) => credential.credential_id === credentialId);
+      if (!selectedCredential) return json({ error: "credential_not_registered_for_user" }, 403);
       const { data: request, error } = await admin.from("signing_requests").select("id,owner_id,status,biometric_required,biometric_verified,payload_hash,approval_expires_at").eq("id", requestId).eq("owner_id", user.id).maybeSingle();
       if (error) return json({ error: "signing_request_lookup_failed" }, 500);
       if (!request || request.status !== "pending" || request.biometric_required !== true || request.biometric_verified || !request.approval_expires_at || new Date(request.approval_expires_at).getTime() <= Date.now()) return json({ error: "signing_request_not_approvable" }, 409);
-      const options = await generateAuthenticationOptions({ rpID, timeout: 120000, userVerification: "required", allowCredentials: enrolled.map((c: any) => ({ id: c.credential_id, transports: c.transports || [] })) });
+      const options = await generateAuthenticationOptions({ rpID, timeout: 120000, userVerification: "required", allowCredentials: [{ id: selectedCredential.credential_id, transports: selectedCredential.transports || [] }] });
       const challenge = await saveChallenge(user.id, requestId, options.challenge, "transaction_approval", request.payload_hash);
       return json({ ok: true, options, challenge_id: challenge.id, expires_at: challenge.expires_at, transaction: { id: request.id, payload_hash: request.payload_hash, expires_at: request.approval_expires_at } });
     }
