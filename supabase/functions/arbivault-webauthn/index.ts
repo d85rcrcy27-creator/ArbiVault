@@ -99,7 +99,6 @@ Deno.serve(async (req) => {
       const { data: request, error } = await admin.from("signing_requests").select("id,owner_id,status,biometric_required,biometric_verified,payload_hash,approval_expires_at").eq("id", requestId).eq("owner_id", user.id).maybeSingle();
       if (error) return json({ error: "signing_request_lookup_failed" }, 500);
       if (!request || request.status !== "pending" || request.biometric_required !== true || request.biometric_verified || !request.approval_expires_at || new Date(request.approval_expires_at).getTime() <= Date.now()) return json({ error: "signing_request_not_approvable" }, 409);
-      if (!challenge.payload_hash || challenge.payload_hash !== request.payload_hash) return json({ error: "transaction_payload_changed_after_challenge" }, 409);
       const options = await generateAuthenticationOptions({ rpID, timeout: 120000, userVerification: "required", allowCredentials: enrolled.map((c: any) => ({ id: c.credential_id, transports: c.transports || [] })) });
       const challenge = await saveChallenge(user.id, requestId, options.challenge, "transaction_approval", request.payload_hash);
       return json({ ok: true, options, challenge_id: challenge.id, expires_at: challenge.expires_at, transaction: { id: request.id, payload_hash: request.payload_hash, expires_at: request.approval_expires_at } });
@@ -118,6 +117,8 @@ Deno.serve(async (req) => {
       const { data: request, error: requestError } = await admin.from("signing_requests").select("id,owner_id,status,biometric_required,biometric_verified,payload_hash,approval_expires_at,wallet_transaction_id").eq("id", requestId).eq("owner_id", user.id).maybeSingle();
       if (requestError) return json({ error: "signing_request_lookup_failed" }, 500);
       if (!request || request.status !== "pending" || request.biometric_required !== true || request.biometric_verified || !request.approval_expires_at || new Date(request.approval_expires_at).getTime() <= Date.now()) return json({ error: "signing_request_not_approvable" }, 409);
+      // Bind the verified passkey challenge to the exact transaction payload being authorized.
+      if (!challenge.payload_hash || challenge.payload_hash !== request.payload_hash) return json({ error: "transaction_payload_changed_after_challenge" }, 409);
       const verified = await verifyAuthenticationResponse({
         response: body.response, expectedChallenge: challenge.challenge, expectedOrigin: origin, expectedRPID: rpID, requireUserVerification: true,
         credential: { id: credential.credential_id, publicKey: unb64url(credential.public_key_b64url), counter: Number(credential.sign_count), transports: credential.transports || [] },
