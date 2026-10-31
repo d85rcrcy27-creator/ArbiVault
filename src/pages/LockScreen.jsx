@@ -247,7 +247,7 @@ export default function LockScreen() {
           <div className="h-px flex-1 bg-border" />
         </div>
 
-        <form onSubmit={handleAccountLogin} className="space-y-4">
+        <form onSubmit={handleAccountLogin} autoComplete="on" className="space-y-4">
           <div className="space-y-2">
             <label htmlFor="arbivault-email" className="text-sm font-medium">Email</label>
             <div className="relative">
@@ -255,7 +255,7 @@ export default function LockScreen() {
               <input
                 id="arbivault-email"
                 type="email"
-                autoComplete="username webauthn"
+                name="username" autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="h-12 w-full rounded-md border border-border bg-background pl-10 pr-3"
@@ -270,6 +270,7 @@ export default function LockScreen() {
               <input
                 id="arbivault-password"
                 type="password"
+                name="current-password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
