@@ -33,4 +33,4 @@ jobs:
       - name: Install from committed lockfile
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Audit production and development dependency trees
-        run: pnpm audit
+        run: pnpm audit --audit-level high
