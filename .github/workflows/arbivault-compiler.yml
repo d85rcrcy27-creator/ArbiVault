@@ -1,0 +1,44 @@
+name: ArbiVault Compiler and Asset Guard
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * 1"
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: arbivault-compiler-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  compile-and-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "10.34.0"
+          run_install: false
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run compiler, audits and asset integrity checks
+        run: pnpm doctor
+      - name: Upload compiler report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: arbivault-compiler-report
+          path: artifacts/arbivault-compiler-report.json
+          if-no-files-found: warn
+          retention-days: 14
