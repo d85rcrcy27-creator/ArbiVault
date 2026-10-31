@@ -20,18 +20,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24.21.0"
-          cache: pnpm
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
           version: "10.34.0"
           run_install: false
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
       - name: Install locked dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
       - name: Run compiler, audits and asset integrity checks
         run: pnpm doctor
       - name: Upload compiler report
