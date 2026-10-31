@@ -72,7 +72,9 @@ export default function PoolLiquidityRegistry() {
     setLoading(true)
     setError('')
     try {
-      const responses = await Promise.all(LOOKUPS.map(async (lookup) => {
+      // Query each canonical token independently. A provider error for one
+      // chain/token must not discard valid live pools returned by other queries.
+      const settled = await Promise.allSettled(LOOKUPS.map(async (lookup) => {
         const response = await fetch(`https://api.dexscreener.com/token-pairs/v1/${lookup.chainId}/${lookup.queryToken}`, {
           headers: { accept: 'application/json' },
         })
@@ -81,6 +83,11 @@ export default function PoolLiquidityRegistry() {
         if (!Array.isArray(data)) throw new Error(`${lookup.chainLabel} pool lookup returned an unexpected response`)
         return { lookup, data }
       }))
+      const responses = settled.filter((result) => result.status === 'fulfilled').map((result) => result.value)
+      const failures = settled.filter((result) => result.status === 'rejected')
+      if (responses.length === 0) {
+        throw new Error(failures.map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason)).join('; ') || 'All live pool lookups failed.')
+      }
 
       const byPool = new Map()
       for (const { lookup, data } of responses) {
@@ -124,6 +131,9 @@ export default function PoolLiquidityRegistry() {
       })
       setPools(nextPools)
       setUpdatedAt(new Date())
+      setError(failures.length
+        ? `${failures.length} of ${LOOKUPS.length} live pool lookups failed; showing successful provider results only.`
+        : '')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Live pool lookup failed.')
       setPools([])

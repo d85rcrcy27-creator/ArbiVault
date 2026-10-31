@@ -31,7 +31,23 @@ export default function FlashLoans() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    try {
+    setRoutesError('')
+
+    // Keep route loading independent from session/trade-history loading. A
+    // failed trade query must not hide valid route configuration.
+    const routeTask = (async () => {
+      const { data, error: routeError } = await supabase
+        .from('arbivault_strategy_routes')
+        .select('id,strategy,strategy_family,chain,pair,dex_venue,route_type,enabled,discovery_only,builder_enabled,transaction_builder')
+        .in('route_type', ['flash_liquidity', 'dex_cex', 'cyclic', 'multi_venue'])
+        .order('chain', { ascending: true })
+        .order('pair', { ascending: true })
+        .limit(200)
+      if (routeError) throw routeError
+      setRoutes(data || [])
+    })()
+
+    const tradesTask = (async () => {
       const { data: { user }, error: authError } = await supabase.auth.getUser()
       if (authError) throw authError
       if (!user) throw new Error('Your Supabase session is unavailable. Please sign in again.')
@@ -47,29 +63,19 @@ export default function FlashLoans() {
         const description = [trade.strategy, trade.execution_mode, metadata.execution_type, metadata.loan_provider].join(' ')
         return /flash/i.test(String(description)) || (trade.borrowed_amount !== null && trade.borrowed_amount !== undefined)
       }))
-      const { data: routeData, error: routeError } = await supabase
-        .from('arbivault_strategy_routes')
-        .select('id,strategy,strategy_family,chain,pair,dex_venue,route_type,enabled,discovery_only,builder_enabled,transaction_builder')
-        .in('route_type', ['flash_liquidity', 'dex_cex', 'cyclic', 'multi_venue'])
-        .order('chain', { ascending: true })
-        .order('pair', { ascending: true })
-        .limit(200)
-      if (routeError) {
-        setRoutes([])
-        setRoutesError('Strategy routes could not be loaded: ' + routeError.message)
-      } else {
-        setRoutes(routeData || [])
-        setRoutesError('')
-      }
-      setLastUpdated(new Date())
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load flash-loan records.')
-      setRows([])
+    })()
+
+    const [routeResult, tradesResult] = await Promise.allSettled([routeTask, tradesTask])
+    if (routeResult.status === 'rejected') {
       setRoutes([])
-      setRoutesError('Could not load strategy route configuration.')
-    } finally {
-      setLoading(false)
+      setRoutesError('Strategy routes could not be loaded: ' + (routeResult.reason instanceof Error ? routeResult.reason.message : String(routeResult.reason)))
     }
+    if (tradesResult.status === 'rejected') {
+      setRows([])
+      setError(tradesResult.reason instanceof Error ? tradesResult.reason.message : 'Could not load flash-loan records.')
+    }
+    setLastUpdated(new Date())
+    setLoading(false)
   }, [])
 
   useEffect(() => { load() }, [load])

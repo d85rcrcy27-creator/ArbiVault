@@ -662,7 +662,7 @@ export default {
         const wallets = boundWalletIds.length
           ? await supabase
               .from('wallets')
-              .select('id,owner_id,chain,address,status,is_hot,wallet_role,data_quality_status')
+              .select('id,owner_id,chain,address,status,is_hot,wallet_role,custody_type,secret_ref,key_binding_verified_at,data_quality_status')
               .eq('owner_id', bot.owner_id)
               .eq('status', 'active')
               .eq('is_hot', true)
@@ -672,7 +672,11 @@ export default {
 
         if (wallets.error) throw wallets.error
         const executionEligibleWallets = (wallets.data || []).filter((wallet: any) =>
-          wallet.data_quality_status === 'verified' && approvedWalletIds.has(wallet.id)
+          wallet.data_quality_status === 'verified' &&
+          wallet.custody_type === 'server_vault' &&
+          !!wallet.secret_ref &&
+          !!wallet.key_binding_verified_at &&
+          approvedWalletIds.has(wallet.id)
         )
 
         const flashRouteDiagnostics = (routes || [])

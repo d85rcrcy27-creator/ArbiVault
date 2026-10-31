@@ -113,13 +113,14 @@ async function ensureBindings(userId:string,wallets:any[]){
   const allowedContracts = chain === 'ethereum'
    ? [ETH_UNISWAP_V2_ROUTER]
    : chain === 'bnb' ? [BSC_PANCAKE_V2_ROUTER] : []
-  const patch={configured:false,health_status:'unconfigured',read_only:true,signing_boundary:'internal_vault',can_broadcast:false,can_withdraw:false,automatic_signing:false,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v3-pending-approval',last_error:'awaiting_explicit_wallet_approval_and_verified_executor',allowed_contracts:allowedContracts,allowed_programs:[],max_transaction_value:0,updated_at:new Date().toISOString()}
+  const adapterType=chain==='bitcoin'?'bitcoin_psbt':chain==='solana'?'solana_program':'dex_router'
+  const patch={adapter_type:adapterType,configured:false,health_status:'unconfigured',read_only:true,signing_boundary:'internal_vault',can_broadcast:false,can_withdraw:false,automatic_signing:false,allowed_wallet_id:w.id,signer_key_ref:w.address,policy_version:'arbivault-internal-v3-pending-approval',last_error:'awaiting_explicit_wallet_approval_and_verified_executor',allowed_contracts:allowedContracts,allowed_programs:[],max_transaction_value:0,updated_at:new Date().toISOString()}
   if(adapter){
    const {error:updateError}=await admin.from('execution_adapters').update(patch).eq('id',adapter.id)
    if(updateError)throw new Error('signer_adapter_refresh_failed')
   }else{
    const adapterName='ArbiVault Internal Vault '+chain.toUpperCase()+' Trading Signer'
-   const {error:insertError}=await admin.from('execution_adapters').insert({...patch,name:adapterName,adapter_type:'dex_router',endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_programs:[]})
+   const {error:insertError}=await admin.from('execution_adapters').insert({...patch,name:adapterName,adapter_type:adapterType,endpoint:'supabase://arbivault-signer',chain,signer_provider:'internal_vault',max_transaction_value:0,allowed_programs:[]})
    if(insertError){
     // Recover idempotently from a concurrent insert or the table's unique-name constraint.
     const {data:byName,error:lookupError}=await admin.from('execution_adapters').select('id').eq('name',adapterName).maybeSingle()
