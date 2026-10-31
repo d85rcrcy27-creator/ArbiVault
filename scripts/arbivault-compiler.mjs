@@ -54,6 +54,28 @@ if (existsSync(distIndex)) {
 }
 for (const item of results.filter((x) => x.status === "failed")) item.suggestedNextSteps = suggestions(item);
 const report = { generatedAt: new Date().toISOString(), node: process.version, platform: process.platform, safeAutofixEnabled: process.env.ARBIVAULT_ENABLE_SAFE_AUTOFIX === "true", summary: { passed: results.filter((x) => x.status === "passed").length, failed: results.filter((x) => x.status === "failed").length }, results };
-writeFileSync(join(reportDir, "arbivault-compiler-report.json"), JSON.stringify(report, null, 2) + "\n");
-console.log(`\nCompiler summary: ${report.summary.passed} passed, ${report.summary.failed} failed. Report: artifacts/arbivault-compiler-report.json`);
+const reportPath = join(reportDir, "arbivault-compiler-report.json");
+writeFileSync(reportPath, JSON.stringify(report, null, 2) + "\n");
+const summaryLines = [
+  "## ArbiVault compiler CI report",
+  "",
+  `**Result:** ${report.summary.failed === 0 ? "PASS" : "FAIL"} — ${report.summary.passed} passed, ${report.summary.failed} failed`,
+  `**Runtime:** Node ${report.node} on ${report.platform}`,
+  "",
+  "| Check | Status | Duration |",
+  "|---|---:|---:|",
+  ...results.map((item) => `| ${item.name} | ${item.status.toUpperCase()} | ${item.durationMs ?? "—"} ms |`),
+  "",
+  ...results.filter((item) => item.status === "failed").flatMap((item) => [
+    `### ${item.name}: recommended next steps`,
+    ...(item.suggestedNextSteps || ["Review the complete command output and fix the underlying cause."]).map((hint) => `- ${hint}`),
+    ""
+  ]),
+  "Full machine-readable report: `artifacts/arbivault-compiler-report.json`"
+];
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const { appendFileSync } = await import("node:fs");
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryLines.join("\\n") + "\\n");
+}
+console.log(`\\nCompiler summary: ${report.summary.passed} passed, ${report.summary.failed} failed. Report: artifacts/arbivault-compiler-report.json`);
 if (report.summary.failed) process.exitCode = 1;
