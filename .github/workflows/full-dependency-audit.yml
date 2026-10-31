@@ -8,7 +8,7 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/full-dependency-audit.yml"
   push:
-    branches: ["chore/upgrade-vite-8-3-4"]
+    branches: [main]
     paths:
       - "package.json"
       - "pnpm-lock.yaml"
