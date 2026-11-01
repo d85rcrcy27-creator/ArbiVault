@@ -115,7 +115,7 @@ jobs:
           # Contract, custody, transaction execution, backend policy, and CI
           # changes always require a deliberate maintainer merge after review.
           if grep -Eiq '(^contracts/|\.sol$|^supabase/|wallet|signer|executor|transaction|withdraw|payment|\.github/workflows/|CODEOWNERS)' <<< "$files"; then
-            echo "Sensitive change detected. Automated merge is disabled; require security/owner review and a deliberate maintainer merge."
+            echo "Sensitive change detected. Automated merge is disabled. A maintainer must verify the required security/owner reviews and branch protections before merging."
             exit 0
           fi
 
