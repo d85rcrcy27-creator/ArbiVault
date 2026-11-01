@@ -1,0 +1,148 @@
+name: ArbiVault Agent Engineering Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 10 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+concurrency:
+  group: arbivault-agent-engineering-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Build, test, dependency and security gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: "10.34.0"
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: pnpm
+
+      - name: Install exact locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Type check
+        run: pnpm run typecheck
+
+      - name: Production build
+        run: pnpm run build
+
+      - name: ArbiVault compiler and asset integrity checks
+        run: pnpm run doctor
+
+      - name: Audit all dependencies
+        run: pnpm audit --audit-level high
+
+      - name: Capture outdated dependency report
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set +e
+          pnpm outdated --format json > artifacts/outdated-dependencies.json 2> artifacts/outdated-dependencies.stderr
+          status=$?
+          set -e
+          echo "pnpm_outdated_exit_code=$status" > artifacts/dependency-report-status.txt
+          # Outdated packages are reported for planned maintenance; they are not
+          # upgraded automatically because major upgrades can break production.
+
+      - name: Upload dependency maintenance report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: arbivault-dependency-maintenance
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
+
+  review-and-merge:
+    name: Merge only reviewed, verified low-risk changes
+    needs: verify
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check review and change risk before enabling auto-merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PR_NUMBER:-}" ] || [ "${{ github.event.pull_request.draft }}" = "true" ]; then
+            echo "No eligible non-draft pull request."
+            exit 0
+          fi
+
+          pr_json="$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER")"
+          author="$(jq -r '.user.login' <<< "$pr_json")"
+          files="$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" --jq '.[].filename')"
+
+          # Contract, custody, transaction execution, backend policy, and CI
+          # changes always require a deliberate maintainer merge after review.
+          if grep -Eiq '(^contracts/|\.sol$|^supabase/|wallet|signer|executor|transaction|withdraw|payment|\.github/workflows/|CODEOWNERS)' <<< "$files"; then
+            echo "Sensitive change detected. Automated merge is disabled; require security/owner review and a deliberate maintainer merge."
+            exit 0
+          fi
+
+          reviews="$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/reviews")"
+          latest_reviews="$(jq -c 'sort_by(.submitted_at // "") | group_by(.user.login) | map(last)' <<< "$reviews")"
+
+          if ! jq -e --arg author "$author" '
+            (any(.[]; .state == "APPROVED" and .user.login != $author))
+            and (all(.[]; .state != "CHANGES_REQUESTED"))
+          ' <<< "$latest_reviews" >/dev/null; then
+            echo "Waiting for at least one approval from someone other than the PR author and no outstanding change requests."
+            exit 0
+          fi
+
+          gh pr merge "$PR_NUMBER" --repo "$GH_REPO" --auto --squash
+          echo "Auto-merge enabled. GitHub will merge only after repository-required checks and protections pass."
+
+  scheduled-maintenance:
+    name: Scheduled maintenance summary
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Explain maintenance result
+        run: |
+          echo "Daily verification completed."
+          echo "Review the dependency maintenance artifact for outdated packages."
+          echo "High-severity dependency audit findings, lint, typecheck, build, or compiler failures keep this run failed."
+          echo "No dependency upgrades, production deployments, wallet operations, or on-chain transactions are performed automatically."
