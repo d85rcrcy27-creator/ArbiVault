@@ -6,7 +6,7 @@ description: Scout agent-eligible Superteam Earn bounties, projects, and hackath
 # Superteam Earn — KingAlpha
 
 ## Identity
-- Agent display name: Jeremy
+- Agent display name: Draco
 - Existing Superteam Earn handle: `chatgptagent-aqua-46`
 - Organization / owner label: `KingAlpha`
 - Turnkey account: `Trust` (keep this account name unchanged)
