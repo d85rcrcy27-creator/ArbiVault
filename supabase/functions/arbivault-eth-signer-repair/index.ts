@@ -6,8 +6,8 @@ const SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const admin = createClient(URL, SERVICE, { auth: { persistSession: false, autoRefreshToken: false } });
 
 const ETH_CHAIN_ID = 1;
-const ETH_WALLET_ID = "9cf84d39-83c3-40ee-aa81-c0ba7ec3ebd3";
-const ETH_ADDRESS = "0xFfd52F7A182887a0382f2Cef33627af2F6BF0E27";
+const ETH_WALLET_ID = "9c1ef47c-23bb-4885-8e54-373f0cdbf8a3";
+const ETH_ADDRESS = "0xa7Eb59484C9dBFD3a57313d221d9a6E3eAD570E2";
 const ETH_ADAPTER_ID = "a1dc63b2-ba7c-493e-aa9d-7fdd8e2aed43";
 const ETH_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
 const RPC = Deno.env.get("ETHEREUM_RPC_URL") || "https://ethereum-rpc.publicnode.com";
@@ -137,6 +137,16 @@ Deno.serve(async (req: Request) => {
         signing_enabled: false,
         broadcast_enabled: false,
       }, 409);
+    }
+
+    const { error: bindingUpdateError } = await admin.from("wallets")
+      .update({ key_binding_verified_at: new Date().toISOString() })
+      .eq("id", ETH_WALLET_ID)
+      .eq("chain", "ethereum")
+      .eq("address", ETH_ADDRESS);
+    if (bindingUpdateError) {
+      await keepSigningDisabled("eth_key_binding_verification_persist_failed");
+      return json({ ok: false, error: "eth_key_binding_verification_persist_failed", signing_enabled: false, broadcast_enabled: false }, 503);
     }
 
     const balanceHex = String(await rpc("eth_getBalance", [ETH_ADDRESS, "latest"]));
