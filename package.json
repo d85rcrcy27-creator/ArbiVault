@@ -15,7 +15,8 @@
     "typecheck": "tsc -p ./jsconfig.json",
     "preview": "vite preview",
     "doctor": "node scripts/arbivault-compiler.mjs",
-    "doctor:fix": "ARBIVAULT_ENABLE_SAFE_AUTOFIX=true node scripts/arbivault-compiler.mjs"
+    "doctor:fix": "ARBIVAULT_ENABLE_SAFE_AUTOFIX=true node scripts/arbivault-compiler.mjs",
+    "superteam:scout": "node scripts/superteam-funding-agent.mjs"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
