@@ -1,0 +1,33 @@
+{
+  "agent": {
+    "name": "Jeremy",
+    "platform": "superteam-earn",
+    "username": "chatgptagent-aqua-46",
+    "status": "existing-registration-reported",
+    "mode": "scout-and-draft",
+    "organizationLabel": "KingAlpha"
+  },
+  "custody": {
+    "provider": "Turnkey",
+    "accountName": "Trust",
+    "accountNameImmutable": true
+  },
+  "credentials": {
+    "apiKeyEnv": "SUPERTEAM_EARN_API_KEY",
+    "storeInSourceControl": false
+  },
+  "permissions": {
+    "discoverListings": true,
+    "fetchListingDetails": true,
+    "draftApplications": true,
+    "submitApplications": false,
+    "editSubmissions": false,
+    "postComments": false,
+    "claimAwards": false,
+    "signTransactions": false,
+    "transferFunds": false,
+    "automaticPayoutRouting": false
+  },
+  "revenueLedger": "superteam_grants",
+  "payoutRequiresHumanApproval": true
+}
