@@ -361,7 +361,7 @@ async function rpcHealth() {
   await Promise.all(allProviderResults.map(async (item: any) => {
     try {
       await admin.from('arbivault_rpc_endpoints').update({
-        health_status: item.ok ? 'healthy' : 'down',
+        health_status: item.ok ? 'healthy' : 'offline',
         last_health_check_at: checkedAt,
         last_error: item.ok ? null : item.error,
         updated_at: checkedAt,
