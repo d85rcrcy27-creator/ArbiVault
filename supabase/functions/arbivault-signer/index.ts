@@ -330,6 +330,20 @@ Deno.serve(async (req) => {
       return json({ error: "signing_request_already_claimed_or_not_authorized", signing_blocked: true }, 409);
     }
 
+    // Atomically claim the approval before reading custody secrets or signing.
+    // This prevents concurrent worker retries from signing/broadcasting the same nonce twice.
+    const { data: claimedRequest, error: claimError } = await supabase
+      .from("signing_requests")
+      .update({ status: "signing" })
+      .eq("id", requestRow.id)
+      .eq("status", "authorized")
+      .select("id")
+      .maybeSingle();
+    if (claimError) return json({ error: "signing_request_claim_failed" }, 503);
+    if (!claimedRequest) {
+      return json({ error: "signing_request_already_claimed", signing_blocked: true }, 409);
+    }
+
     const sv = await getSecret(walletId);
     let signed = "";
 
@@ -598,7 +612,7 @@ Deno.serve(async (req) => {
       .from("signing_requests")
       .update({ status: "broadcast", signed_at: now, broadcast_at: broadcastAt, tx_hash: txHash })
       .eq("id", requestRow.id)
-      .eq("status", "authorized");
+      .eq("status", "signing");
 
     if (markError) {
       // The network broadcast already succeeded. Persist the execution attempt too,
