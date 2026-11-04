@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 1,
+  "snapshotAt": "2026-11-04T08:35:23-05:00",
+  "agent": {
+    "name": "Draco",
+    "handle": "chatgptagent-aqua-46",
+    "organization": "KingAlpha",
+    "turnkeyAccount": "Trust"
+  },
+  "authenticatedAgentScan": {
+    "status": "blocked",
+    "blocker": "SUPERTEAM_EARN_API_KEY is absent from the Vercel production environment for project arbivault-. The local CLI secret environment is not accessible to this run. No authenticated agent-listings request was made.",
+    "endpoint": "https://superteam.fun/api/agents/listings/live",
+    "eligibleAgentListings": null,
+    "listingIdsAvailable": false,
+    "agentAccessValuesRequired": [
+      "AGENT_ALLOWED",
+      "AGENT_ONLY"
+    ]
+  },
+  "publicOpportunities": [
+    {
+      "listingId": null,
+      "listingSlug": "startup-accelerator-grant",
+      "title": "DD.xyz / Webacy Startup Accelerator Grant",
+      "type": "grant",
+      "sourceUrl": "https://superteam.fun/earn/grants/startup-accelerator-grant",
+      "status": "draft-ready",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "maximum": 10000,
+        "token": "USDC",
+        "form": "API credits, not cash",
+        "guaranteed": false
+      },
+      "deadline": null,
+      "deadlineNotes": "No fixed closing date shown. Public page lists a 72-hour average response time and up to three months for integration after selection.",
+      "requiredSkills": [
+        "backend",
+        "blockchain",
+        "API integration",
+        "risk analytics"
+      ],
+      "requirements": [
+        "Applicant must be a dApp building on one of the listed supported chains.",
+        "Explain a concrete DD.xyz / Webacy Risk Engine integration.",
+        "Describe a differentiated use case and an executable delivery plan.",
+        "Provide progress updates and communicate with the sponsor."
+      ],
+      "deliverablesPlan": [
+        "Integrate address and URL risk checks into transaction preflight.",
+        "Normalize risk findings with source, timestamp and reason codes.",
+        "Fail closed on high-risk, missing or stale results.",
+        "Add tests, documentation and a working demonstration."
+      ],
+      "applicationQuestions": "Exact structured form questions were not exposed in the public listing extract; confirm them in the application form before submission.",
+      "fit": "High: wallet, token, URL and transaction risk screening is directly relevant to ArbiVault's preflight controls."
+    },
+    {
+      "listingId": null,
+      "listingSlug": "allmight-microgrants",
+      "title": "ALLMIGHT Microgrants Program",
+      "type": "grant",
+      "sourceUrl": "https://superteam.fun/earn/grants/allmight-microgrants",
+      "status": "draft-ready",
+      "agentAccess": "unverified",
+      "region": "United States only",
+      "reward": {
+        "minimum": 1,
+        "maximum": 10000,
+        "token": "USDG",
+        "form": "grant funding",
+        "guaranteed": false
+      },
+      "deadline": null,
+      "deadlineNotes": "No fixed closing date shown. Public page targets a one-week review; 25% is paid upfront after approval and the remainder follows milestones.",
+      "requiredSkills": [
+        "frontend",
+        "blockchain",
+        "backend",
+        "content"
+      ],
+      "requirements": [
+        "Strengthen the Solana ecosystem in the United States.",
+        "Show proof of work and an executable project.",
+        "Plan to open-source soon after Solana mainnet deployment.",
+        "Provide weekly community updates and milestone evidence."
+      ],
+      "deliverablesPlan": [
+        "Publish a Solana RPC and transaction-preflight SDK/CLI.",
+        "Add Triton One endpoint health and slot-freshness checks.",
+        "Normalize simulation errors and signature-confirmation states.",
+        "Provide tests, docs, examples and an open-source release."
+      ],
+      "applicationQuestions": "Exact structured form questions were not exposed in the public listing extract; human applicant must confirm profile and eligibility fields.",
+      "fit": "High: ArbiVault already has Solana RPC, simulation and confirmation code paths that can be hardened into a reusable developer tool. Formal applicant residency and grant-profile eligibility still require human confirmation."
+    },
+    {
+      "listingId": null,
+      "listingSlug": "raptorx-research-challenge-ask-better-questions-find-better-alpha",
+      "title": "RaptorX Research Challenge",
+      "type": "bounty",
+      "sourceUrl": "https://superteam.fun/earn/listing/raptorx-research-challenge-ask-better-questions-find-better-alpha",
+      "status": "verified",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "total": 125,
+        "token": "USDC",
+        "awards": [
+          "75 USDC first",
+          "50 USDC second"
+        ]
+      },
+      "deadline": null,
+      "deadlineNotes": "Superteam Earn homepage displayed approximately two days remaining on 2026-11-04; exact cutoff timestamp was not exposed. Winner announcement is 2026-11-15.",
+      "requiredSkills": [
+        "Solana research",
+        "market analysis",
+        "critical questioning"
+      ],
+      "requirements": [
+        "Choose a legitimate Solana cryptocurrency available in RaptorX.",
+        "Generate at least one RaptorX AI research report.",
+        "Ask at least one original, report-specific question directly to REX AI.",
+        "Submit evidence of the report and AI interaction."
+      ],
+      "deliverablesPlan": [
+        "Generate a real report for a legitimate Solana asset.",
+        "Ask a falsifiable question about demand, liquidity and market signals.",
+        "Capture genuine report and conversation evidence.",
+        "Prepare a final entry for human review."
+      ],
+      "applicationQuestions": "No separate application questionnaire was exposed; the required work is the report, question and evidence.",
+      "fit": "Good analytical fit and low effort, but the reward is small and a real RaptorX session is still required."
+    },
+    {
+      "listingId": null,
+      "listingSlug": "chimp-on-metaplex",
+      "title": "Write a thread on $CHIMP Fair Launch - Part 1",
+      "type": "bounty",
+      "sourceUrl": "https://superteam.fun/earn/listing/chimp-on-metaplex",
+      "status": "verified",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "total": 500,
+        "token": "USDC",
+        "awards": [
+          "100 USDC first",
+          "75 USDC second",
+          "50 USDC third",
+          "25 USDC x 11 bonus"
+        ]
+      },
+      "deadline": null,
+      "deadlineNotes": "Listing page displayed approximately 14 days and 20 hours remaining on 2026-11-04; exact cutoff timestamp not exposed. Winner announcement is 2026-11-28.",
+      "requiredSkills": [
+        "research",
+        "content writing",
+        "Solana ecosystem knowledge"
+      ],
+      "requirements": [
+        "Publish an original X thread explaining the $CHIMP fair-launch mechanics.",
+        "Tag @chimpxAI, @solana and @Raydium.",
+        "Include $CHIMP and the official sale link.",
+        "Submit the public thread URL."
+      ],
+      "deliverablesPlan": [
+        "Verify the sale mechanics against official project documentation.",
+        "Draft an accessible thread with risk disclosures and no unsupported claims.",
+        "Have the human operator publish from an account they control.",
+        "Retain the public post URL for review."
+      ],
+      "applicationQuestions": "No structured questions shown; the thread URL is the key deliverable.",
+      "fit": "Moderate: Solana research fit, but publishing requires a human-controlled X account and a content-focused entry."
+    },
+    {
+      "listingId": null,
+      "listingSlug": "kriptok-creator-challenge-01",
+      "title": "KriptoK Creator Challenge",
+      "type": "bounty",
+      "sourceUrl": "https://superteam.fun/earn/listing/kriptok-creator-challenge-01",
+      "status": "verified",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "total": 200,
+        "token": "USDC",
+        "awards": [
+          "50 USDC first",
+          "35 USDC second",
+          "25 USDC third",
+          "remaining listed prizes total 90 USDC"
+        ]
+      },
+      "deadline": null,
+      "deadlineNotes": "Listing page displayed approximately 18 days and 23 hours remaining on 2026-11-04; exact cutoff timestamp not exposed. Winner announcement is 2026-11-25.",
+      "requiredSkills": [
+        "content",
+        "community engagement"
+      ],
+      "requirements": [
+        "Follow @KriptoK and @KriptoKLeague on X.",
+        "Join the KriptoK Telegram community.",
+        "Remain active in community conversations.",
+        "Create original content about the platform."
+      ],
+      "deliverablesPlan": [
+        "Human operator explores the platform.",
+        "Prepare an accurate product explainer.",
+        "Human operator publishes and participates in the required communities.",
+        "Collect post links and evidence."
+      ],
+      "applicationQuestions": "No structured questions shown in the public listing extract.",
+      "fit": "Low-to-moderate: content-only and dependent on human social accounts and community participation."
+    },
+    {
+      "listingId": null,
+      "listingSlug": "multihopper-build-and-route-challenge-up-to-dollar50000-revenue-share-1",
+      "title": "MultiHopper Build & Route Challenge",
+      "type": "bounty",
+      "sourceUrl": "https://superteam.fun/earn/listing/multihopper-build-and-route-challenge-up-to-dollar50000-revenue-share-1",
+      "status": "verified",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "initialPool": 5000,
+        "maximumPool": 50000,
+        "token": "USDC",
+        "form": "conditional proportional prize pool",
+        "integrationRevenueShare": "0.25% of qualifying full-rate transfer volume after partner onboarding",
+        "guaranteedPersonalAward": false
+      },
+      "deadline": null,
+      "deadlineNotes": "Listing page displayed approximately 45 days remaining on 2026-11-04; exact cutoff timestamp not exposed. Winner announcement is 2026-12-28.",
+      "requiredSkills": [
+        "frontend",
+        "backend",
+        "blockchain",
+        "Solana production integration"
+      ],
+      "requirements": [
+        "Integrate MultiHopper and complete production onboarding before submitting.",
+        "Generate at least 100000 USD of qualifying production volume per product.",
+        "Pass functionality, security and genuine-usage review.",
+        "Provide live URL, demo, repository/review access, integration identifier and transaction evidence.",
+        "Only production volume counts; devnet, failed, refunded, free, circular and prize-farming volume is excluded."
+      ],
+      "deliverablesPlan": [
+        "Obtain sponsor onboarding and integration access.",
+        "Build a narrowly scoped Solana routing product with compliance controls.",
+        "Complete security and production readiness review.",
+        "Only after lawful, user-approved genuine production usage exists, compile verifiable volume evidence."
+      ],
+      "applicationQuestions": "Listing requires product, integration, repository, transaction evidence and traction details; no separate question schema was exposed.",
+      "fit": "Strategic fit but not currently credible for qualification: ArbiVault's known execution adapters are read-only and no confirmed trading volume has been established. Do not submit before integration or attempt to manufacture volume."
+    }
+  ],
+  "excludedOrPaused": [
+    {
+      "title": "Solana Foundation USA Grants",
+      "sourceUrl": "https://superteam.fun/earn/grants/solana-foundation-usa-grants/",
+      "status": "discovered",
+      "reason": "Applications Paused.",
+      "reward": "Up to 10000 USDG",
+      "region": "United States only"
+    },
+    {
+      "title": "The Touching Grass Fund (USA)",
+      "sourceUrl": "https://superteam.fun/earn/grants/touching-grass-usa/",
+      "status": "discovered",
+      "reason": "Applications Paused; Superteam membership required.",
+      "reward": "Up to 500 USDG",
+      "region": "United States only"
+    },
+    {
+      "title": "Agentic Engineering Grants",
+      "sourceUrl": "https://superteam.fun/earn/grants/agentic-engineering/",
+      "status": "discovered",
+      "reason": "Applications Paused.",
+      "reward": "200 USDG",
+      "region": "Global"
+    },
+    {
+      "title": "Panta x NectarFi Trading Competition",
+      "sourceUrl": "https://superteam.fun/earn/listing/panta-x-nectarfi-trading-competition-bounty",
+      "status": "discovered",
+      "reason": "Requires qualifying live trades; excluded under the current no-funds/no-trades instruction.",
+      "reward": "500 USDG",
+      "region": "Global"
+    },
+    {
+      "title": "Inside the Block: How Solana Validators Order Transactions",
+      "sourceUrl": "https://superteam.fun/earn/listing/inside-the-block-how-solana-validators-order-transactions/",
+      "status": "discovered",
+      "reason": "Ukraine-only regional eligibility and requires self-sent Solana mainnet transactions with an approximately 0.05 SOL measurement budget.",
+      "reward": "2500 USDC",
+      "region": "Ukraine only"
+    }
+  ],
+  "hackathons": {
+    "currentPublicMatches": [],
+    "note": "No currently open public hackathon with a verifiable submission window was found in this public scan. Hidden agent-only hackathon tracks remain unknown until the authenticated agent feed is available."
+  },
+  "ledgers": {
+    "superteamGrantTaskPayouts": {
+      "paidConfirmed": [],
+      "paidConfirmedTotal": 0
+    },
+    "arbivaultTradingRevenue": {
+      "separateLedger": true,
+      "modifiedByThisScout": false
+    }
+  },
+  "safety": {
+    "duplicateAgentRegistration": false,
+    "submissionsMade": 0,
+    "claimsMade": 0,
+    "kycCompleted": false,
+    "transactionsSigned": 0,
+    "fundsAccessedOrMoved": false
+  }
+}
