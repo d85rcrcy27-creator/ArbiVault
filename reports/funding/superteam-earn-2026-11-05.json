@@ -1,0 +1,390 @@
+{
+  "schemaVersion": 1,
+  "snapshotAt": "2026-11-05T08:08:18-05:00",
+  "agent": {
+    "name": "Draco",
+    "handle": "chatgptagent-aqua-46",
+    "organization": "KingAlpha",
+    "turnkeyAccount": "Trust"
+  },
+  "protocol": {
+    "officialSkill": "https://superteam.fun/skill.md",
+    "baseUrl": "https://superteam.fun",
+    "liveListingsEndpoint": "/api/agents/listings/live",
+    "detailEndpoint": "/api/agents/listings/details/{slug}",
+    "acceptedAgentAccess": [
+      "AGENT_ALLOWED",
+      "AGENT_ONLY"
+    ],
+    "officialProtocolConfirmed": true
+  },
+  "authenticatedAgentScan": {
+    "status": "blocked",
+    "blocker": "SUPERTEAM_EARN_API_KEY is absent from the Vercel production environment for project arbivault- (checked 2026-11-05; 28 visible variables and hiddenProductionEnvCount 0). No approved local CLI/runtime secret store is exposed to this run, so key availability there cannot be verified. No authenticated Superteam request was made.",
+    "listingIds": [],
+    "agentAccessValuesVerified": [],
+    "noLiveAuthenticatedScanClaimed": true
+  },
+  "cli": {
+    "command": "pnpm run superteam:scout -- --json",
+    "mainBranchBehavior": "The current main-branch script fetches the live feed and emits detail URLs but does not fetch listing detail payloads.",
+    "detailFetchImplementation": {
+      "branch": "fix/superteam-details-fetch-2026-11-04",
+      "compareToMain": "2 commits ahead, 0 behind",
+      "behavior": "Fetches each eligible listing detail endpoint with the same bearer authorization and records fetched/failed detail status.",
+      "merged": false,
+      "deployed": false
+    }
+  },
+  "publicOpportunities": [
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "startup-accelerator-grant",
+      "title": "DD.xyz / Webacy Startup Accelerator Grant",
+      "url": "https://superteam.fun/earn/grants/startup-accelerator-grant",
+      "type": "grant",
+      "trackingStatus": "draft-ready",
+      "publicStatus": "Apply Now",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "maximum": 10000,
+        "unit": "USDC",
+        "form": "DD.xyz API credits, not cash",
+        "guaranteed": false
+      },
+      "deadline": null,
+      "timing": "No fixed closing date shown; 72-hour average response; up to three months to integrate after selection.",
+      "requiredSkills": [
+        "frontend",
+        "blockchain",
+        "backend",
+        "API integration",
+        "risk analytics"
+      ],
+      "eligibility": "Any dApp building on Solana, Ethereum, Polygon, Arbitrum, Optimism, BSC, Sei, Ton, or Base.",
+      "deliverables": [
+        "Integrate wallet/address, transaction, approval, token/contract, and URL risk checks into preflight.",
+        "Normalize risk findings with source, timestamp, and reason codes.",
+        "Fail closed on high-risk, missing, or stale results.",
+        "Add tests, documentation, and a working demonstration."
+      ],
+      "applicationQuestions": "The public listing requires a concise, technically detailed, differentiated integration proposal. The Typeform opened but exposed no readable question fields in this check.",
+      "prerequisites": [
+        "Confirm API-credit scope and onboarding terms.",
+        "Human review of the Typeform before submission."
+      ],
+      "fit": "High: directly supports ArbiVault wallet, route, token, and transaction preflight."
+    },
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "allmight-microgrants",
+      "title": "ALLMIGHT Microgrants Program",
+      "url": "https://superteam.fun/earn/grants/allmight-microgrants",
+      "type": "grant",
+      "trackingStatus": "draft-ready",
+      "publicStatus": "Apply Now",
+      "agentAccess": "unverified",
+      "region": "United States only",
+      "reward": {
+        "minimum": 1,
+        "maximum": 10000,
+        "unit": "USDG",
+        "form": "grant funding",
+        "guaranteed": false
+      },
+      "deadline": null,
+      "timing": "No fixed closing date shown; approximately one-week review. Public terms describe 25% upfront after approval and remaining funds after milestones.",
+      "requiredSkills": [
+        "frontend",
+        "blockchain",
+        "backend",
+        "content"
+      ],
+      "eligibility": "US-only; applicants should strengthen the US Solana ecosystem and provide proof of work.",
+      "deliverables": [
+        "Open-source Solana RPC and transaction-preflight SDK/CLI.",
+        "Triton One endpoint health and slot-freshness checks.",
+        "Normalized simulation errors and signature-confirmation states.",
+        "Tests, docs, examples, and an open-source release."
+      ],
+      "applicationQuestions": "Exact form questions are not exposed in the public page extraction; page instructs applicants to submit a concise grant application on Superteam Earn.",
+      "prerequisites": [
+        "Human applicant must confirm US eligibility and profile requirements.",
+        "Commit to weekly updates and open-source release."
+      ],
+      "fit": "High: developer tooling, scripts, bots, and automation are explicitly funded; a Solana RPC toolkit is a credible scoped deliverable."
+    },
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "glass-surfers-dev-tooling-grants",
+      "title": "Glass Surfers Dev Tooling Grants",
+      "url": "https://superteam.fun/earn/grants/glass-surfers-dev-tooling-grants",
+      "type": "grant",
+      "trackingStatus": "draft-ready",
+      "publicStatus": "Apply Now",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "maximum": 5000,
+        "unit": "USDC",
+        "form": "grant funding",
+        "guaranteed": false
+      },
+      "deadline": null,
+      "timing": "No fixed closing date shown; approximately 72-hour review. Public terms describe 25% upfront in a SOL wallet after approval, with remaining funding tied to milestones.",
+      "requiredSkills": [
+        "backend",
+        "blockchain",
+        "TypeScript",
+        "RPC/infrastructure tooling"
+      ],
+      "eligibility": "Public FAQ says anyone; proof of work and executable scope preferred. Open-source contribution is favored.",
+      "deliverables": [
+        "Triton-first, provider-neutral Solana RPC health and slot-freshness SDK.",
+        "Simulation and normalized error diagnostics.",
+        "Signature confirmation and reconciliation helpers.",
+        "Automated tests, documentation, examples, and public release."
+      ],
+      "applicationQuestions": "Public page asks for concise, executable, ecosystem-useful tooling. Linked Airtable form returned 404 during this check; exact form questions are unavailable.",
+      "prerequisites": [
+        "Sponsor must confirm or repair the application form link.",
+        "Avoid duplicate-funding claims with the ALLMIGHT proposal."
+      ],
+      "fit": "High technical fit; application path is currently unreliable."
+    },
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "raptorx-research-challenge-ask-better-questions-find-better-alpha",
+      "title": "RaptorX Research Challenge",
+      "url": "https://superteam.fun/earn/listing/raptorx-research-challenge-ask-better-questions-find-better-alpha",
+      "type": "bounty",
+      "trackingStatus": "draft-ready",
+      "publicStatus": "Open countdown displayed",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "total": 125,
+        "unit": "USDC",
+        "awards": [
+          "75 USDC first",
+          "50 USDC second"
+        ]
+      },
+      "deadline": null,
+      "timing": "Page displayed approximately 8 days 5 hours remaining at crawl; exact cutoff timestamp not exposed. Winner announcement 2026-11-15.",
+      "submissionsDisplayed": 364,
+      "requiredSkills": [
+        "Solana research",
+        "market analysis",
+        "critical questioning",
+        "content"
+      ],
+      "eligibility": "Use a legitimate Solana cryptocurrency available in RaptorX; avoid scam/rug tokens.",
+      "deliverables": [
+        "Generate at least one real RaptorX research report.",
+        "Ask at least one original question directly to REX AI about that report.",
+        "Capture legible report and conversation evidence.",
+        "Submit evidence through Superteam Earn."
+      ],
+      "applicationQuestions": "No separate form questionnaire shown; the report, original question, and screenshots are the required entry evidence.",
+      "prerequisites": [
+        "Real RaptorX account/session and genuine report required.",
+        "Do not fabricate screenshots or research."
+      ],
+      "fit": "Good low-effort analytical fit, but small prize and crowded field."
+    },
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "chimp-on-metaplex",
+      "title": "Write a thread on $CHIMP Fair Launch - Part 1",
+      "url": "https://superteam.fun/earn/listing/chimp-on-metaplex",
+      "type": "bounty",
+      "trackingStatus": "draft-ready",
+      "publicStatus": "Open countdown displayed",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "total": 500,
+        "unit": "USDC",
+        "awards": [
+          "100 USDC first",
+          "75 USDC second",
+          "50 USDC third",
+          "25 USDC x 11 bonus"
+        ]
+      },
+      "deadline": null,
+      "timing": "Page displayed approximately 14 days 20 hours remaining at crawl; exact cutoff timestamp not exposed. Winner announcement 2026-11-28.",
+      "submissionsDisplayed": 531,
+      "requiredSkills": [
+        "content",
+        "research",
+        "Solana ecosystem knowledge"
+      ],
+      "eligibility": "Global listing; requires original X thread and human-controlled public social account.",
+      "deliverables": [
+        "Publish an original X thread of at least 8 tweets.",
+        "Cover at least three required topics: Mojo AI, official traction, Raydium launch, fair-launch mechanics, tokenomics, rewards, or risks.",
+        "Tag @chimpxAI, @solana, and @Raydium; include $CHIMP and official sale link.",
+        "Submit the public thread URL."
+      ],
+      "applicationQuestions": "No structured question list; thread must address at least three listed topics.",
+      "prerequisites": [
+        "Verify the official sale URL and token details before publication.",
+        "Human must publish from an account they control."
+      ],
+      "fit": "Moderate: content and Solana research fit, but not core ArbiVault engineering."
+    },
+    {
+      "listingId": null,
+      "listingIdAvailability": "Public page exposes slug, not internal listing ID; authenticated detail API unavailable.",
+      "slug": "multihopper-build-and-route-challenge-up-to-dollar50000-revenue-share-1",
+      "title": "MultiHopper Build & Route Challenge",
+      "url": "https://superteam.fun/earn/listing/multihopper-build-and-route-challenge-up-to-dollar50000-revenue-share-1",
+      "type": "bounty",
+      "trackingStatus": "discovered",
+      "publicStatus": "Open countdown displayed",
+      "agentAccess": "unverified",
+      "region": "Global",
+      "reward": {
+        "listedPool": 5000,
+        "unit": "USDC",
+        "listedAwards": [
+          "3000 USDC first",
+          "1250 USDC second",
+          "750 USDC third"
+        ],
+        "maximumPool": 50000,
+        "maximumPoolConditional": true,
+        "integrationRevenueShare": "0.25% of qualifying full-rate transfer volume after partner onboarding",
+        "guaranteedPersonalAward": false
+      },
+      "deadline": null,
+      "timing": "Page displayed approximately 45 days remaining at crawl; exact cutoff and common measurement-window dates need sponsor confirmation. Winner announcement 2026-12-28.",
+      "submissionsDisplayed": 66,
+      "requiredSkills": [
+        "frontend",
+        "backend",
+        "blockchain",
+        "Solana production integration",
+        "security"
+      ],
+      "eligibility": "Must integrate MultiHopper and complete production onboarding before submitting; each product must generate at least 100000 USD qualifying production volume; pass functionality, security, and genuine-usage review.",
+      "deliverables": [
+        "Working Solana product integrated with MultiHopper.",
+        "Live URL and short demo video.",
+        "Repository/review access and technical documentation.",
+        "Registered integration ID and verifiable production transaction evidence.",
+        "Qualifying-volume summary and genuine-use evidence."
+      ],
+      "applicationQuestions": "Submission requires product/problem description, integration details, repository/docs, integration identifier, transaction evidence, qualifying volume, traction metrics, and contact details.",
+      "prerequisites": [
+        "No submission until integration is complete.",
+        "No devnet, free, failed, refunded, circular, or prize-farming volume.",
+        "ArbiVault currently has no verified qualifying production volume; adapter readiness must be independently rechecked."
+      ],
+      "fit": "Strategic fit but very high effort and currently not credible for qualification without integration, onboarding, and real customer volume."
+    }
+  ],
+  "excludedOrPaused": [
+    {
+      "title": "Solana Foundation USA Grants",
+      "url": "https://superteam.fun/earn/grants/solana-foundation-usa-grants/",
+      "status": "discovered",
+      "reason": "Applications Paused.",
+      "reward": "Up to 10000 USDG; US-only."
+    },
+    {
+      "title": "Agentic Engineering Grants",
+      "url": "https://superteam.fun/earn/grants/agentic-engineering/",
+      "status": "discovered",
+      "reason": "Applications Paused.",
+      "reward": "200 USDG; Global."
+    },
+    {
+      "title": "Texas Blockchain Solana Grants",
+      "url": "https://superteam.fun/earn/grants/texas-blockchain-grants",
+      "status": "discovered",
+      "reason": "Eligibility FAQ says all students of the University of Texas at Austin; not a credible general US application.",
+      "reward": "Up to 10000 USDG."
+    },
+    {
+      "title": "FranklinDAO Solana Grants",
+      "url": "https://superteam.fun/earn/grants/franklindao-grants",
+      "status": "discovered",
+      "reason": "Eligibility FAQ says all students of the University of Pennsylvania.",
+      "reward": "Up to 10000 USDG."
+    },
+    {
+      "title": "Solana x Cal Grants",
+      "url": "https://superteam.fun/earn/grants/solana-cal-grants",
+      "status": "discovered",
+      "reason": "Eligibility FAQ says all students of UC Berkeley.",
+      "reward": "Up to 10000 USDG."
+    },
+    {
+      "title": "The PORT Grants Program",
+      "url": "https://superteam.fun/earn/grants/port-grants",
+      "status": "discovered",
+      "reason": "Eligibility FAQ says applicants must be in Miami.",
+      "reward": "Up to 10000 USDG."
+    },
+    {
+      "title": "Show us how you use MozaikPay",
+      "url": "https://superteam.fun/earn/listing/mozaikpay-video-chile-colombia/",
+      "status": "discovered",
+      "reason": "Requires a real MozaikPay account, Spanish 30-60 second video, and over 50% of the creator account audience in Chile and Colombia combined.",
+      "reward": "500 USDC total; winner announcement 2026-11-19."
+    },
+    {
+      "title": "Superteam Meetup Fund",
+      "url": "https://superteam.fun/earn/grants/superteam-meetup-fund",
+      "status": "discovered",
+      "reason": "Inactive and currently limited to Superteam members.",
+      "reward": "Up to 200 USDC."
+    },
+    {
+      "title": "deBridge Content Grants",
+      "url": "https://superteam.fun/earn/grants/debridge-grants",
+      "status": "discovered",
+      "reason": "Closed.",
+      "reward": "Up to 35000 DBR."
+    }
+  ],
+  "publicProjects": {
+    "currentMatches": [],
+    "note": "No currently open public project listing with a verifiable deadline and scope was found in this public scan."
+  },
+  "publicHackathons": {
+    "currentMatches": [],
+    "note": "No currently open public Superteam Earn hackathon with a verifiable submission window was found. Historical Frontier/agent hackathon tracks surfaced as closed or winners announced. Hidden agent-only tracks remain unknown until the authenticated feed is available."
+  },
+  "ledgers": {
+    "superteamGrantTaskPayouts": {
+      "submitted": 0,
+      "shortlisted": 0,
+      "awarded": 0,
+      "claimed": 0,
+      "paidConfirmed": 0
+    },
+    "arbivaultTradingRevenue": {
+      "separate": true,
+      "modifiedByThisScout": false
+    }
+  },
+  "safety": {
+    "duplicateAgentRegistration": false,
+    "superteamSubmissionsMade": 0,
+    "editsOrCommentsMade": 0,
+    "claimsMade": 0,
+    "kycCompleted": false,
+    "transactionsSigned": 0,
+    "fundsAccessedOrMoved": false
+  }
+}
