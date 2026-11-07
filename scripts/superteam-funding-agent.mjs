@@ -1,7 +1,19 @@
 #!/usr/bin/env node
 
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 const BASE_URL = "https://superteam.fun";
-const API_KEY = process.env.SUPERTEAM_EARN_API_KEY;
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ENV_FILE = resolve(REPO_ROOT, ".env");
+
+// Load local credentials when present. Existing environment variables take precedence.
+if (existsSync(ENV_FILE)) {
+  process.loadEnvFile(ENV_FILE);
+}
+
+const API_KEY = process.env.SUPERTEAM_EARN_API_KEY?.trim();
 
 function arg(name, fallback) {
   const prefix = "--" + name + "=";
@@ -88,7 +100,7 @@ async function fetchListingDetails(item, headers) {
 async function main() {
   if (!API_KEY) {
     throw new Error(
-      "SUPERTEAM_EARN_API_KEY is not set. Configure it in an approved local CLI/runtime secret environment; never commit it.",
+      "SUPERTEAM_EARN_API_KEY is missing. Put the agent API key issued by Superteam Earn in the ignored repository-root .env file (see .env.example); never commit it.",
     );
   }
 
