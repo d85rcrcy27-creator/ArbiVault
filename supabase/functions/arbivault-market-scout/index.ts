@@ -5,7 +5,7 @@ const url = Deno.env.get('SUPABASE_URL')!
 const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!
 const admin = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
 const corsHeaders = {
-  'Access-Control-Allow-Origin': 'https://arbivault.vercel.app',
+  'Access-Control-Allow-Origin': 'https://arbivault-kh6lktmz-kingalpha.vercel.app',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-arbivault-cron-token',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Vary': 'Origin',
