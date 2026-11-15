@@ -16,7 +16,7 @@ const money = (value, currency = 'USD') => {
 }
 const date = (value) => value ? new Date(value).toLocaleString() : '—'
 const asTime = (row, fields) => fields.map((field) => row?.[field]).find(Boolean) || null
-const isConfirmedTrade = (trade) => String(trade.status || '').toLowerCase() === 'confirmed' && Boolean(trade.tx_hash) && Boolean(trade.confirmed_at)
+const isConfirmedTrade = (trade) => ['confirmed', 'executed'].includes(String(trade.status || '').toLowerCase()) && Boolean(trade.tx_hash) && Boolean(trade.confirmed_at)
 const isPaidPayment = (payment) => String(payment.status || '').toLowerCase() === 'paid' && Boolean(payment.paid_at)
 
 function Metric({ label, value, note }) {
@@ -44,7 +44,7 @@ function ActivityTable({ title, rows, kind }) {
           {rows.map((row) => <tr key={kind + ':' + row.id} className="border-t border-[#1a1d2b]">
             <td className={MONO + ' px-4 py-3 text-[0.62rem] ' + MUTED}>{date(row.time)}</td>
             <td className="px-4 py-3"><div className="text-xs text-[#e0e4f0]">{row.title || row.name || row.workflow || kind}</div><div className={MONO + ' mt-1 text-[0.56rem] ' + MUTED}>{row.subtitle || row.source || row.pair || row.chain || ''}</div></td>
-            <td className="px-4 py-3"><span className={MONO + ' text-[0.6rem] ' + (['paid','confirmed','completed'].includes(String(row.status).toLowerCase()) ? 'text-[#00FF87]' : ['failed','blocked','rejected'].includes(String(row.status).toLowerCase()) ? 'text-[#FF4D4D]' : 'text-[#FFB84D]')}>{row.status || 'unknown'}</span></td>
+            <td className="px-4 py-3"><span className={MONO + ' text-[0.6rem] ' + (['paid','confirmed','completed','executed'].includes(String(row.status).toLowerCase()) ? 'text-[#00FF87]' : ['failed','blocked','rejected'].includes(String(row.status).toLowerCase()) ? 'text-[#FF4D4D]' : 'text-[#FFB84D]')}>{row.status || 'unknown'}</span></td>
             <td className={MONO + ' px-4 py-3 text-[0.65rem] text-[#e0e4f0]'}>{row.amountLabel || '—'}</td>
             <td className="px-4 py-3">
               {row.proofUrl ? <a className="font-mono text-[0.6rem] text-[#00F0FF] underline" href={row.proofUrl} target="_blank" rel="noreferrer">{row.proofLabel || 'Open proof'}</a> : <span className={MONO + ' text-[0.58rem] ' + MUTED}>{row.proofLabel || 'No payment / chain proof'}</span>}
@@ -203,7 +203,7 @@ export default function RevenueStream() {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Confirmed task payments" value={money(taskRevenue, 'USD')} note={confirmedUsdPayments.length + ' USD payment records marked paid with paid_at; other currencies excluded from total'} />
-        <Metric label="Confirmed trading net P&L" value={money(tradePnl, 'USD')} note={confirmedUsdTrades.length + ' USD-denominated trades with confirmed status, timestamp and transaction hash; other currencies excluded'} />
+        <Metric label="Confirmed trading net P&L" value={money(tradePnl, 'USD')} note={confirmedUsdTrades.length + ' USD-denominated trades with on-chain confirmation, timestamp and transaction hash; other currencies excluded'} />
         <Metric label="Open work opportunities" value={data.opportunities.filter((o) => ['new','qualified','contacted','contracted','in_progress'].includes(String(o.status).toLowerCase())).length.toLocaleString()} note="Opportunity count only; not revenue" />
         <Metric label="Recent bot execution runs" value={data.runs.length.toLocaleString()} note="Latest run records returned; run status is not proof of profit" />
       </div>
@@ -217,7 +217,7 @@ export default function RevenueStream() {
         <section className={PANEL + ' p-4'}>
           <div className={MONO + ' text-xs font-bold uppercase tracking-wider text-[#00F0FF]'}>Trading ledger</div>
           <div className="mt-2 text-2xl font-bold">{money(tradePnl, 'USD')}</div>
-          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts USD-denominated net_profit only for trades marked confirmed that also have a confirmation timestamp and transaction hash. Other currencies are excluded from the USD total; fees must already be included in stored net_profit.</p>
+          <p className={MONO + ' mt-2 text-[0.62rem] leading-5 ' + MUTED}>Counts USD-denominated net_profit only for on-chain-confirmed trades with a confirmation timestamp and transaction hash. Other currencies are excluded from the USD total; fees must already be included in stored net_profit.</p>
         </section>
       </div>
 
